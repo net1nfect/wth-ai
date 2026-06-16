@@ -12,7 +12,7 @@ from rich.panel import Panel
 from rich.prompt import Confirm, Prompt
 
 from wth_ai import __version__
-from wth_ai.config import USER_CONFIG_PATH, WTHConfig
+from wth_ai.config import ROLE_NAMES, USER_CONFIG_PATH, WTHConfig
 from wth_ai.llm.router import LLMProviderRouter
 from wth_ai.vault import SecretVault
 from wth_ai.workspace import init_workspace
@@ -101,33 +101,23 @@ def run_setup_wizard(*, reset: bool = False, non_interactive: dict[str, Any] | N
     # Primary provider for all roles (can customize per role)
     same_for_all = Confirm.ask("Gunakan provider yang sama untuk planner, executor, verifier?", default=True)
 
+    from wth_ai.config import ProviderRoleConfig
+
     if same_for_all:
         ptype = _pick_provider("Semua agent")
         config = _collect_api_key(ptype, config)
         router = LLMProviderRouter(config)
-        defaults = {
-            "planner": config.models.planner,
-            "executor": config.models.executor,
-            "verifier": config.models.verifier,
-        }
-        for role in ("planner", "executor", "verifier"):
-            model = _pick_model(router, ptype, role, defaults[role])
-            if router.ping_provider(ptype, model):
-                console.print(f"[green]✓[/] {role}: {ptype}/{model} — ping OK")
-            else:
-                console.print(f"[yellow]![/] {role}: ping gagal — tetap simpan, cek koneksi nanti")
-            from wth_ai.config import ProviderRoleConfig
-            config.providers[role] = ProviderRoleConfig(
-                type=ptype, model=model,
-            )
+        for role in ROLE_NAMES:
+            default = getattr(config.models, role, config.models.planner)
+            model = _pick_model(router, ptype, role, default)
+            config.providers[role] = ProviderRoleConfig(type=ptype, model=model)
     else:
-        for role in ("planner", "executor", "verifier"):
+        for role in ROLE_NAMES:
             ptype = _pick_provider(role.capitalize())
             config = _collect_api_key(ptype, config)
             router = LLMProviderRouter(config)
             default = getattr(config.models, role, config.models.planner)
             model = _pick_model(router, ptype, role, default)
-            from wth_ai.config import ProviderRoleConfig
             config.providers[role] = ProviderRoleConfig(type=ptype, model=model)
 
     perm = Prompt.ask("Permission default", choices=["read_only", "active_test", "standard"], default="read_only")
@@ -149,6 +139,13 @@ def run_setup_wizard(*, reset: bool = False, non_interactive: dict[str, Any] | N
         chats = Prompt.ask("Allowed chat IDs (comma-separated, kosong=semua)", default="")
         if chats.strip():
             config.bots.telegram_chat_ids = [int(x.strip()) for x in chats.split(",") if x.strip()]
+
+    if Confirm.ask("Jalankan smoke test provider sekarang?", default=True):
+        from wth_ai.llm.smoke import format_smoke_report, run_smoke_test
+        primary = config.providers.get("planner")
+        if primary:
+            report = run_smoke_test(config, primary.type, model=primary.model)
+            console.print(format_smoke_report(report))
 
     config.setup_complete = True
     config.require_llm = True

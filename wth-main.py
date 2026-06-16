@@ -133,6 +133,223 @@ def vault_migrate() -> None:
         click.echo(f"Backup: {b}")
 
 
+# Provider name -> vault secret key (ollama is local, no key).
+_PROVIDER_VAULT_KEY = {
+    "openrouter": "openrouter_api_key",
+    "openai": "openai_api_key",
+    "anthropic": "anthropic_api_key",
+    "google": "google_api_key",
+    "groq": "groq_api_key",
+    "custom": "custom_api_key",
+}
+
+
+@cli.group()
+def provider() -> None:
+    """Manage LLM providers (keys live in the vault)."""
+    from wth_ai.workspace import init_workspace
+    init_workspace()
+
+
+@provider.command("list")
+@click.option("--config", "config_path", default="config/wth_config.yaml", show_default=True)
+def provider_list(config_path: str) -> None:
+    """List supported providers and key/availability status."""
+    from wth_ai.config import PROVIDER_NAMES
+    from wth_ai.llm.router import LLMProviderRouter
+    from wth_ai.vault import mask_secret
+    router = LLMProviderRouter(_load_config(config_path))
+    for name in PROVIDER_NAMES:
+        key = router.provider_key(name)
+        if name == "ollama":
+            status = "local"
+        else:
+            status = mask_secret(key) if key else "no key"
+        caps = router.provider_capabilities(name)
+        tools = "tools" if caps["tool_calling"] else "no-tools"
+        click.echo(f"- {name}: {status} ({tools})")
+
+
+@provider.command("add")
+@click.argument("name")
+@click.option("--config", "config_path", default="config/wth_config.yaml", show_default=True)
+def provider_add(name: str, config_path: str) -> None:
+    """Add/update a provider: store its API key (and base URL) securely."""
+    from wth_ai.config import PROVIDER_NAMES
+    from wth_ai.vault import SecretVault
+    if name not in PROVIDER_NAMES:
+        click.echo(f"Unknown provider '{name}'. Choices: {', '.join(PROVIDER_NAMES)}")
+        return
+    config = _load_config(config_path)
+    if name == "ollama":
+        url = click.prompt("Ollama base URL", default=config.secrets.ollama_base_url)
+        config.secrets.ollama_base_url = url
+    else:
+        key = click.prompt(f"{name} API key", hide_input=True)
+        SecretVault().set(_PROVIDER_VAULT_KEY[name], key)
+        if name == "custom":
+            config.secrets.custom_base_url = click.prompt("Custom base URL (OpenAI-compatible)")
+    config.save_user_config()
+    click.echo(f"Provider '{name}' configured.")
+
+
+@provider.command("remove")
+@click.argument("name")
+@click.option("--config", "config_path", default="config/wth_config.yaml", show_default=True)
+def provider_remove(name: str, config_path: str) -> None:
+    """Remove a provider's stored secret."""
+    from wth_ai.vault import SecretVault
+    vkey = _PROVIDER_VAULT_KEY.get(name)
+    if not vkey:
+        click.echo(f"Nothing to remove for '{name}'.")
+        return
+    ok = SecretVault().delete(vkey)
+    config = _load_config(config_path)
+    config.save_user_config()
+    click.echo(f"Removed secret for '{name}'." if ok else f"No secret stored for '{name}'.")
+
+
+@provider.command("test")
+@click.argument("name")
+@click.option("--model", default=None, help="Optional model for a short completion test.")
+@click.option("--config", "config_path", default="config/wth_config.yaml", show_default=True)
+def provider_test(name: str, model: str | None, config_path: str) -> None:
+    """Test provider reachability (and optional completion)."""
+    from wth_ai.llm.router import LLMProviderRouter
+    result = LLMProviderRouter(_load_config(config_path)).test_provider(name, model)
+    click.echo(json.dumps(result, indent=2, default=str))
+
+
+@provider.command("models")
+@click.argument("name")
+@click.option("--config", "config_path", default="config/wth_config.yaml", show_default=True)
+def provider_models(name: str, config_path: str) -> None:
+    """List models offered by a provider."""
+    from wth_ai.llm.router import LLMProviderRouter
+    models = LLMProviderRouter(_load_config(config_path)).list_models(name)
+    click.echo("\n".join(models) if models else "(no models returned)")
+
+
+@cli.group()
+def model() -> None:
+    """Inspect and set per-role models."""
+
+
+@model.command("list")
+@click.option("--config", "config_path", default="config/wth_config.yaml", show_default=True)
+def model_list(config_path: str) -> None:
+    """Show the model assigned to each agent role."""
+    from wth_ai.config import ROLE_NAMES
+    from wth_ai.llm.router import LLMProviderRouter
+    router = LLMProviderRouter(_load_config(config_path))
+    for role in ROLE_NAMES:
+        rc = router.role_config(role)
+        click.echo(f"- {role:9s} {rc.type}/{rc.model}")
+
+
+@model.command("set")
+@click.argument("role")
+@click.argument("provider_name")
+@click.argument("model_id")
+@click.option("--config", "config_path", default="config/wth_config.yaml", show_default=True)
+def model_set(role: str, provider_name: str, model_id: str, config_path: str) -> None:
+    """Set ROLE to use PROVIDER_NAME/MODEL_ID."""
+    from wth_ai.config import PROVIDER_NAMES, ROLE_NAMES
+    from wth_ai.llm.router import LLMProviderRouter
+    from wth_ai.workspace import init_workspace
+    if role not in ROLE_NAMES:
+        click.echo(f"Unknown role '{role}'. Choices: {', '.join(ROLE_NAMES)}")
+        return
+    if provider_name not in PROVIDER_NAMES:
+        click.echo(f"Unknown provider '{provider_name}'. Choices: {', '.join(PROVIDER_NAMES)}")
+        return
+    init_workspace()
+    config = _load_config(config_path)
+    router = LLMProviderRouter(config)
+    router.set_role(role, provider_name, model_id)
+    config.save_user_config()
+    click.echo(f"Set {role} -> {provider_name}/{model_id}")
+
+
+@model.command("test")
+@click.argument("role")
+@click.option("--config", "config_path", default="config/wth_config.yaml", show_default=True)
+def model_test(role: str, config_path: str) -> None:
+    """Run a short completion for ROLE and show the normalized result."""
+    from wth_ai.config import ROLE_NAMES
+    from wth_ai.llm.router import LLMProviderRouter
+    if role not in ROLE_NAMES:
+        click.echo(f"Unknown role '{role}'. Choices: {', '.join(ROLE_NAMES)}")
+        return
+    router = LLMProviderRouter(_load_config(config_path))
+    env = router.complete(role, [{"role": "user", "content": "ping"}], timeout=30, max_tokens=8)
+    click.echo(json.dumps(env, indent=2, default=str))
+
+
+@cli.group()
+def profile() -> None:
+    """Manage configuration profiles (presets of provider + role models)."""
+    from wth_ai.workspace import init_workspace
+    init_workspace()
+
+
+@profile.command("list")
+def profile_list() -> None:
+    """List available profiles (built-in presets + user-created)."""
+    from wth_ai.profiles import active_profile, list_profiles
+    active = active_profile()
+    for name in list_profiles():
+        mark = " *" if name == active else ""
+        click.echo(f"- {name}{mark}")
+
+
+@profile.command("create")
+@click.argument("name")
+def profile_create(name: str) -> None:
+    """Create a profile from a built-in preset (or empty default)."""
+    from wth_ai.profiles import create_profile
+    try:
+        path = create_profile(name)
+    except ValueError:
+        from wth_ai.profiles import builtin_presets
+        path = create_profile(name, builtin_presets()["default"])
+    click.echo(f"Created profile '{name}' at {path}")
+
+
+@profile.command("use")
+@click.argument("name")
+def profile_use(name: str) -> None:
+    """Apply a profile to the active config (secrets untouched)."""
+    from wth_ai.profiles import apply_profile
+    try:
+        apply_profile(name)
+    except ValueError as exc:
+        click.echo(str(exc))
+        return
+    click.echo(f"Active profile: {name}")
+
+
+@profile.command("show")
+@click.argument("name")
+def profile_show(name: str) -> None:
+    """Show a profile's contents."""
+    import yaml as _yaml
+    from wth_ai.profiles import get_profile
+    data = get_profile(name)
+    if data is None:
+        click.echo(f"Profile '{name}' not found.")
+        return
+    click.echo(_yaml.safe_dump(data, default_flow_style=False))
+
+
+@profile.command("delete")
+@click.argument("name")
+def profile_delete(name: str) -> None:
+    """Delete a user-created profile."""
+    from wth_ai.profiles import delete_profile
+    click.echo(f"Deleted '{name}'." if delete_profile(name) else f"Profile '{name}' not found on disk.")
+
+
 @cli.group()
 def bot() -> None:
     """Discord / Telegram bot daemons."""
