@@ -20,6 +20,7 @@ from wth_ai.brain.chain_planner import ChainPlanner
 from wth_ai.brain.hypothesis_engine import HypothesisEngine
 from wth_ai.cognition import CognitiveEngine
 from wth_ai.planning import TestPlanner
+from wth_ai.analysis import TriageEngine
 from wth_ai.evidence.vault import EvidenceVault
 from wth_ai.graph.asset_graph import AssetGraph
 from wth_ai.models import (
@@ -91,6 +92,7 @@ class WTHOrchestrator:
         self.chain_planner = ChainPlanner()
         self.cognition = CognitiveEngine()
         self.test_planner = TestPlanner()
+        self.triage_engine = TriageEngine()
         self.evidence_vault = EvidenceVault(self.state.session_id)
         if not fresh:
             self._try_load_latest()
@@ -195,6 +197,8 @@ class WTHOrchestrator:
             return self.findings_db.format_summary_table()
         if cmd == "/hypotheses":
             return self.findings_db.format_hypotheses()
+        if cmd == "/triage":
+            return self._run_triage(args)
         if cmd == "/skills":
             return self.skills.format_catalog(args[0] if args else None)
         if cmd == "/skill":
@@ -447,6 +451,25 @@ class WTHOrchestrator:
         if plan.executable():
             out += f"\n\n**{len(plan.executable())} task ter-antri** → `/execute --all` (butuh tools + permission sesuai)."
         return out
+
+    def _collect_finding_candidates(self) -> list[dict[str, Any]]:
+        """Gather raw finding candidates from probes, planner, and findings DB."""
+        candidates: list[dict[str, Any]] = []
+        candidates.extend(self.state.metadata.get("pre_findings", []))
+        for f in self.findings_db.list_findings():
+            candidates.append(f.to_dict())
+        for f in self.state.findings:
+            if isinstance(f, dict):
+                candidates.append(f)
+        return candidates
+
+    def _run_triage(self, args: list[str]) -> str:
+        """Correlate/dedup/false-positive-filter current finding candidates (flowchart 16)."""
+        candidates = self._collect_finding_candidates()
+        report = self.triage_engine.triage(candidates)
+        self.state.metadata["triage"] = report.to_summary_dict()
+        self._persist()
+        return report.format_cli()
 
     def _run_recon(self, args: list[str]) -> str:
         fast = "--fast" in args

@@ -44,6 +44,14 @@ Bridges cognition (ranked hypotheses) to the executor with a module-bound, gated
 - `test_planner.py` — `TestPlanner.build_plan(report, scope, permission_mode, request_budget)` → `TestPlan`: orders by cognition rank, gates by permission level + scope preconditions (IDOR needs 2 accounts; auth/upload need a test account) + request budget; emits `ExecutorTask`s.
 - Exposed via `/testplan` (`/testplan --budget=N`); it also fills `state.task_queue` so `/execute` can pick up planned tasks. Offline-testable (`tests/test_planning.py`).
 
+### Analysis layer (`wth_ai/analysis/`)
+
+Response analysis + finding triage (executor flowchart nodes 14 and 16). Pure/offline — no network, no execution.
+
+- `response_analyzer.py` — `ResponseAnalyzer`: typed, confidence-scored signals from captured responses (`analyze_pair`/`analyze_single`/`from_probe`): status/header/body diff, reflection, timing anomaly, SQL/stack error patterns, auth-boundary. Complements `probe/diff_brain.py` (which does the live fetching).
+- `triage.py` — `TriageEngine.triage(candidates)` → `TriageReport`: dedup/merge by (vuln class + component), severity = base severity × evidence confidence, TTST-aware false-positive filter, and a human-review queue (ungrounded high-impact items must be verified before report, per AGENT.md Evidence Law).
+- Exposed via `/triage` (correlates `pre_findings` + FindingsDB candidates). Offline-testable (`tests/test_analysis.py`).
+
 ### Gotchas
 
 - `AgentTerminalBridge.http_probe` enforces permission before scope: a `planner` actor needs `read_only`, an `executor` actor needs `standard` or higher. With an insufficient mode the probe returns `blocked=True`/`exit_code=127` (`status_code=0`) instead of performing the request — this is expected, not a network failure.
