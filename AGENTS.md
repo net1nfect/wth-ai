@@ -25,6 +25,17 @@ This repo contains two Python CLI products in one tree (no web UI, no Docker, fi
 - Tests: `python3 -m pytest tests/` (the test files set `WTH_TEST_MODE=1` and `WTH_SKIP_SETUP=1` themselves). All suites are offline (network/LLM/security tools are mocked or optional). CI also runs `python3 wth_ai/tools/generate_manifest.py` first (see `.github/workflows/ci.yml`).
 - Type check: `pyright` (config in `pyrightconfig.json`). It currently reports pre-existing type errors and is **not** gated by CI — treat existing errors as baseline, not environment breakage.
 
+### Cognition layer (`wth_ai/cognition/`)
+
+A deterministic, offline reasoning brain that ranks what to test first across recon → planner → executor. It never executes commands or changes permissions — guardrails stay upstream (`PermissionManager`, `ScopeManager`, authorization, dry-run, TTST).
+
+- `signals.py` — grounded feature extraction (vuln base severity per AGENT.md priority, param sensitivity, endpoint exposure, tech-profile affinity).
+- `risk_model.py` — explainable weighted risk score (0–100) + severity band + confidence, lifted by cross-session learning priors (`HuntMemoryLearning.success_rate`).
+- `reasoning_engine.py` — dedup → kill-list → score → rank → plan-confidence.
+- `strategy_selector.py` — UCB1 bandit over execution strategies (adapts via `record_outcome`, seeded by learning).
+- `engine.py` — `CognitiveEngine` facade used by the orchestrator.
+- Exposed via the `/reason` slash command (`/reason` ranked plan, `/reason --targets` recon focus); also auto-ranks hypotheses inside `/plan`. All offline-testable (`tests/test_cognition.py`).
+
 ### Gotchas
 
 - `AgentTerminalBridge.http_probe` enforces permission before scope: a `planner` actor needs `read_only`, an `executor` actor needs `standard` or higher. With an insufficient mode the probe returns `blocked=True`/`exit_code=127` (`status_code=0`) instead of performing the request — this is expected, not a network failure.

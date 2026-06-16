@@ -18,6 +18,7 @@ from wth_ai.config import WTHConfig
 from wth_ai.findings_db import FindingsDB
 from wth_ai.brain.chain_planner import ChainPlanner
 from wth_ai.brain.hypothesis_engine import HypothesisEngine
+from wth_ai.cognition import CognitiveEngine
 from wth_ai.evidence.vault import EvidenceVault
 from wth_ai.graph.asset_graph import AssetGraph
 from wth_ai.models import (
@@ -87,6 +88,7 @@ class WTHOrchestrator:
         self.asset_graph = AssetGraph(self.state.session_id)
         self.hypothesis_engine = HypothesisEngine()
         self.chain_planner = ChainPlanner()
+        self.cognition = CognitiveEngine()
         self.evidence_vault = EvidenceVault(self.state.session_id)
         if not fresh:
             self._try_load_latest()
@@ -215,6 +217,8 @@ class WTHOrchestrator:
             return self._run_hunt(args)
         if cmd == "/graph":
             return self.asset_graph.format_summary()
+        if cmd == "/reason":
+            return self._run_reason(args)
         if cmd in {"/plan", "/static", "/dynamic", "/patch", "/retest"}:
             return self._assess_loop(user_input)
         if cmd == "/execute":
@@ -295,6 +299,13 @@ class WTHOrchestrator:
         graph_ctx = self.asset_graph.export_for_planner() if self.asset_graph.nodes else ""
         tech_stack = (self.state.metadata.get("attack_surface_obj") or {}).get("tech_stack", {})
         pre_hypotheses = self.hypothesis_engine.generate(self.asset_graph, tech_stack)
+        # Cognition layer: dedup + explainable risk-rank before the LLM sees them.
+        cognition_report = self.cognition.deliberate(
+            pre_hypotheses, tech_profile=tech_profile, learning=self.learning,
+        )
+        if cognition_report.items:
+            pre_hypotheses = cognition_report.ranked_hypotheses()
+        self.state.metadata["cognition"] = cognition_report.to_summary_dict()
         chains = self.chain_planner.plan_from_hypotheses(pre_hypotheses, self.state.scope.target or "")
         chain_dicts = [c.to_dict() for c in chains]
         self.state.metadata["pre_hypotheses"] = pre_hypotheses
@@ -340,9 +351,61 @@ class WTHOrchestrator:
             parts.append(f"\n*[Critic killed {len(plan_result['killed'])} weak hypotheses]*")
         if pre_hypotheses:
             parts.append(f"\n*[Graph hypotheses: {len(pre_hypotheses)} | chains: {len(chain_dicts)}]*")
+        if cognition_report.items:
+            parts.append(
+                f"\n*[Cognition: {len(cognition_report.items)} risk-ranked · "
+                f"plan confidence {int(cognition_report.plan_confidence * 100)}% · "
+                f"top {cognition_report.items[0].risk.severity_band}]*"
+            )
         if tasks:
             parts.append(f"\n---\n**{len(tasks)} task queued** → `/execute`")
         return "\n".join(parts)
+
+    def _current_tech_profile(self) -> str:
+        tech_profile = self.state.metadata.get("tech_profile", "generic_web")
+        recon_meta = self.state.metadata.get("last_recon", {})
+        if recon_meta.get("adaptive_profile"):
+            tech_profile = recon_meta["adaptive_profile"]
+        return tech_profile
+
+    def _run_reason(self, args: list[str]) -> str:
+        """Cognition engine: explainable, risk-ranked plan (works fully offline)."""
+        tech_profile = self._current_tech_profile()
+        tech_stack = (self.state.metadata.get("attack_surface_obj") or {}).get("tech_stack", {})
+
+        if "--targets" in args:
+            targets = self.cognition.prioritize_recon_targets(self.asset_graph)
+            if not targets:
+                return (
+                    "## Cognition — Recon Focus\n"
+                    "Asset graph kosong. Jalankan `/recon` dulu untuk mengisi graph."
+                )
+            lines = ["## Cognition — Recon Focus (risk-ranked targets)"]
+            for i, t in enumerate(targets, 1):
+                lines.append(
+                    f"{i}. [{t['severity_band'].upper()} {t['risk_score']:.0f}] "
+                    f"`{t['param']}` @ {t['url'][:70]}"
+                )
+            return "\n".join(lines)
+
+        pre_hypotheses = self.hypothesis_engine.generate(self.asset_graph, tech_stack)
+        killed_titles = {
+            h.get("title", "")
+            for h in self.state.hypotheses
+            if h.get("state") in {"false_positive", "killed"}
+        }
+        report = self.cognition.deliberate(
+            pre_hypotheses,
+            tech_profile=tech_profile,
+            learning=self.learning,
+            killed_titles=killed_titles,
+        )
+        self.state.metadata["cognition"] = report.to_summary_dict()
+        self._persist()
+        out = report.format_cli()
+        if report.items:
+            out += "\n\n*Lanjut: `/plan` untuk refine via LLM, atau `/execute` setelah `/plan`.*"
+        return out
 
     def _run_recon(self, args: list[str]) -> str:
         fast = "--fast" in args

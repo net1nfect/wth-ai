@@ -7,7 +7,7 @@ import shlex
 
 class SlashCommandHandler:
     COMMANDS = [
-        "/help", "/status", "/scope", "/permission", "/plan", "/recon", "/hunt", "/graph",
+        "/help", "/status", "/scope", "/permission", "/plan", "/reason", "/recon", "/hunt", "/graph",
         "/doctor", "/intel", "/mcp", "/tools", "/static", "/dynamic", "/execute", "/findings", "/verify", "/report",
         "/skills", "/skill", "/browser", "/hypotheses", "/approve", "/resume",
         "/sessions", "/new-session", "/stop", "/patch", "/retest",
@@ -30,7 +30,8 @@ class SlashCommandHandler:
 `/status` · `/new-session` · `/resume`
 
 ## Assessment
-`/plan` · `/recon [target] [--fast]` · `/graph` · `/hunt` — graph-driven expert loop
+`/plan` · `/reason` — cognition engine: explainable risk-ranked plan (offline)
+`/recon [target] [--fast]` · `/graph` · `/hunt` — graph-driven expert loop
 `/doctor` · `/intel` · `/mcp` · `/tools` · `/tools install [category|all]`
 `/execute` · `/execute --all` · `/verify` · `/report`
 `/browser https://target.com` — nodriver + Cloudflare bypass
