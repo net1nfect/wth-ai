@@ -60,6 +60,79 @@ def setup(config_path: str, reset: bool) -> None:
     run_setup_wizard(reset=reset)
 
 
+@cli.command()
+@click.option("--config", "config_path", default="config/wth_config.yaml", show_default=True)
+def doctor(config_path: str) -> None:
+    """Diagnose workspace, vault, config, and tool health."""
+    from wth_ai.tools.doctor import ToolDoctor
+    click.echo(ToolDoctor(_load_config(config_path)).full_report())
+
+
+@cli.group()
+def vault() -> None:
+    """Manage the encrypted secret vault (~/.wth-ai/vault.enc)."""
+    from wth_ai.workspace import init_workspace
+    init_workspace()
+
+
+@vault.command("set")
+@click.argument("key")
+@click.argument("value", required=False)
+def vault_set(key: str, value: str | None) -> None:
+    """Store a secret. Prompts (hidden) if VALUE is omitted."""
+    from wth_ai.vault import SecretVault, mask_secret
+    if value is None:
+        value = click.prompt(f"Value for {key}", hide_input=True)
+    SecretVault().set(key, value)
+    click.echo(f"Stored {key} = {mask_secret(value)}")
+
+
+@vault.command("get")
+@click.argument("key")
+@click.option("--reveal", is_flag=True, help="Print the full secret (use with care).")
+def vault_get(key: str, reveal: bool) -> None:
+    """Show a secret (masked by default)."""
+    from wth_ai.vault import SecretVault, mask_secret
+    val = SecretVault().get(key)
+    if val is None:
+        click.echo(f"{key}: not found")
+        return
+    click.echo(f"{key}: {val if reveal else mask_secret(val)}")
+
+
+@vault.command("list")
+def vault_list() -> None:
+    """List secret names (values are never shown)."""
+    from wth_ai.vault import SecretVault
+    keys = SecretVault().list_keys()
+    click.echo("\n".join(keys) if keys else "(vault empty)")
+
+
+@vault.command("delete")
+@click.argument("key")
+def vault_delete(key: str) -> None:
+    """Delete a secret."""
+    from wth_ai.vault import SecretVault
+    ok = SecretVault().delete(key)
+    click.echo(f"Deleted {key}" if ok else f"{key}: not found")
+
+
+@vault.command("migrate")
+def vault_migrate() -> None:
+    """Migrate plaintext secrets from user.yaml/.env into the vault."""
+    from wth_ai.config import USER_CONFIG_PATH, USER_ENV_PATH
+    from wth_ai.vault import SecretVault, migrate_secrets
+    from wth_ai.workspace import init_workspace
+    init_workspace()
+    report = migrate_secrets(USER_CONFIG_PATH, USER_ENV_PATH, SecretVault())
+    if not report["migrated"]:
+        click.echo("No plaintext secrets found — nothing to migrate.")
+        return
+    click.echo(f"Migrated to vault: {', '.join(report['migrated'])}")
+    for b in report["backups"]:
+        click.echo(f"Backup: {b}")
+
+
 @cli.group()
 def bot() -> None:
     """Discord / Telegram bot daemons."""
