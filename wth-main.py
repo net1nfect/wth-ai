@@ -351,6 +351,183 @@ def profile_delete(name: str) -> None:
 
 
 @cli.group()
+def integration() -> None:
+    """Manage Telegram/Discord/Webhook integrations (event-driven)."""
+    from wth_ai.workspace import init_workspace
+    init_workspace()
+
+
+@integration.command("list")
+@click.option("--config", "config_path", default="config/wth_config.yaml", show_default=True)
+def integration_list(config_path: str) -> None:
+    """List integration adapters and their status (tokens masked)."""
+    from wth_ai.integrations.manager import IntegrationManager
+    mgr = IntegrationManager(_load_config(config_path))
+    for st in mgr.status():
+        click.echo(f"- {st['name']}: {'enabled' if st['enabled'] else 'disabled'} "
+                   f"recipients={st['recipients']} token={st['token'] or 'none'}")
+
+
+@integration.command("status")
+@click.option("--config", "config_path", default="config/wth_config.yaml", show_default=True)
+def integration_status(config_path: str) -> None:
+    """Show integration status as JSON (tokens masked)."""
+    from wth_ai.integrations.manager import IntegrationManager
+    click.echo(json.dumps(IntegrationManager(_load_config(config_path)).status(), indent=2))
+
+
+@integration.command("test")
+@click.option("--config", "config_path", default="config/wth_config.yaml", show_default=True)
+def integration_test(config_path: str) -> None:
+    """Dry-run a synthetic notification to enabled adapters (no token leaked)."""
+    from wth_ai.integrations.manager import IntegrationManager
+    click.echo(json.dumps(IntegrationManager(_load_config(config_path)).test(dry_run=True), indent=2))
+
+
+def _set_integration_enabled(config_path: str, platform: str, enabled: bool) -> None:
+    config = _load_config(config_path)
+    getattr(config.integrations, platform).enabled = enabled
+    config.save_user_config()
+    click.echo(f"{platform}: {'enabled' if enabled else 'disabled'}")
+
+
+@integration.group()
+def telegram() -> None:
+    """Telegram integration management."""
+
+
+@telegram.command("setup")
+@click.option("--config", "config_path", default="config/wth_config.yaml", show_default=True)
+def telegram_setup(config_path: str) -> None:
+    """Store the Telegram token in the vault and configure allowed chats."""
+    from wth_ai.vault import SecretVault, vault_ref
+    from wth_ai.workspace import init_workspace
+    init_workspace()
+    token = click.prompt("Telegram bot token", hide_input=True)
+    SecretVault().set("telegram_bot_token", token)
+    chats = click.prompt("Allowed chat IDs (comma-separated)", default="")
+    config = _load_config(config_path)
+    config.integrations.telegram.enabled = True
+    config.integrations.telegram.bot_token_ref = vault_ref("telegram_bot_token")
+    config.integrations.telegram.allowed_chat_ids = [c.strip() for c in chats.split(",") if c.strip()]
+    config.save_user_config()
+    click.echo("Telegram integration configured (token stored in vault).")
+
+
+@telegram.command("test")
+@click.option("--config", "config_path", default="config/wth_config.yaml", show_default=True)
+def telegram_test(config_path: str) -> None:
+    """Dry-run a Telegram notification."""
+    from wth_ai.integrations.manager import IntegrationManager
+    from wth_ai.integrations.telegram import TelegramNotifier
+    config = _load_config(config_path)
+    mgr = IntegrationManager(config, adapters=[TelegramNotifier(config.integrations.telegram)])
+    click.echo(json.dumps(mgr.test(dry_run=True), indent=2))
+
+
+@telegram.command("enable")
+@click.option("--config", "config_path", default="config/wth_config.yaml", show_default=True)
+def telegram_enable(config_path: str) -> None:
+    """Enable the Telegram integration."""
+    _set_integration_enabled(config_path, "telegram", True)
+
+
+@telegram.command("disable")
+@click.option("--config", "config_path", default="config/wth_config.yaml", show_default=True)
+def telegram_disable(config_path: str) -> None:
+    """Disable the Telegram integration."""
+    _set_integration_enabled(config_path, "telegram", False)
+
+
+@integration.group()
+def discord() -> None:
+    """Discord integration management."""
+
+
+@discord.command("setup")
+@click.option("--config", "config_path", default="config/wth_config.yaml", show_default=True)
+def discord_setup(config_path: str) -> None:
+    """Store the Discord token in the vault and configure guild/channels."""
+    from wth_ai.vault import SecretVault, vault_ref
+    from wth_ai.workspace import init_workspace
+    init_workspace()
+    token = click.prompt("Discord bot token", hide_input=True)
+    SecretVault().set("discord_bot_token", token)
+    guild = click.prompt("Guild ID", default="")
+    channels = click.prompt("Allowed channel IDs (comma-separated)", default="")
+    config = _load_config(config_path)
+    config.integrations.discord.enabled = True
+    config.integrations.discord.bot_token_ref = vault_ref("discord_bot_token")
+    config.integrations.discord.guild_id = guild.strip() or None
+    config.integrations.discord.allowed_channel_ids = [c.strip() for c in channels.split(",") if c.strip()]
+    config.save_user_config()
+    click.echo("Discord integration configured (token stored in vault).")
+
+
+@discord.command("test")
+@click.option("--config", "config_path", default="config/wth_config.yaml", show_default=True)
+def discord_test(config_path: str) -> None:
+    """Dry-run a Discord notification."""
+    from wth_ai.integrations.manager import IntegrationManager
+    from wth_ai.integrations.discord import DiscordNotifier
+    config = _load_config(config_path)
+    mgr = IntegrationManager(config, adapters=[DiscordNotifier(config.integrations.discord)])
+    click.echo(json.dumps(mgr.test(dry_run=True), indent=2))
+
+
+@discord.command("enable")
+@click.option("--config", "config_path", default="config/wth_config.yaml", show_default=True)
+def discord_enable(config_path: str) -> None:
+    """Enable the Discord integration."""
+    _set_integration_enabled(config_path, "discord", True)
+
+
+@discord.command("disable")
+@click.option("--config", "config_path", default="config/wth_config.yaml", show_default=True)
+def discord_disable(config_path: str) -> None:
+    """Disable the Discord integration."""
+    _set_integration_enabled(config_path, "discord", False)
+
+
+@cli.group()
+def approval() -> None:
+    """Manage the minimal approval registry."""
+    from wth_ai.workspace import init_workspace
+    init_workspace()
+
+
+@approval.command("list")
+def approval_list() -> None:
+    """List approval requests."""
+    from wth_ai.approvals import ApprovalRegistry
+    rows = ApprovalRegistry().list_all()
+    if not rows:
+        click.echo("(no approvals)")
+        return
+    for r in rows:
+        click.echo(f"- {r['approval_id']} [{r['status']}] job={r['job_id']} "
+                   f"action={r['action']} risk={r['risk']}")
+
+
+@approval.command("approve")
+@click.argument("approval_id")
+def approval_approve(approval_id: str) -> None:
+    """Approve a pending request."""
+    from wth_ai.approvals import ApprovalRegistry
+    rec = ApprovalRegistry().approve(approval_id)
+    click.echo(f"{approval_id} -> {rec['status']}" if rec else f"{approval_id}: not found")
+
+
+@approval.command("deny")
+@click.argument("approval_id")
+def approval_deny(approval_id: str) -> None:
+    """Deny a pending request."""
+    from wth_ai.approvals import ApprovalRegistry
+    rec = ApprovalRegistry().deny(approval_id)
+    click.echo(f"{approval_id} -> {rec['status']}" if rec else f"{approval_id}: not found")
+
+
+@cli.group()
 def bot() -> None:
     """Discord / Telegram bot daemons."""
 

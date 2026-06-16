@@ -92,6 +92,60 @@ class BotConfig:
     telegram_chat_ids: list[int] = field(default_factory=list)
 
 
+# Default notification rules for integrations (Fase 3).
+DEFAULT_NOTIFY_RULES: dict[str, bool] = {
+    "job_started": True,
+    "approval_needed": True,
+    "high_priority_finding": True,
+    "report_ready": True,
+    "job_failed": True,
+    "job_completed": False,
+    "provider_error": True,
+    "integration_error": True,
+}
+
+DEFAULT_DISCORD_ROLE_PERMISSIONS: dict[str, list[str]] = {
+    "owner": ["*"],
+    "admin": ["status", "jobs", "approve", "deny", "stop", "report"],
+    "analyst": ["status", "jobs", "report"],
+    "viewer": ["status", "report"],
+}
+
+
+@dataclass
+class TelegramIntegration:
+    enabled: bool = False
+    bot_token_ref: str | None = None  # e.g. "vault:telegram_bot_token"
+    allowed_chat_ids: list[str] = field(default_factory=list)
+    notify: dict[str, bool] = field(default_factory=lambda: dict(DEFAULT_NOTIFY_RULES))
+
+
+@dataclass
+class DiscordIntegration:
+    enabled: bool = False
+    bot_token_ref: str | None = None  # e.g. "vault:discord_bot_token"
+    guild_id: str | None = None
+    allowed_channel_ids: list[str] = field(default_factory=list)
+    role_permissions: dict[str, list[str]] = field(
+        default_factory=lambda: {k: list(v) for k, v in DEFAULT_DISCORD_ROLE_PERMISSIONS.items()}
+    )
+    notify: dict[str, bool] = field(default_factory=lambda: dict(DEFAULT_NOTIFY_RULES))
+
+
+@dataclass
+class WebhookIntegration:
+    enabled: bool = False
+    url: str | None = None
+    notify: dict[str, bool] = field(default_factory=lambda: dict(DEFAULT_NOTIFY_RULES))
+
+
+@dataclass
+class IntegrationsConfig:
+    telegram: TelegramIntegration = field(default_factory=TelegramIntegration)
+    discord: DiscordIntegration = field(default_factory=DiscordIntegration)
+    webhook: WebhookIntegration = field(default_factory=WebhookIntegration)
+
+
 @dataclass
 class ReconConfig:
     adaptive_graph: bool = True
@@ -156,6 +210,7 @@ class WTHConfig:
     providers: dict[str, ProviderRoleConfig] = field(default_factory=dict)
     secrets: SecretsConfig = field(default_factory=SecretsConfig)
     bots: BotConfig = field(default_factory=BotConfig)
+    integrations: IntegrationsConfig = field(default_factory=IntegrationsConfig)
     openrouter: OpenRouterConfig = field(default_factory=OpenRouterConfig)
     session: SessionConfig = field(default_factory=SessionConfig)
     tools: ToolConfig = field(default_factory=ToolConfig)
@@ -245,11 +300,14 @@ class WTHConfig:
 
         _inject_secret_env(secrets, bots)
 
+        integrations = _parse_integrations(raw.get("integrations", {}))
+
         cfg = cls(
             models=ModelConfig(**{k: v for k, v in models_raw.items() if k in ModelConfig.__dataclass_fields__}),
             providers=providers,
             secrets=secrets,
             bots=bots,
+            integrations=integrations,
             openrouter=OpenRouterConfig(**{k: v for k, v in or_raw.items() if k in OpenRouterConfig.__dataclass_fields__}),
             session=SessionConfig(**{k: v for k, v in session_raw.items() if k in SessionConfig.__dataclass_fields__}),
             tools=ToolConfig(**{k: v for k, v in tools_raw.items() if k in ToolConfig.__dataclass_fields__}),
@@ -308,6 +366,29 @@ class WTHConfig:
         if "telegram_bot_token" in present:
             bots_out["telegram_token"] = vault_ref("telegram_bot_token")
 
+        ig = self.integrations
+        integrations_out = {
+            "telegram": {
+                "enabled": ig.telegram.enabled,
+                "bot_token_ref": ig.telegram.bot_token_ref,
+                "allowed_chat_ids": ig.telegram.allowed_chat_ids,
+                "notify": ig.telegram.notify,
+            },
+            "discord": {
+                "enabled": ig.discord.enabled,
+                "bot_token_ref": ig.discord.bot_token_ref,
+                "guild_id": ig.discord.guild_id,
+                "allowed_channel_ids": ig.discord.allowed_channel_ids,
+                "role_permissions": ig.discord.role_permissions,
+                "notify": ig.discord.notify,
+            },
+            "webhook": {
+                "enabled": ig.webhook.enabled,
+                "url": ig.webhook.url,
+                "notify": ig.webhook.notify,
+            },
+        }
+
         data: dict[str, Any] = {
             "setup_complete": self.setup_complete,
             "realtime_only": self.realtime_only,
@@ -323,6 +404,7 @@ class WTHConfig:
             },
             "secrets": secrets_out,
             "bots": bots_out,
+            "integrations": integrations_out,
         }
         USER_CONFIG_PATH.write_text(yaml.safe_dump(data, default_flow_style=False), encoding="utf-8")
         from wth_ai.workspace import secure_file
@@ -385,6 +467,43 @@ def _inject_secret_env(secrets: SecretsConfig, bots: BotConfig) -> None:
     for env_key, value in mapping.items():
         if value and not os.environ.get(env_key):
             os.environ[env_key] = value
+
+
+def _parse_integrations(raw: dict[str, Any]) -> IntegrationsConfig:
+    raw = raw or {}
+    tg_raw = raw.get("telegram", {}) or {}
+    dc_raw = raw.get("discord", {}) or {}
+    wh_raw = raw.get("webhook", {}) or {}
+
+    def _notify(d: dict[str, Any]) -> dict[str, bool]:
+        merged = dict(DEFAULT_NOTIFY_RULES)
+        merged.update({k: bool(v) for k, v in (d.get("notify", {}) or {}).items()})
+        return merged
+
+    telegram = TelegramIntegration(
+        enabled=bool(tg_raw.get("enabled", False)),
+        bot_token_ref=tg_raw.get("bot_token_ref"),
+        allowed_chat_ids=[str(x) for x in tg_raw.get("allowed_chat_ids", [])],
+        notify=_notify(tg_raw),
+    )
+    discord = DiscordIntegration(
+        enabled=bool(dc_raw.get("enabled", False)),
+        bot_token_ref=dc_raw.get("bot_token_ref"),
+        guild_id=str(dc_raw["guild_id"]) if dc_raw.get("guild_id") else None,
+        allowed_channel_ids=[str(x) for x in dc_raw.get("allowed_channel_ids", [])],
+        role_permissions=(
+            {k: list(v) for k, v in dc_raw["role_permissions"].items()}
+            if dc_raw.get("role_permissions")
+            else {k: list(v) for k, v in DEFAULT_DISCORD_ROLE_PERMISSIONS.items()}
+        ),
+        notify=_notify(dc_raw),
+    )
+    webhook = WebhookIntegration(
+        enabled=bool(wh_raw.get("enabled", False)),
+        url=wh_raw.get("url"),
+        notify=_notify(wh_raw),
+    )
+    return IntegrationsConfig(telegram=telegram, discord=discord, webhook=webhook)
 
 
 def _deep_merge(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]:
