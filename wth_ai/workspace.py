@@ -20,6 +20,7 @@ def wth_home() -> Path:
 WORKSPACE_DIRS: tuple[str, ...] = (
     "config",
     "logs",
+    "logs/jobs",
     "reports",
     "screenshots",
     "cache",
@@ -28,6 +29,7 @@ WORKSPACE_DIRS: tuple[str, ...] = (
     "data/engagements",
     "tools/bin",
     "runtime",
+    "runtime/queue",
     "recon",
     "wth-results",
 )
