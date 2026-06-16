@@ -1,0 +1,17 @@
+admin-reseller.premiumportal.id
+api.consumer.premiumportal.id
+api.premiumportal.id
+be.premiumportal.id
+cdn.premiumportal.id
+consumer-api.premiumportal.id
+dl.premiumportal.id
+envato.premiumportal.id
+info.premiumportal.id
+newtools.premiumportal.id
+premiumportal.id
+reseller-api.premiumportal.id
+reseller.premiumportal.id
+staging-tools.premiumportal.id
+staging.premiumportal.id
+tools.premiumportal.id
+www.premiumportal.id

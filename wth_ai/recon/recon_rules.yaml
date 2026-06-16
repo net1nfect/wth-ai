@@ -1,0 +1,44 @@
+# Adaptive Recon Graph — branching rules evaluated after fingerprint (phase 9)
+
+rules:
+  - id: laravel_boost
+    when:
+      tech_contains: ["laravel", "php"]
+    skip_phases: [7]
+    boost_phases: [4, 5, 6]
+    profile: laravel
+
+  - id: api_only
+    when:
+      api_endpoints_min: 5
+      live_hosts_max: 3
+    skip_phases: [6, 7]
+    boost_phases: [4, 5, 10]
+    profile: api
+
+  - id: aws_cloud
+    when:
+      headers_contains: ["amazon", "aws", "cloudfront", "s3"]
+      tech_contains: ["aws", "amazon"]
+    skip_phases: []
+    boost_phases: [7, 8]
+    profile: generic_web
+
+  - id: graphql_api
+    when:
+      url_contains: ["/graphql", "graphiql"]
+    skip_phases: [6]
+    boost_phases: [4, 5, 10]
+    profile: api
+
+  - id: thin_surface
+    when:
+      live_hosts_max: 1
+      urls_max: 5
+    skip_phases: [7, 8]
+    boost_phases: [1, 2, 3]
+    profile: generic_web
+
+default:
+  phases: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+  profile: generic_web

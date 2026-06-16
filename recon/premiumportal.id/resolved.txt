@@ -1,0 +1,9 @@
+admin-reseller.premiumportal.id
+api.premiumportal.id
+cdn.premiumportal.id
+consumer-api.premiumportal.id
+newtools.premiumportal.id
+premiumportal.id
+reseller-api.premiumportal.id
+reseller.premiumportal.id
+www.premiumportal.id

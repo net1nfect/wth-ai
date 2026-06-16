@@ -1,0 +1,4 @@
+https://premiumportal.id/api/additional-setting
+https://premiumportal.id/api/banners/table
+https://premiumportal.id/api/package-items
+https://premiumportal.id/api/users/profile/dashboard

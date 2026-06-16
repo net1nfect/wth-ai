@@ -1,0 +1,78 @@
+engagement:
+  target: example.com
+  scope:
+    - example.com
+  objectives:
+    - Validate security controls using non-destructive checks
+  duration_limit: 8
+  budget_limit: 1000
+  authorization_proof: ""
+
+reconnaissance:
+  phases_to_run: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+  thread_count:
+    default: 10
+  timeout_values:
+    default: 30
+  tool_selection: {}
+  ai_enhancement_level: advanced
+
+exploitation:
+  payload_generation_mode: template
+  waf_evasion_strategy: static
+  encoding_layers: 1
+  mutation_aggressiveness: 1
+  detection_evasion_level: 1
+  dry_run: true
+  require_human_approval: true
+
+agents:
+  enable_agents:
+    - reconnaissance
+    - exploitation
+    - privilege_escalation
+    - lateral_movement
+    - persistence_evasion
+    - data_extraction
+    - post_exploitation
+    - learning_adaptation
+    - reporting
+  agent_parallelization: true
+  agent_communication_timeout: 300
+  agent_resource_limits:
+    concurrency: 10
+
+learning:
+  enable_reinforcement_learning: true
+  learning_update_frequency: 10
+  model_persistence: true
+  learning_data_retention: 90
+
+threat_intel:
+  enabled_feeds:
+    - cisa_kev
+  update_frequency: 60
+  api_keys: {}
+  dark_web_monitoring: false
+
+reporting:
+  report_format:
+    - json
+    - html
+  include_pocs: false
+  remediation_detail_level: detailed
+  compliance_frameworks:
+    - GDPR
+    - HIPAA
+    - PCI-DSS
+
+security:
+  audit_logging_enabled: true
+  log_retention_days: 90
+  evidence_preservation: true
+  cleanup_on_exit: true
+  requests_per_second: 2.0
+
+database:
+  url: sqlite:///data/h1t4m.db
+  encryption_key_env: H1T4M_ENCRYPTION_KEY

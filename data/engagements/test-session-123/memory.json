@@ -1,0 +1,91 @@
+{
+  "session_id": "test-session-123",
+  "updated_at": "2026-06-15T20:15:53.043254+00:00",
+  "assets": [
+    "app.com",
+    "api.app.com"
+  ],
+  "routes": [
+    {
+      "path": "https://api.app.com/v1",
+      "type": "api"
+    },
+    {
+      "path": "https://api.app.com/v1",
+      "type": "api"
+    },
+    {
+      "path": "https://api.app.com/v1",
+      "type": "api"
+    },
+    {
+      "path": "https://api.app.com/v1",
+      "type": "api"
+    },
+    {
+      "path": "https://api.app.com/v1",
+      "type": "api"
+    },
+    {
+      "path": "https://api.app.com/v1",
+      "type": "api"
+    },
+    {
+      "path": "https://api.app.com/v1",
+      "type": "api"
+    },
+    {
+      "path": "https://api.app.com/v1",
+      "type": "api"
+    },
+    {
+      "path": "https://api.app.com/v1",
+      "type": "api"
+    }
+  ],
+  "controllers": [],
+  "middleware": [],
+  "input_surfaces": [
+    {
+      "url": "https://app.com/login",
+      "type": "form_login"
+    },
+    {
+      "url": "https://app.com/login",
+      "type": "form_login"
+    },
+    {
+      "url": "https://app.com/login",
+      "type": "form_login"
+    },
+    {
+      "url": "https://app.com/login",
+      "type": "form_login"
+    },
+    {
+      "url": "https://app.com/login",
+      "type": "form_login"
+    },
+    {
+      "url": "https://app.com/login",
+      "type": "form_login"
+    },
+    {
+      "url": "https://app.com/login",
+      "type": "form_login"
+    },
+    {
+      "url": "https://app.com/login",
+      "type": "form_login"
+    },
+    {
+      "url": "https://app.com/login",
+      "type": "form_login"
+    }
+  ],
+  "trust_boundaries": [],
+  "rejected_hypotheses": [],
+  "evidence_gaps": [],
+  "iteration": 0,
+  "tech_profile": "api"
+}

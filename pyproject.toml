@@ -1,0 +1,41 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "wth-ai"
+version = "1.0.0"
+description = "Production-grade bug bounty AI CLI — dual-agent recon, hunt, verify"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "click>=8.1",
+    "rich>=13.6",
+    "python-dotenv>=1.0",
+    "prompt-toolkit>=3.0",
+    "requests>=2.31",
+    "pyyaml>=6.0",
+    "pydantic>=2.4",
+    "discord.py>=2.3",
+    "python-telegram-bot>=21.0",
+]
+
+[project.optional-dependencies]
+browser = ["nodriver>=0.38"]
+full = ["nodriver>=0.38", "aiohttp>=3.9", "dnspython>=2.4", "beautifulsoup4>=4.12"]
+
+[project.scripts]
+wth = "wth_ai.cli.entry:main"
+wth-ai = "wth_ai.cli.entry:main"
+
+[tool.setuptools.packages.find]
+include = ["wth_ai*"]
+
+[tool.setuptools.package-data]
+wth_ai = ["tools/manifest.yaml", "recon/recon_rules.yaml"]
+
+[tool.pyright]
+include = ["wth_ai", "tests"]
+extraPaths = ["."]
+pythonVersion = "3.10"
+typeCheckingMode = "basic"

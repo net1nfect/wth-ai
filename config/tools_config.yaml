@@ -1,0 +1,5 @@
+allowed_tools: {}
+execution:
+  shell_enabled: false
+  default_timeout_seconds: 60
+  maximum_output_bytes: 100000

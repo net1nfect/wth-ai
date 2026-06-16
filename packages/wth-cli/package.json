@@ -1,0 +1,27 @@
+{
+  "name": "@wth-ai/cli",
+  "version": "1.0.0",
+  "description": "WTH-AI — Mythos-class bug bounty AI CLI (global launcher)",
+  "bin": {
+    "wth": "bin/wth.js"
+  },
+  "files": [
+    "bin",
+    "lib"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "keywords": [
+    "security",
+    "bug-bounty",
+    "recon",
+    "pentest",
+    "ai"
+  ],
+  "license": "UNLICENSED",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/wth-ai/wth-ai.git"
+  }
+}

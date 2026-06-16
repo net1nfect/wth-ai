@@ -1,0 +1,93 @@
+# Hypothesis rules — graph-driven bug hunter expert
+
+rules:
+  - id: api_idor
+    when:
+      param_matches: ["id", "user_id", "uuid", "account_id", "order_id"]
+      auth_required: true
+    hypothesis: "BOLA on {endpoint} via param {param}"
+    vuln_class: idor
+    priority: 9
+    chain: [baseline_user_a, swap_id_user_b, diff_response]
+    safe_test: "Access object ID from user_a as user_b"
+    evidence_needed: "Cross-account data in response"
+
+  - id: ssrf_url_param
+    when:
+      param_matches: ["url", "redirect", "next", "callback", "dest", "target"]
+    hypothesis: "SSRF/open redirect via {param} on {endpoint}"
+    vuln_class: ssrf
+    priority: 8
+    chain: [baseline, internal_probe]
+    safe_test: "Inject collaborator/OOB URL"
+    evidence_needed: "Outbound callback received"
+
+  - id: xss_reflect
+    when:
+      param_matches: ["q", "search", "query", "name", "message", "text"]
+    hypothesis: "Reflected XSS via {param}"
+    vuln_class: xss
+    priority: 7
+    chain: [reflect_probe, context_check]
+    safe_test: "Inject harmless marker string"
+    evidence_needed: "Marker reflected unescaped"
+
+  - id: laravel_idor
+    when:
+      tech_contains: ["laravel", "php"]
+      param_matches: ["id"]
+    hypothesis: "Laravel IDOR on route with {param}"
+    vuln_class: idor
+    priority: 9
+    why: "Laravel apps often miss Policy checks on {param} routes"
+    chain: [baseline_user_a, swap_id_user_b, diff_response]
+
+  - id: graphql_introspection
+    when:
+      tech_contains: ["graphql"]
+    hypothesis: "GraphQL introspection enabled"
+    vuln_class: api
+    priority: 6
+    safe_test: "Run introspection query"
+    evidence_needed: "__schema in response"
+
+  - id: jwt_auth
+    when:
+      tech_contains: ["jwt", "api"]
+    hypothesis: "JWT misconfiguration (alg none / weak secret)"
+    vuln_class: auth_jwt
+    priority: 8
+    chain: [capture_token, alg_none]
+
+  - id: file_upload
+    when:
+      param_matches: ["file", "upload", "attachment"]
+    hypothesis: "Unrestricted file upload via {param}"
+    vuln_class: upload
+    priority: 8
+    safe_test: "Upload benign test file types"
+    evidence_needed: "Dangerous type accepted/executable"
+
+  - id: admin_path
+    when:
+      param_matches: ["role", "admin", "is_admin"]
+    hypothesis: "Privilege escalation via {param}"
+    vuln_class: auth
+    priority: 9
+    safe_test: "Toggle role/admin params as low-priv user"
+
+  - id: race_coupon
+    when:
+      param_matches: ["coupon", "code", "amount", "quantity"]
+    hypothesis: "Race condition on {param}"
+    vuln_class: race
+    priority: 7
+    chain: [single_request, concurrent_burst]
+
+  - id: spring_actuator
+    when:
+      tech_contains: ["spring", "java"]
+    hypothesis: "Spring Boot actuator exposure"
+    vuln_class: misconfig
+    priority: 7
+    safe_test: "Probe /actuator/env /actuator/heapdump"
