@@ -52,6 +52,12 @@ Response analysis + finding triage (executor flowchart nodes 14 and 16). Pure/of
 - `triage.py` — `TriageEngine.triage(candidates)` → `TriageReport`: dedup/merge by (vuln class + component), severity = base severity × evidence confidence, TTST-aware false-positive filter, and a human-review queue (ungrounded high-impact items must be verified before report, per AGENT.md Evidence Law).
 - Exposed via `/triage` (correlates `pre_findings` + FindingsDB candidates). Offline-testable (`tests/test_analysis.py`).
 
+### Closed feedback loop, iterative hunt, triage-driven report
+
+- `wth_ai/cognition/feedback.py` — `FeedbackController`: routes execution outcomes into the UCB1 bandit + learning store, and verifier `false_positive` verdicts into a kill-set that suppresses disproven hypotheses on the next `/reason`/`/testplan`/`/plan`. Orchestrator wires it via `_record_execution_feedback` (called after `/execute`) and `_verify`.
+- `/hunt` — uses the LLM `EngagementLoop` when a provider is available; otherwise (or with `--cognitive`) runs `_run_cognitive_hunt`: a deterministic, offline iterative loop (deliberate → testplan → focus/cover top → re-rank) for up to `--iters=N`, ending with a triage pass.
+- `/report` is now offline-capable: LLM body when available, deterministic `_offline_report_body()` otherwise, always appended with a triage-driven section (flowchart node 17): prioritized weak areas, validated candidates, human-review queue (Evidence Law), retest checklist. Offline-testable (`tests/test_feedback_loop.py`).
+
 ### Gotchas
 
 - `AgentTerminalBridge.http_probe` enforces permission before scope: a `planner` actor needs `read_only`, an `executor` actor needs `standard` or higher. With an insufficient mode the probe returns `blocked=True`/`exit_code=127` (`status_code=0`) instead of performing the request — this is expected, not a network failure.

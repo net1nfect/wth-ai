@@ -18,6 +18,7 @@ from __future__ import annotations
 from wth_ai.cognition.engine import (
     AdaptiveStrategySelector,
     CognitiveEngine,
+    FeedbackController,
     ReasoningEngine,
     ReasoningReport,
     RiskModel,
@@ -33,4 +34,5 @@ __all__ = [
     "RiskScore",
     "AdaptiveStrategySelector",
     "StrategyChoice",
+    "FeedbackController",
 ]

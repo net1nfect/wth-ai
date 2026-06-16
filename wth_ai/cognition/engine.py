@@ -14,6 +14,7 @@ from __future__ import annotations
 
 from typing import Any, Protocol
 
+from wth_ai.cognition.feedback import FeedbackController
 from wth_ai.cognition.reasoning_engine import ReasoningEngine, ReasoningReport
 from wth_ai.cognition.risk_model import RiskModel, RiskScore
 from wth_ai.cognition.strategy_selector import AdaptiveStrategySelector, StrategyChoice
@@ -36,6 +37,7 @@ class CognitiveEngine:
         self.risk_model = risk_model or RiskModel()
         self.reasoning = reasoning or ReasoningEngine(self.risk_model)
         self.strategy = strategy or AdaptiveStrategySelector()
+        self.feedback = FeedbackController(self.strategy)
 
     def deliberate(
         self,
@@ -115,4 +117,5 @@ __all__ = [
     "RiskScore",
     "AdaptiveStrategySelector",
     "StrategyChoice",
+    "FeedbackController",
 ]

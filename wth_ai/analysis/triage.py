@@ -147,6 +147,61 @@ class TriageReport:
                 lines.append(f"- {f.title} — {f.notes}")
         return "\n".join(lines)
 
+    def prioritized_weak_areas(self) -> list[dict[str, Any]]:
+        """Aggregate actionable findings by vuln class -> weak-area priority."""
+        order = {"critical": 0, "high": 1, "medium": 2, "low": 3, "info": 4}
+        groups: dict[str, dict[str, Any]] = {}
+        for f in self.actionable():
+            g = groups.setdefault(f.vuln_class, {"vuln_class": f.vuln_class, "count": 0,
+                                                 "severity": f.severity, "max_conf": 0.0})
+            g["count"] += 1
+            g["max_conf"] = max(g["max_conf"], f.confidence)
+            if order.get(f.severity, 5) < order.get(g["severity"], 5):
+                g["severity"] = f.severity
+        ranked = sorted(groups.values(), key=lambda g: (order.get(g["severity"], 5), -g["max_conf"]))
+        return ranked
+
+    def format_report_section(self) -> str:
+        """Deterministic reporting block (flowchart node 17) driven by triage."""
+        actionable = self.actionable()
+        lines = ["## Triage-Driven Findings & Retest Plan", ""]
+
+        lines.append("### Prioritized Weak Areas")
+        weak = self.prioritized_weak_areas()
+        if weak:
+            for w in weak:
+                lines.append(
+                    f"- {w['vuln_class']}: {w['count']} candidate(s), "
+                    f"top severity {w['severity']} (conf {int(w['max_conf'] * 100)}%)"
+                )
+        else:
+            lines.append("- (none above false-positive threshold)")
+
+        lines.append("")
+        lines.append("### Validated Finding Candidates")
+        promoted = [f for f in actionable if not f.review_required]
+        if promoted:
+            for f in promoted:
+                lines.append(f"- [{f.severity.upper()}] {f.title} — {f.component[:70]}")
+        else:
+            lines.append("- (none auto-promoted; all require human verification)")
+
+        review = self.review_queue()
+        if review:
+            lines.append("")
+            lines.append("### Human Review Queue (Evidence Law — verify before report)")
+            for f in review:
+                lines.append(f"- [{f.severity.upper()}] {f.title} — {f.notes}")
+
+        lines.append("")
+        lines.append("### Retest Checklist")
+        if actionable:
+            for f in actionable:
+                lines.append(f"- [ ] {f.vuln_class} @ {f.component[:70]} — re-run, confirm {f.notes}")
+        else:
+            lines.append("- [ ] (no actionable items)")
+        return "\n".join(lines)
+
 
 class TriageEngine:
     """Correlate, score, and filter finding candidates."""
