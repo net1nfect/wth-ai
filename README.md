@@ -23,20 +23,150 @@ WTH-AI adalah CLI bug bounty expert yang menggabungkan **multi-provider LLM**, *
 ## Arsitektur
 
 ```mermaid
-flowchart TB
-  User[User REPL] --> Wizard[Recon Wizard]
-  User --> Orch[Orchestrator]
-  Orch --> Planner[Nemotron Planner]
-  Orch --> Executor[Qwen3 Executor]
-  Planner --> Bridge[AgentTerminalBridge]
-  Executor --> Bridge
-  Bridge --> Perm[PermissionManager]
-  Bridge --> TX[TerminalTranscriptStore]
-  TX --> Vault[EvidenceVault]
-  Orch --> Graph[AssetGraph]
-  Graph --> Brain[HypothesisEngine]
-  Brain --> Chains[ChainPlanner]
-  Vault --> Report[H1 Report PoC]
+flowchart TD
+    A([START]) --> B["0. Start / Intake"]
+
+    B --> B1["Target request"]
+    B --> B2["Scope definition"]
+    B --> B3["Rules of engagement"]
+    B --> B4["Credential / test account if provided"]
+    B --> B5["Authorization check"]
+
+    B --> C["1. Scope & Policy Engine"]
+
+    C --> C1["Allowlist / denylist"]
+    C --> C2["Rate limits"]
+    C --> C3["Safe mode"]
+    C --> C4["Environment tagging: prod / staging / dev"]
+    C --> C5["Approval gates"]
+
+    C --> D["2. Recon & Attack Surface Mapping"]
+
+    D --> D1["Root domain expansion"]
+    D --> D2["Passive collection"]
+    D --> D3["DNS / IP / ASN mapping"]
+    D --> D4["HTTP probing"]
+    D --> D5["Fingerprinting"]
+    D --> D6["Crawling / content discovery"]
+    D --> D7["JS / parameter / API mapping"]
+    D --> D8["Cloud / auth / header / TLS mapping"]
+
+    D --> E["3. Normalization & Asset Graph"]
+
+    E --> E1["Deduplication"]
+    E --> E2["Confidence scoring"]
+    E --> E3["Entity linking"]
+    E --> E4["Domain -> Subdomain"]
+    E --> E5["Subdomain -> IP"]
+    E --> E6["IP -> URL"]
+    E --> E7["URL -> Endpoint"]
+    E --> E8["Endpoint -> Parameter"]
+    E --> E9["Screenshot / evidence linkage"]
+
+    E --> F["4. Prioritization Engine"]
+
+    F --> F1["Interest / risk scoring"]
+    F --> F2["Admin / dev keyword scoring"]
+    F --> F3["Auth surface weight"]
+    F --> F4["Secret / cloud exposure weight"]
+    F --> F5["Business-critical asset scoring"]
+    F --> F6["Select top targets"]
+
+    F --> G["5. Test Planning Layer"]
+
+    G --> G1["Choose modules"]
+    G --> G2["Create test queue"]
+    G --> G3["Sequence authenticated vs unauthenticated flows"]
+    G --> G4["Plan request budget"]
+    G --> G5["Define stop conditions"]
+
+    G --> H["6. Executor Engine"]
+
+    H --> H1["Request workers"]
+    H --> H2["Session manager"]
+    H --> H3["Payload / test logic library"]
+    H --> H4["Auth / access control validation"]
+    H --> H5["Injection validation"]
+    H --> H6["API / GraphQL / upload modules"]
+    H --> H7["Business logic modules"]
+    H --> H8["Safety guardrails"]
+
+    H --> I["7. Response Analysis & Evidence"]
+
+    I --> I1["Compare baseline vs mutated responses"]
+    I --> I2["Detect anomalies"]
+    I --> I3["Capture request / response"]
+    I --> I4["Capture screenshots"]
+    I --> I5["Create reproduction notes"]
+    I --> I6["Confidence scoring"]
+
+    I --> J["8. Correlation, Triage, Human Review"]
+
+    J --> J1["Deduplicate findings"]
+    J --> J2["Cluster related issues"]
+    J --> J3["False-positive filtering"]
+    J --> J4["Analyst review"]
+    J --> J5["Reproduce high-confidence findings"]
+    J --> J6["Decide severity candidate"]
+
+    J --> K["9. Reporting & Deliverables"]
+
+    K --> K1["Executive summary"]
+    K --> K2["Technical findings"]
+    K --> K3["Affected assets"]
+    K --> K4["Evidence bundle"]
+    K --> K5["Prioritized remediation areas"]
+    K --> K6["Retest checklist"]
+
+    K --> L["10. Remediation Loop & Continuous Operation"]
+
+    L --> L1["Remediation tracking"]
+    L --> L2["Retest queue"]
+    L --> L3["Change detection"]
+    L --> L4["New asset monitoring"]
+    L --> L5["Continuous recon feedback"]
+    L --> L6["Model / rule tuning"]
+
+    L --> M["Output"]
+
+    M --> M1["Attack Surface Inventory"]
+    M --> M2["Prioritized Targets"]
+    M --> M3["Validated Finding Candidates"]
+    M --> M4["Evidence & Reports"]
+    M --> M5["Retest Pipeline"]
+
+    M5 --> D
+    L5 --> D
+    L6 --> F
+
+    M --> END([END])
+
+    SUPPORT["Komponen Pendukung"] --> SUP1["Central Data Store"]
+    SUPPORT --> SUP2["Secrets-Safe Vault"]
+    SUPPORT --> SUP3["Screenshot Storage"]
+    SUPPORT --> SUP4["Logs / Audit Trail"]
+    SUPPORT --> SUP5["Notification & Alerts"]
+    SUPPORT --> SUP6["Dashboard / Metrics"]
+    SUPPORT --> SUP7["Worker Scaling / Orchestration"]
+
+    SUP1 -.-> E
+    SUP2 -.-> H
+    SUP3 -.-> I
+    SUP4 -.-> I
+    SUP5 -.-> K
+    SUP6 -.-> F
+    SUP7 -.-> H
+
+    PRINCIPLES["Prinsip Kunci"] --> P1["Authorized only"]
+    PRINCIPLES --> P2["Evidence-driven"]
+    PRINCIPLES --> P3["Non-destructive validation"]
+    PRINCIPLES --> P4["Rate-aware execution"]
+    PRINCIPLES --> P5["Human-in-the-loop"]
+    PRINCIPLES --> P6["Continuous improvement"]
+
+    PRINCIPLES -.-> C
+    PRINCIPLES -.-> H
+    PRINCIPLES -.-> J
 ```
 
 **TTST (Terminal Transcript Source of Truth):** Setiap klaim kerentanan harus punya output terminal/HTTP nyata yang tersimpan sebagai `TX-{id}`.
