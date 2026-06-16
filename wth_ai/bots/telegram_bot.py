@@ -11,6 +11,8 @@ from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandl
 from wth_ai.bots.auth import telegram_allowed
 from wth_ai.bots.base import BotSessionManager
 from wth_ai.config import WTHConfig
+from wth_ai.integrations.commands import BotCommandService
+from wth_ai.vault import SecretVault
 
 TELEGRAM_MAX = 4000
 
@@ -29,12 +31,33 @@ class WTHTelegramBot:
     def __init__(self, config: WTHConfig) -> None:
         self.config = config
         self.sessions = BotSessionManager(config)
-        self.token = config.bots.telegram_token
+        from wth_ai.jobs.manager import JobManager
+        self.commands = BotCommandService(config, jobs=JobManager(config))
+        # Prefer the vault-backed integrations token; fall back to legacy bots config.
+        ref = self.config.integrations.telegram.bot_token_ref
+        self.token = (SecretVault().resolve(ref) if ref else None) or config.bots.telegram_token
+
+    def _chat_allowed(self, chat_id: int) -> bool:
+        tg = self.config.integrations.telegram
+        if tg.enabled and tg.allowed_chat_ids:
+            return str(chat_id) in tg.allowed_chat_ids
+        return telegram_allowed(self.config.bots, chat_id)
+
+    async def _svc_cmd(self, update: Update, context: ContextTypes.DEFAULT_TYPE, name: str) -> None:
+        if not update.effective_chat:
+            return
+        if not self._chat_allowed(update.effective_chat.id):
+            await update.message.reply_text("Chat tidak diizinkan.")  # type: ignore[union-attr]
+            return
+        args = list(context.args) if context.args else []
+        text = self.commands.handle(name, args, role="owner")
+        for chunk in _chunk(text):
+            await update.message.reply_text(chunk)  # type: ignore[union-attr]
 
     async def _run_cmd(self, update: Update, command: str) -> None:
         if not update.effective_chat or not update.effective_user:
             return
-        if not telegram_allowed(self.config.bots, update.effective_chat.id):
+        if not self._chat_allowed(update.effective_chat.id):
             await update.message.reply_text("Chat tidak diizinkan.")  # type: ignore[union-attr]
             return
         await update.message.reply_chat_action("typing")  # type: ignore[union-attr]
@@ -78,7 +101,7 @@ class WTHTelegramBot:
             return
         if not update.effective_chat or not update.effective_user:
             return
-        if not telegram_allowed(self.config.bots, update.effective_chat.id):
+        if not self._chat_allowed(update.effective_chat.id):
             return
         text = update.message.text.strip()
         if text.startswith("/"):
@@ -95,6 +118,12 @@ class WTHTelegramBot:
         app.add_handler(CommandHandler("plan", self.cmd_plan))
         app.add_handler(CommandHandler("graph", self.cmd_graph))
         app.add_handler(CommandHandler("hunt", self.cmd_hunt))
+        # Fase 3 integration commands (shared command service).
+        for name in ("status", "jobs", "approve", "deny", "stop", "report", "settings", "help"):
+            app.add_handler(CommandHandler(
+                name,
+                lambda u, c, n=name: self._svc_cmd(u, c, n),
+            ))
         app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self.on_message))
         print("WTH-AI Telegram bot starting...")
         app.run_polling()

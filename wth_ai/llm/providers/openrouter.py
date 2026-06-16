@@ -14,6 +14,7 @@ from wth_ai.llm.providers.base import BaseLLMProvider
 
 class OpenRouterProvider(BaseLLMProvider):
     provider_type = "openrouter"
+    tool_calling = True
 
     def __init__(
         self,
