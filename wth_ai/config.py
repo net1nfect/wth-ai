@@ -186,11 +186,16 @@ class WTHConfig:
                     base_url=pdata.get("base_url"),
                 )
 
+        resolve = _make_secret_resolver()
+
+        def _sec(field: str, env_key: str) -> str | None:
+            return resolve(secrets_raw.get(field), env_key)
+
         secrets = SecretsConfig(
-            openrouter_api_key=secrets_raw.get("openrouter_api_key") or os.environ.get("OPENROUTER_API_KEY"),
-            openai_api_key=secrets_raw.get("openai_api_key") or os.environ.get("OPENAI_API_KEY"),
-            anthropic_api_key=secrets_raw.get("anthropic_api_key") or os.environ.get("ANTHROPIC_API_KEY"),
-            google_api_key=secrets_raw.get("google_api_key") or os.environ.get("GOOGLE_API_KEY"),
+            openrouter_api_key=_sec("openrouter_api_key", "OPENROUTER_API_KEY"),
+            openai_api_key=_sec("openai_api_key", "OPENAI_API_KEY"),
+            anthropic_api_key=_sec("anthropic_api_key", "ANTHROPIC_API_KEY"),
+            google_api_key=_sec("google_api_key", "GOOGLE_API_KEY"),
             ollama_base_url=secrets_raw.get("ollama_base_url", "http://127.0.0.1:11434"),
             openai_base_url=secrets_raw.get("openai_base_url"),
             anthropic_base_url=secrets_raw.get("anthropic_base_url"),
@@ -198,12 +203,14 @@ class WTHConfig:
         )
 
         bots = BotConfig(
-            discord_token=bots_raw.get("discord_token") or os.environ.get("DISCORD_BOT_TOKEN"),
+            discord_token=resolve(bots_raw.get("discord_token"), "DISCORD_BOT_TOKEN"),
             discord_guild_ids=[int(x) for x in bots_raw.get("discord_guild_ids", [])],
             discord_channel_ids=[int(x) for x in bots_raw.get("discord_channel_ids", [])],
-            telegram_token=bots_raw.get("telegram_token") or os.environ.get("TELEGRAM_BOT_TOKEN"),
+            telegram_token=resolve(bots_raw.get("telegram_token"), "TELEGRAM_BOT_TOKEN"),
             telegram_chat_ids=[int(x) for x in bots_raw.get("telegram_chat_ids", [])],
         )
+
+        _inject_secret_env(secrets, bots)
 
         cfg = cls(
             models=ModelConfig(**{k: v for k, v in models_raw.items() if k in ModelConfig.__dataclass_fields__}),
@@ -232,8 +239,38 @@ class WTHConfig:
         return self.secrets.openrouter_api_key or os.environ.get(self.openrouter.api_key_env)
 
     def save_user_config(self) -> Path:
-        """Persist current config to ~/.wth-ai/config/user.yaml."""
+        """Persist config to ~/.wth-ai/config/user.yaml.
+
+        Secrets are NEVER written in plaintext: only ``vault:<name>`` references
+        are stored, and only for secrets that are present in the vault.
+        """
+        from wth_ai.vault import SecretVault, vault_ref
+
         USER_CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
+
+        vault = SecretVault()
+        present = set(vault.list_keys()) if vault.can_open() else set()
+
+        secrets_out: dict[str, Any] = {"ollama_base_url": self.secrets.ollama_base_url}
+        for field, vname in (
+            ("openrouter_api_key", "openrouter_api_key"),
+            ("openai_api_key", "openai_api_key"),
+            ("anthropic_api_key", "anthropic_api_key"),
+            ("google_api_key", "google_api_key"),
+        ):
+            if vname in present:
+                secrets_out[field] = vault_ref(vname)
+
+        bots_out: dict[str, Any] = {
+            "discord_guild_ids": self.bots.discord_guild_ids,
+            "discord_channel_ids": self.bots.discord_channel_ids,
+            "telegram_chat_ids": self.bots.telegram_chat_ids,
+        }
+        if "discord_bot_token" in present:
+            bots_out["discord_token"] = vault_ref("discord_bot_token")
+        if "telegram_bot_token" in present:
+            bots_out["telegram_token"] = vault_ref("telegram_bot_token")
+
         data: dict[str, Any] = {
             "setup_complete": self.setup_complete,
             "realtime_only": self.realtime_only,
@@ -247,22 +284,12 @@ class WTHConfig:
                 }
                 for role, p in self.providers.items()
             },
-            "secrets": {
-                "openrouter_api_key": self.secrets.openrouter_api_key,
-                "openai_api_key": self.secrets.openai_api_key,
-                "anthropic_api_key": self.secrets.anthropic_api_key,
-                "google_api_key": self.secrets.google_api_key,
-                "ollama_base_url": self.secrets.ollama_base_url,
-            },
-            "bots": {
-                "discord_token": self.bots.discord_token,
-                "discord_guild_ids": self.bots.discord_guild_ids,
-                "discord_channel_ids": self.bots.discord_channel_ids,
-                "telegram_token": self.bots.telegram_token,
-                "telegram_chat_ids": self.bots.telegram_chat_ids,
-            },
+            "secrets": secrets_out,
+            "bots": bots_out,
         }
         USER_CONFIG_PATH.write_text(yaml.safe_dump(data, default_flow_style=False), encoding="utf-8")
+        from wth_ai.workspace import secure_file
+        secure_file(USER_CONFIG_PATH)
         return USER_CONFIG_PATH
 
     def write_env_file(self) -> Path:
@@ -287,6 +314,39 @@ class WTHConfig:
                 k, v = line.split("=", 1)
                 os.environ[k] = v
         return USER_ENV_PATH
+
+
+def _make_secret_resolver() -> Any:
+    """Return a resolver that turns ``vault:<name>`` refs / env vars into values.
+
+    The vault is opened lazily and never created here: resolving against a
+    missing vault simply returns the env fallback.
+    """
+    from wth_ai.vault import SecretVault, is_vault_ref
+
+    vault = SecretVault()
+
+    def resolve(raw_value: Any, env_key: str) -> str | None:
+        if is_vault_ref(raw_value):
+            return vault.resolve(raw_value) or os.environ.get(env_key)
+        return raw_value or os.environ.get(env_key)
+
+    return resolve
+
+
+def _inject_secret_env(secrets: SecretsConfig, bots: BotConfig) -> None:
+    """Expose resolved secrets to in-process env for subprocesses (no disk write)."""
+    mapping = {
+        "OPENROUTER_API_KEY": secrets.openrouter_api_key,
+        "OPENAI_API_KEY": secrets.openai_api_key,
+        "ANTHROPIC_API_KEY": secrets.anthropic_api_key,
+        "GOOGLE_API_KEY": secrets.google_api_key,
+        "TELEGRAM_BOT_TOKEN": bots.telegram_token,
+        "DISCORD_BOT_TOKEN": bots.discord_token,
+    }
+    for env_key, value in mapping.items():
+        if value and not os.environ.get(env_key):
+            os.environ[env_key] = value
 
 
 def _deep_merge(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]:
