@@ -13,6 +13,7 @@ from wth_ai.llm.providers.base import BaseLLMProvider
 
 class OllamaProvider(BaseLLMProvider):
     provider_type = "ollama"
+    tool_calling = True
 
     def __init__(
         self,

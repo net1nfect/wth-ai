@@ -377,6 +377,7 @@ def test_setup_wizard_writes_user_config():
         cfg_path = Path(tmp) / "user.yaml"
         old = cfg_mod.USER_CONFIG_PATH
         cfg_mod.USER_CONFIG_PATH = cfg_path
+        os.environ["WTH_HOME"] = tmp
         try:
             run_setup_wizard(non_interactive={
                 "provider_type": "openrouter",
@@ -388,8 +389,12 @@ def test_setup_wizard_writes_user_config():
             text = cfg_path.read_text()
             assert "setup_complete: true" in text
             assert "test/model" in text
+            # Secret must be stored as a vault reference, never plaintext.
+            assert "sk-test" not in text
+            assert "vault:openrouter_api_key" in text
         finally:
             cfg_mod.USER_CONFIG_PATH = old
+            os.environ.pop("WTH_HOME", None)
 
 
 def test_realtime_blocks_offline_plan():

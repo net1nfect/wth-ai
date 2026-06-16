@@ -14,11 +14,19 @@ DEFAULT_BASE_URLS = {
     "openai": "https://api.openai.com/v1",
     "anthropic": "https://api.anthropic.com/v1",
     "google": "https://generativelanguage.googleapis.com/v1beta/openai",
+    "groq": "https://api.groq.com/openai/v1",
 }
 
 
 class OpenAICompatProvider(BaseLLMProvider):
+    """OpenAI-compatible HTTP provider.
+
+    Serves OpenAI, Anthropic (proxy), Google Gemini (OpenAI-compat endpoint),
+    Groq, and any ``custom`` endpoint that speaks the OpenAI chat API.
+    """
+
     provider_type = "openai_compat"
+    tool_calling = True
 
     def __init__(
         self,
@@ -36,6 +44,10 @@ class OpenAICompatProvider(BaseLLMProvider):
         self.temperature = temperature
         self.max_tokens = max_tokens
         self.default_timeout = default_timeout
+
+    @property
+    def name(self) -> str:
+        return self.provider_name
 
     def available(self) -> bool:
         return bool(self.api_key)
@@ -60,6 +72,7 @@ class OpenAICompatProvider(BaseLLMProvider):
                 "openai": ["gpt-4o", "gpt-4o-mini", "o1-mini"],
                 "anthropic": ["claude-3-5-sonnet-20241022", "claude-3-haiku-20240307"],
                 "google": ["gemini-1.5-pro", "gemini-1.5-flash"],
+                "groq": ["llama-3.3-70b-versatile", "llama-3.1-8b-instant"],
             }
             return fallbacks.get(self.provider_name, [])
 
