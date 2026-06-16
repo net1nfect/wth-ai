@@ -38,3 +38,14 @@ Standard commands (see `README.md`, `pyproject.toml`, `.github/workflows/ci.yml`
   definitions change, regenerate it with `python3 wth_ai/tools/generate_manifest.py`.
 - `requirements.txt` does not list `pydantic`/`pyyaml` (pulled in by `pip install -e .`) nor `pytest`
   (installed separately for the test run).
+
+### Testing preference (CLI/library-first)
+This project is a CLI/library, not a GUI. Prefer terminal/CLI-based testing: `python3 -m pytest`
+for automated coverage, plus manual CLI runs (`python3 wth-main.py ...`) for end-to-end checks.
+Do not use GUI/computer-use testing here. Evidence = pytest output + terminal logs. Tests and
+fixtures must never contain real secrets (use temp `WTH_HOME` + the vault, e.g. `tests/test_vault.py`).
+
+### Secrets & vault (Fase 1)
+Secrets live encrypted in `~/.wth-ai/vault.enc`; config stores only `vault:<name>` references.
+At runtime `WTHConfig.load()` resolves refs and injects them into the in-process env. Never write
+plaintext secrets to config/.env/logs. Manage via `wth vault set|get|list|delete|migrate`.

@@ -30,6 +30,7 @@ ENV_TO_VAULT: dict[str, str] = {
     "ANTHROPIC_API_KEY": "anthropic_api_key",
     "GOOGLE_API_KEY": "google_api_key",
     "GROQ_API_KEY": "groq_api_key",
+    "CUSTOM_API_KEY": "custom_api_key",
     "TELEGRAM_BOT_TOKEN": "telegram_bot_token",
     "DISCORD_BOT_TOKEN": "discord_bot_token",
 }
@@ -176,6 +177,7 @@ _SECRET_FIELDS: tuple[tuple[str, str], ...] = (
     ("anthropic_api_key", "anthropic_api_key"),
     ("google_api_key", "google_api_key"),
     ("groq_api_key", "groq_api_key"),
+    ("custom_api_key", "custom_api_key"),
 )
 _BOT_FIELDS: tuple[tuple[str, str], ...] = (
     ("telegram_token", "telegram_bot_token"),

@@ -97,6 +97,38 @@ class ToolDoctor:
           issues.append(f"{p} mode {oct(mode)} (expected 600)")
     return {"safe": not issues, "issues": issues}
 
+  def check_roles(self) -> dict[str, Any]:
+    from wth_ai.config import ROLE_NAMES
+    from wth_ai.llm.router import LLMProviderRouter
+    router = LLMProviderRouter(self.config)
+    mapping: dict[str, str] = {}
+    missing: list[str] = []
+    for role in ROLE_NAMES:
+      rc = router.role_config(role)
+      mapping[role] = f"{rc.type}/{rc.model}"
+      if not rc.model:
+        missing.append(role)
+    return {
+      "complete": not missing,
+      "missing": missing,
+      "fallback_present": bool(router.role_config("fallback").model),
+      "mapping": mapping,
+    }
+
+  def check_provider_secrets(self) -> dict[str, Any]:
+    from wth_ai.config import ROLE_NAMES
+    from wth_ai.llm.router import LLMProviderRouter
+    router = LLMProviderRouter(self.config)
+    used = {router.role_config(r).type for r in ROLE_NAMES}
+    missing = [p for p in sorted(used) if p != "ollama" and not router.provider_key(p)]
+    return {"providers_used": sorted(used), "missing_keys": missing, "ok": not missing}
+
+  def check_active_profile(self) -> dict[str, Any]:
+    from wth_ai.profiles import active_profile, list_profiles
+    active = active_profile()
+    valid = active is None or active in list_profiles()
+    return {"active": active, "valid": valid}
+
   def check_tools(self, category: str | None = None) -> dict[str, Any]:
     summary = self.registry.summary()
     missing = self.registry.missing_tools()
@@ -114,12 +146,17 @@ class ToolDoctor:
     vault = self.check_vault()
     refs = self.check_referenced_secrets()
     perms = self.check_permissions()
+    roles = self.check_roles()
+    prov = self.check_provider_secrets()
+    prof = self.check_active_profile()
     ok = (
       ws["complete"]
       and cfg["valid"]
       and vault["can_open"]
       and not refs["missing"]
       and perms["safe"]
+      and roles["complete"]
+      and prof["valid"]
     )
     return {
       "ok": ok,
@@ -128,6 +165,9 @@ class ToolDoctor:
       "vault": vault,
       "referenced_secrets": refs,
       "permissions": perms,
+      "roles": roles,
+      "provider_secrets": prov,
+      "profile": prof,
     }
 
   def full_report(self) -> str:
@@ -137,6 +177,7 @@ class ToolDoctor:
     ws, cfg, vault, refs, perms = (
       wv["workspace"], wv["config"], wv["vault"], wv["referenced_secrets"], wv["permissions"],
     )
+    roles, prov, prof = wv["roles"], wv["provider_secrets"], wv["profile"]
     lines = [
       "# WTH Doctor",
       "",
@@ -160,6 +201,19 @@ class ToolDoctor:
       + f"({vault['secret_count']} secrets)",
       f"- Referenced secrets: {'all present' if not refs['missing'] else 'MISSING ' + ', '.join(refs['missing'])}",
       f"- Permissions: {'safe' if perms['safe'] else 'UNSAFE — ' + '; '.join(perms['issues'])}",
+      "",
+      "## Providers & Roles",
+      f"- Role models: {'all set' if roles['complete'] else 'MISSING ' + ', '.join(roles['missing'])}",
+      f"- Fallback model: {'present' if roles['fallback_present'] else 'MISSING'}",
+      f"- Provider keys: {'all present' if prov['ok'] else 'MISSING ' + ', '.join(prov['missing_keys'])}"
+      + f" (used: {', '.join(prov['providers_used'])})",
+      f"- Active profile: {prof['active'] or 'none'}"
+      + ("" if prof["valid"] else " (INVALID)"),
+      "",
+    ]
+    for role, m in roles["mapping"].items():
+      lines.append(f"  - {role}: {m}")
+    lines += [
       "",
       f"## Tools: {ts['installed']}/{ts['total']} installed ({ts['missing']} missing)",
       "",
