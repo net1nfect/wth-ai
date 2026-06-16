@@ -11,6 +11,9 @@ from discord import app_commands
 from wth_ai.bots.auth import discord_allowed
 from wth_ai.bots.base import BotSessionManager
 from wth_ai.config import WTHConfig
+from wth_ai.integrations.base import resolve_discord_role
+from wth_ai.integrations.commands import BotCommandService
+from wth_ai.vault import SecretVault
 
 DISCORD_MAX = 1900
 
@@ -29,11 +32,62 @@ class WTHDiscordBot:
     def __init__(self, config: WTHConfig) -> None:
         self.config = config
         self.sessions = BotSessionManager(config)
+        self.commands = BotCommandService(config)
         intents = discord.Intents.default()
         intents.message_content = True
         self.client = discord.Client(intents=intents)
         self.tree = app_commands.CommandTree(self.client)
         self._register_handlers()
+        self._register_wth_group()
+
+    def _channel_allowed(self, *, guild_id: int | None, channel_id: int | None) -> bool:
+        dc = self.config.integrations.discord
+        if dc.enabled and dc.allowed_channel_ids:
+            if channel_id is not None and str(channel_id) not in dc.allowed_channel_ids:
+                return False
+            if dc.guild_id and guild_id is not None and str(guild_id) != dc.guild_id:
+                return False
+            return True
+        return discord_allowed(self.config.bots, guild_id=guild_id, channel_id=channel_id)
+
+    def _member_role(self, interaction: "discord.Interaction") -> str:
+        names = [r.name for r in getattr(getattr(interaction, "user", None), "roles", [])]
+        return resolve_discord_role(names, self.config.integrations.discord.role_permissions)
+
+    def _register_wth_group(self) -> None:
+        group = app_commands.Group(name="wth", description="WTH-AI integration commands")
+
+        async def run(interaction: "discord.Interaction", name: str, arg: str | None = None) -> None:
+            if not self._channel_allowed(guild_id=interaction.guild_id, channel_id=interaction.channel_id):
+                await interaction.response.send_message("Channel/guild tidak diizinkan.", ephemeral=True)
+                return
+            role = self._member_role(interaction)
+            args = [arg] if arg else []
+            text = self.commands.handle(name, args, role=role, enforce_role=True)
+            await interaction.response.send_message(text[:DISCORD_MAX])
+
+        for cmd in ("status", "jobs", "settings", "help"):
+            group.command(name=cmd, description=f"WTH {cmd}")(
+                lambda interaction, n=cmd: run(interaction, n)
+            )
+
+        @group.command(name="approve", description="Approve a pending request")
+        async def _approve(interaction: "discord.Interaction", approval_id: str) -> None:
+            await run(interaction, "approve", approval_id)
+
+        @group.command(name="deny", description="Deny a pending request")
+        async def _deny(interaction: "discord.Interaction", approval_id: str) -> None:
+            await run(interaction, "deny", approval_id)
+
+        @group.command(name="stop", description="Stop a job")
+        async def _stop(interaction: "discord.Interaction", job_id: str) -> None:
+            await run(interaction, "stop", job_id)
+
+        @group.command(name="report", description="Locate a job report")
+        async def _report(interaction: "discord.Interaction", job_id: str) -> None:
+            await run(interaction, "report", job_id)
+
+        self.tree.add_command(group)
 
     def _register_handlers(self) -> None:
         @self.client.event
@@ -110,7 +164,8 @@ class WTHDiscordBot:
             await interaction.followup.send(file=discord.File(buf, filename="wth-output.txt"))
 
     def run(self) -> None:
-        token = self.config.bots.discord_token
+        ref = self.config.integrations.discord.bot_token_ref
+        token = (SecretVault().resolve(ref) if ref else None) or self.config.bots.discord_token
         if not token:
             raise RuntimeError("Discord bot token tidak dikonfigurasi. Jalankan `wth-ai setup`.")
         self.client.run(token)

@@ -129,6 +129,62 @@ class ToolDoctor:
     valid = active is None or active in list_profiles()
     return {"active": active, "valid": valid}
 
+  def check_event_bus(self) -> dict[str, Any]:
+    try:
+      from wth_ai.events import EVENT_TYPES, EventBus
+      EventBus()  # constructible
+      return {"available": True, "event_types": len(EVENT_TYPES)}
+    except Exception as exc:  # noqa: BLE001
+      return {"available": False, "event_types": 0, "error": str(exc)}
+
+  def check_integrations(self) -> dict[str, Any]:
+    from wth_ai.vault import SecretVault, is_vault_ref, ref_name
+    ig = self.config.integrations
+    vault = SecretVault()
+    issues: list[str] = []
+    enabled: list[str] = []
+
+    def _check_token(platform: str, ref: str | None) -> None:
+      if not ref:
+        issues.append(f"{platform}: enabled but no bot_token_ref")
+      elif is_vault_ref(ref) and not vault.has(ref_name(ref)):
+        issues.append(f"{platform}: token ref '{ref}' missing in vault")
+
+    if ig.telegram.enabled:
+      enabled.append("telegram")
+      _check_token("telegram", ig.telegram.bot_token_ref)
+      if not ig.telegram.allowed_chat_ids:
+        issues.append("telegram: no allowed_chat_ids")
+      if not all(str(c).lstrip("-").isdigit() for c in ig.telegram.allowed_chat_ids):
+        issues.append("telegram: allowed_chat_ids must be numeric")
+    if ig.discord.enabled:
+      enabled.append("discord")
+      _check_token("discord", ig.discord.bot_token_ref)
+      if not ig.discord.allowed_channel_ids:
+        issues.append("discord: no allowed_channel_ids")
+      if not isinstance(ig.discord.role_permissions, dict):
+        issues.append("discord: role_permissions must be a mapping")
+    if ig.webhook.enabled:
+      enabled.append("webhook")
+      if not ig.webhook.url:
+        issues.append("webhook: enabled but no url")
+
+    for name, cfg in (("telegram", ig.telegram), ("discord", ig.discord), ("webhook", ig.webhook)):
+      if not isinstance(cfg.notify, dict):
+        issues.append(f"{name}: notify rules must be a mapping")
+
+    return {"ok": not issues, "enabled": enabled, "issues": issues}
+
+  def check_approval_registry(self) -> dict[str, Any]:
+    try:
+      from wth_ai.approvals import ApprovalRegistry
+      reg = ApprovalRegistry()
+      pending = len(reg.list_pending())
+      writable = reg.path.parent.exists() or True  # parent created lazily on write
+      return {"ok": True, "pending": pending, "writable": writable, "path": str(reg.path)}
+    except Exception as exc:  # noqa: BLE001
+      return {"ok": False, "pending": 0, "error": str(exc)}
+
   def check_tools(self, category: str | None = None) -> dict[str, Any]:
     summary = self.registry.summary()
     missing = self.registry.missing_tools()
@@ -149,6 +205,9 @@ class ToolDoctor:
     roles = self.check_roles()
     prov = self.check_provider_secrets()
     prof = self.check_active_profile()
+    bus = self.check_event_bus()
+    integ = self.check_integrations()
+    appr = self.check_approval_registry()
     ok = (
       ws["complete"]
       and cfg["valid"]
@@ -157,6 +216,9 @@ class ToolDoctor:
       and perms["safe"]
       and roles["complete"]
       and prof["valid"]
+      and bus["available"]
+      and integ["ok"]
+      and appr["ok"]
     )
     return {
       "ok": ok,
@@ -168,6 +230,9 @@ class ToolDoctor:
       "roles": roles,
       "provider_secrets": prov,
       "profile": prof,
+      "event_bus": bus,
+      "integrations": integ,
+      "approvals": appr,
     }
 
   def full_report(self) -> str:
@@ -178,6 +243,7 @@ class ToolDoctor:
       wv["workspace"], wv["config"], wv["vault"], wv["referenced_secrets"], wv["permissions"],
     )
     roles, prov, prof = wv["roles"], wv["provider_secrets"], wv["profile"]
+    bus, integ, appr = wv["event_bus"], wv["integrations"], wv["approvals"]
     lines = [
       "# WTH Doctor",
       "",
@@ -214,6 +280,12 @@ class ToolDoctor:
     for role, m in roles["mapping"].items():
       lines.append(f"  - {role}: {m}")
     lines += [
+      "",
+      "## Integrations & Events",
+      f"- Event bus: {'available' if bus['available'] else 'UNAVAILABLE'} ({bus['event_types']} event types)",
+      f"- Integrations enabled: {', '.join(integ['enabled']) or 'none'}",
+      f"- Integration config: {'valid' if integ['ok'] else 'ISSUES — ' + '; '.join(integ['issues'])}",
+      f"- Approval registry: {'OK' if appr['ok'] else 'ERROR'} ({appr.get('pending', 0)} pending)",
       "",
       f"## Tools: {ts['installed']}/{ts['total']} installed ({ts['missing']} missing)",
       "",
