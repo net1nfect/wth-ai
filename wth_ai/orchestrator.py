@@ -19,6 +19,7 @@ from wth_ai.findings_db import FindingsDB
 from wth_ai.brain.chain_planner import ChainPlanner
 from wth_ai.brain.hypothesis_engine import HypothesisEngine
 from wth_ai.cognition import CognitiveEngine
+from wth_ai.planning import TestPlanner
 from wth_ai.evidence.vault import EvidenceVault
 from wth_ai.graph.asset_graph import AssetGraph
 from wth_ai.models import (
@@ -89,6 +90,7 @@ class WTHOrchestrator:
         self.hypothesis_engine = HypothesisEngine()
         self.chain_planner = ChainPlanner()
         self.cognition = CognitiveEngine()
+        self.test_planner = TestPlanner()
         self.evidence_vault = EvidenceVault(self.state.session_id)
         if not fresh:
             self._try_load_latest()
@@ -219,6 +221,8 @@ class WTHOrchestrator:
             return self.asset_graph.format_summary()
         if cmd == "/reason":
             return self._run_reason(args)
+        if cmd == "/testplan":
+            return self._run_testplan(args)
         if cmd in {"/plan", "/static", "/dynamic", "/patch", "/retest"}:
             return self._assess_loop(user_input)
         if cmd == "/execute":
@@ -404,7 +408,44 @@ class WTHOrchestrator:
         self._persist()
         out = report.format_cli()
         if report.items:
-            out += "\n\n*Lanjut: `/plan` untuk refine via LLM, atau `/execute` setelah `/plan`.*"
+            out += "\n\n*Lanjut: `/testplan` untuk antrian test ber-modul, atau `/plan` untuk refine via LLM.*"
+        return out
+
+    def _run_testplan(self, args: list[str]) -> str:
+        """Build a module-bound, gated, budgeted non-destructive test queue."""
+        tech_profile = self._current_tech_profile()
+        tech_stack = (self.state.metadata.get("attack_surface_obj") or {}).get("tech_stack", {})
+        pre_hypotheses = self.hypothesis_engine.generate(self.asset_graph, tech_stack)
+        report = self.cognition.deliberate(
+            pre_hypotheses, tech_profile=tech_profile, learning=self.learning,
+        )
+
+        budget = None
+        for a in args:
+            if a.startswith("--budget="):
+                try:
+                    budget = int(a.split("=", 1)[1])
+                except ValueError:
+                    budget = None
+
+        plan = self.test_planner.build_plan(
+            report,
+            scope=self.state.scope,
+            permission_mode=self.permission_mgr.mode,
+            request_budget=budget,
+        )
+        self.state.metadata["test_plan"] = plan.to_summary_dict()
+        tasks = plan.to_executor_tasks()
+        if tasks:
+            self.state.task_queue = [self._task_to_dict(t) for t in tasks]
+            schemas = {t.id: t.evidence_schema for t in tasks if t.evidence_schema}
+            if schemas:
+                self.state.metadata["task_evidence_schemas"] = schemas
+        self._persist()
+
+        out = plan.format_cli()
+        if plan.executable():
+            out += f"\n\n**{len(plan.executable())} task ter-antri** → `/execute --all` (butuh tools + permission sesuai)."
         return out
 
     def _run_recon(self, args: list[str]) -> str:

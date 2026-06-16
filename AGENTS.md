@@ -36,6 +36,14 @@ A deterministic, offline reasoning brain that ranks what to test first across re
 - `engine.py` — `CognitiveEngine` facade used by the orchestrator.
 - Exposed via the `/reason` slash command (`/reason` ranked plan, `/reason --targets` recon focus); also auto-ranks hypotheses inside `/plan`. All offline-testable (`tests/test_cognition.py`).
 
+### Test planning layer (`wth_ai/planning/`)
+
+Bridges cognition (ranked hypotheses) to the executor with a module-bound, gated, budgeted, non-destructive test queue (executor flowchart modules 3–12). Planning only — never sends requests or escalates permissions.
+
+- `modules.py` — vulnerability module taxonomy (authentication, access_control, injection, client_side, csrf_cors, file_upload, api, business_logic, configuration, cloud); each with non-destructive test families, min permission, evidence schema, preconditions.
+- `test_planner.py` — `TestPlanner.build_plan(report, scope, permission_mode, request_budget)` → `TestPlan`: orders by cognition rank, gates by permission level + scope preconditions (IDOR needs 2 accounts; auth/upload need a test account) + request budget; emits `ExecutorTask`s.
+- Exposed via `/testplan` (`/testplan --budget=N`); it also fills `state.task_queue` so `/execute` can pick up planned tasks. Offline-testable (`tests/test_planning.py`).
+
 ### Gotchas
 
 - `AgentTerminalBridge.http_probe` enforces permission before scope: a `planner` actor needs `read_only`, an `executor` actor needs `standard` or higher. With an insufficient mode the probe returns `blocked=True`/`exit_code=127` (`status_code=0`) instead of performing the request — this is expected, not a network failure.
