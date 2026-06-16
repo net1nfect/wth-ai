@@ -1,0 +1,1964 @@
+version: 3.0.0
+tool_count: 215
+tools:
+  subfinder:
+    binary: subfinder
+    category: recon.subdomain
+    phases:
+    - 1
+    permission: read_only
+    install:
+      go: go install -v github.com/projectdiscovery/subfinder/v2/cmd/subfinder@latest
+      apt: apt-get install -y subfinder
+      brew: brew install subfinder
+    verify: subfinder --version
+  assetfinder:
+    binary: assetfinder
+    category: recon.subdomain
+    phases:
+    - 1
+    permission: read_only
+    install:
+      go: go install github.com/tomnomnom/assetfinder@latest
+    verify: assetfinder --version
+  amass:
+    binary: amass
+    category: recon.subdomain
+    phases:
+    - 1
+    permission: read_only
+    install:
+      go: go install -v github.com/owasp-amass/amass/v4/...@master
+      apt: apt-get install -y amass
+      brew: brew install amass
+    verify: amass --version
+  findomain:
+    binary: findomain
+    category: recon.subdomain
+    phases:
+    - 1
+    permission: read_only
+    install:
+      apt: apt-get install -y findomain
+      brew: brew install findomain
+    verify: findomain --version
+  chaos-client:
+    binary: chaos
+    category: recon.subdomain
+    phases:
+    - 1
+    permission: read_only
+    install:
+      go: go install -v github.com/projectdiscovery/chaos-client/cmd/chaos@latest
+    verify: chaos --version
+  github-subdomains:
+    binary: github-subdomains
+    category: recon.subdomain
+    phases:
+    - 1
+    permission: read_only
+    install:
+      go: go install github.com/gwen001/github-subdomains@latest
+    verify: github-subdomains --version
+  shosubgo:
+    binary: shosubgo
+    category: recon.subdomain
+    phases:
+    - 1
+    permission: read_only
+    install:
+      go: go install github.com/incogbyte/shosubgo@latest
+    verify: shosubgo --version
+  dnsgen:
+    binary: dnsgen
+    category: recon.subdomain
+    phases:
+    - 1
+    permission: read_only
+    install:
+      pip: pip install dnsgen
+    verify: dnsgen --version
+  altdns:
+    binary: altdns
+    category: recon.subdomain
+    phases:
+    - 1
+    permission: read_only
+    install:
+      pip: pip install py-altdns
+    verify: altdns --version
+  sublist3r:
+    binary: sublist3r
+    category: recon.subdomain
+    phases:
+    - 1
+    permission: read_only
+    install:
+      pip: pip install sublist3r
+      apt: apt-get install -y sublist3r
+    verify: sublist3r --version
+  knockpy:
+    binary: knockpy
+    category: recon.subdomain
+    phases:
+    - 1
+    permission: read_only
+    install:
+      pip: pip install knockpy
+    verify: knockpy --version
+  subjack:
+    binary: subjack
+    category: recon.subdomain
+    phases:
+    - 1
+    permission: read_only
+    install:
+      go: go install github.com/haccer/subjack@latest
+    verify: subjack --version
+  dnsrecon:
+    binary: dnsrecon
+    category: recon.subdomain
+    phases:
+    - 1
+    permission: read_only
+    install:
+      apt: apt-get install -y dnsrecon
+    verify: dnsrecon --version
+  fierce:
+    binary: fierce
+    category: recon.subdomain
+    phases:
+    - 1
+    permission: read_only
+    install:
+      apt: apt-get install -y fierce
+    verify: fierce --version
+  massdns:
+    binary: massdns
+    category: recon.subdomain
+    phases:
+    - 1
+    permission: read_only
+    install:
+      apt: apt-get install -y massdns
+    verify: massdns --version
+  puredns:
+    binary: puredns
+    category: recon.subdomain
+    phases:
+    - 1
+    permission: read_only
+    install:
+      go: go install github.com/d3mondev/puredns/v2@latest
+    verify: puredns --version
+  shuffledns:
+    binary: shuffledns
+    category: recon.subdomain
+    phases:
+    - 1
+    permission: read_only
+    install:
+      go: go install -v github.com/projectdiscovery/shuffledns/cmd/shuffledns@latest
+    verify: shuffledns --version
+  dnsvalidator:
+    binary: dnsvalidator
+    category: recon.subdomain
+    phases:
+    - 1
+    permission: read_only
+    install:
+      go: go install github.com/vortexau/dnsvalidator@latest
+    verify: dnsvalidator --version
+  mapcidr:
+    binary: mapcidr
+    category: recon.subdomain
+    phases:
+    - 1
+    permission: read_only
+    install:
+      go: go install -v github.com/projectdiscovery/mapcidr/cmd/mapcidr@latest
+    verify: mapcidr --version
+  asnmap:
+    binary: asnmap
+    category: recon.subdomain
+    phases:
+    - 1
+    permission: read_only
+    install:
+      go: go install -v github.com/projectdiscovery/asnmap/cmd/asnmap@latest
+    verify: asnmap --version
+  uncover:
+    binary: uncover
+    category: recon.subdomain
+    phases:
+    - 1
+    permission: read_only
+    install:
+      go: go install -v github.com/projectdiscovery/uncover/cmd/uncover@latest
+    verify: uncover --version
+  tlsx:
+    binary: tlsx
+    category: recon.subdomain
+    phases:
+    - 1
+    permission: read_only
+    install:
+      go: go install github.com/projectdiscovery/tlsx/cmd/tlsx@latest
+    verify: tlsx --version
+  ctfr:
+    binary: ctfr
+    category: recon.subdomain
+    phases:
+    - 1
+    permission: read_only
+    install:
+      pip: pip install ctfr
+    verify: ctfr --version
+  subover:
+    binary: subover
+    category: recon.subdomain
+    phases:
+    - 1
+    permission: read_only
+    install:
+      go: go install github.com/Ice3man543/SubOver@latest
+    verify: subover --version
+  subzy:
+    binary: subzy
+    category: recon.subdomain
+    phases:
+    - 1
+    permission: read_only
+    install:
+      go: go install github.com/PentestPad/subzy@latest
+    verify: subzy --version
+  dnsx:
+    binary: dnsx
+    category: recon.dns
+    phases:
+    - 2
+    permission: read_only
+    install:
+      go: go install -v github.com/projectdiscovery/dnsx/cmd/dnsx@latest
+    verify: dnsx --version
+  dig:
+    binary: dig
+    category: recon.dns
+    phases:
+    - 2
+    permission: read_only
+    install:
+      apt: apt-get install -y dnsutils
+      brew: brew install bind
+    verify: dig --version
+  host:
+    binary: host
+    category: recon.dns
+    phases:
+    - 2
+    permission: read_only
+    install:
+      apt: apt-get install -y dnsutils
+      brew: brew install bind
+    verify: host --version
+  nslookup:
+    binary: nslookup
+    category: recon.dns
+    phases:
+    - 2
+    permission: read_only
+    install:
+      apt: apt-get install -y dnsutils
+      brew: brew install bind
+    verify: nslookup --version
+  dog:
+    binary: dog
+    category: recon.dns
+    phases:
+    - 2
+    permission: read_only
+    install:
+      apt: apt-get install -y dog
+      brew: brew install dog
+    verify: dog --version
+  mDNSRecon:
+    binary: mdnsrecon
+    category: recon.dns
+    phases:
+    - 2
+    permission: read_only
+    install: {}
+    verify: mdnsrecon --version
+  dnsenum:
+    binary: dnsenum
+    category: recon.dns
+    phases:
+    - 2
+    permission: read_only
+    install:
+      apt: apt-get install -y dnsenum
+    verify: dnsenum --version
+  dnstracer:
+    binary: dnstracer
+    category: recon.dns
+    phases:
+    - 2
+    permission: read_only
+    install:
+      apt: apt-get install -y dnstracer
+    verify: dnstracer --version
+  dnsgrep:
+    binary: dnsgrep
+    category: recon.dns
+    phases:
+    - 2
+    permission: read_only
+    install:
+      go: go install github.com/erbbysam/dnsgrep@latest
+    verify: dnsgrep --version
+  dnsx-altdns:
+    binary: altdns
+    category: recon.dns
+    phases:
+    - 2
+    permission: read_only
+    install: {}
+    verify: altdns --version
+  revdns:
+    binary: revdns
+    category: recon.dns
+    phases:
+    - 2
+    permission: read_only
+    install: {}
+    verify: revdns --version
+  zdns:
+    binary: zdns
+    category: recon.dns
+    phases:
+    - 2
+    permission: read_only
+    install:
+      go: go install github.com/zmap/zdns@latest
+    verify: zdns --version
+  resolvers:
+    binary: resolvers
+    category: recon.dns
+    phases:
+    - 2
+    permission: read_only
+    install: {}
+    verify: resolvers --version
+  dnsprobe:
+    binary: dnsprobe
+    category: recon.dns
+    phases:
+    - 2
+    permission: read_only
+    install:
+      go: go install github.com/projectdiscovery/dnsprobe@latest
+    verify: dnsprobe --version
+  dnscewl:
+    binary: dnscewl
+    category: recon.dns
+    phases:
+    - 2
+    permission: read_only
+    install: {}
+    verify: dnscewl --version
+  httpx:
+    binary: httpx
+    category: recon.http_probe
+    phases:
+    - 3
+    permission: read_only
+    install:
+      go: go install -v github.com/projectdiscovery/httpx/cmd/httpx@latest
+    verify: httpx --version
+  httprobe:
+    binary: httprobe
+    category: recon.http_probe
+    phases:
+    - 3
+    permission: read_only
+    install:
+      go: go install github.com/tomnomnom/httprobe@latest
+    verify: httprobe --version
+  aquatone:
+    binary: aquatone
+    category: recon.http_probe
+    phases:
+    - 3
+    permission: read_only
+    install:
+      brew: brew install aquatone
+    verify: aquatone --version
+  whatweb:
+    binary: whatweb
+    category: recon.http_probe
+    phases:
+    - 3
+    permission: read_only
+    install:
+      apt: apt-get install -y whatweb
+    verify: whatweb --version
+  wafw00f:
+    binary: wafw00f
+    category: recon.http_probe
+    phases:
+    - 3
+    permission: read_only
+    install:
+      pip: pip install wafw00f
+      apt: apt-get install -y wafw00f
+    verify: wafw00f --version
+  webanalyze:
+    binary: webanalyze
+    category: recon.http_probe
+    phases:
+    - 3
+    permission: read_only
+    install:
+      go: go install -v github.com/rverton/webanalyze/cmd/webanalyze@latest
+    verify: webanalyze --version
+  gowitness:
+    binary: gowitness
+    category: recon.http_probe
+    phases:
+    - 3
+    permission: read_only
+    install:
+      go: go install github.com/sensepost/gowitness@latest
+    verify: gowitness --version
+  httpx-scan:
+    binary: httpx
+    category: recon.http_probe
+    phases:
+    - 3
+    permission: read_only
+    install: {}
+    verify: httpx --version
+  curl:
+    binary: curl
+    category: recon.http_probe
+    phases:
+    - 3
+    permission: read_only
+    install:
+      apt: apt-get install -y curl
+      brew: brew install curl
+    verify: curl --version
+  httpie:
+    binary: http
+    category: recon.http_probe
+    phases:
+    - 3
+    permission: read_only
+    install:
+      pip: pip install httpie
+      apt: apt-get install -y httpie
+      brew: brew install httpie
+    verify: http --version
+  katana:
+    binary: katana
+    category: recon.crawl
+    phases:
+    - 4
+    permission: read_only
+    install:
+      go: go install github.com/projectdiscovery/katana/cmd/katana@latest
+    verify: katana --version
+  gospider:
+    binary: gospider
+    category: recon.crawl
+    phases:
+    - 4
+    permission: read_only
+    install:
+      go: go install github.com/jaeles-project/gospider@latest
+    verify: gospider --version
+  hakrawler:
+    binary: hakrawler
+    category: recon.crawl
+    phases:
+    - 4
+    permission: read_only
+    install:
+      go: go install github.com/hakluke/hakrawler@latest
+    verify: hakrawler --version
+  waybackurls:
+    binary: waybackurls
+    category: recon.crawl
+    phases:
+    - 4
+    permission: read_only
+    install:
+      go: go install github.com/tomnomnom/waybackurls@latest
+    verify: waybackurls --version
+  gau:
+    binary: gau
+    category: recon.crawl
+    phases:
+    - 4
+    permission: read_only
+    install:
+      go: go install github.com/lc/gau/v2/cmd/gau@latest
+    verify: gau --version
+  waymore:
+    binary: waymore
+    category: recon.crawl
+    phases:
+    - 4
+    permission: read_only
+    install:
+      pip: pip install waymore
+    verify: waymore --version
+  gauplus:
+    binary: gauplus
+    category: recon.crawl
+    phases:
+    - 4
+    permission: read_only
+    install:
+      go: go install github.com/bp0lr/gauplus@latest
+    verify: gauplus --version
+  urlfinder:
+    binary: urlfinder
+    category: recon.crawl
+    phases:
+    - 4
+    permission: read_only
+    install:
+      go: go install -v github.com/projectdiscovery/urlfinder/cmd/urlfinder@latest
+    verify: urlfinder --version
+  crawley:
+    binary: crawley
+    category: recon.crawl
+    phases:
+    - 4
+    permission: read_only
+    install:
+      go: go install github.com/s0rg/crawley@latest
+    verify: crawley --version
+  photon:
+    binary: photon
+    category: recon.crawl
+    phases:
+    - 4
+    permission: read_only
+    install:
+      pip: pip install photon
+    verify: photon --version
+  dirsearch:
+    binary: dirsearch
+    category: recon.crawl
+    phases:
+    - 4
+    permission: read_only
+    install:
+      pip: pip install dirsearch
+      apt: apt-get install -y dirsearch
+    verify: dirsearch --version
+  feroxbuster:
+    binary: feroxbuster
+    category: recon.crawl
+    phases:
+    - 4
+    permission: standard
+    install:
+      apt: apt-get install -y feroxbuster
+      brew: brew install feroxbuster
+    verify: feroxbuster --version
+  hakcheckurl:
+    binary: hakcheckurl
+    category: recon.crawl
+    phases:
+    - 4
+    permission: read_only
+    install:
+      go: go install github.com/hakluke/hakcheckurl@latest
+    verify: hakcheckurl --version
+  meg:
+    binary: meg
+    category: recon.crawl
+    phases:
+    - 4
+    permission: read_only
+    install:
+      go: go install github.com/tomnomnom/meg@latest
+    verify: meg --version
+  getJS:
+    binary: getJS
+    category: recon.crawl
+    phases:
+    - 4
+    permission: read_only
+    install:
+      go: go install github.com/003random/getJS@latest
+    verify: getJS --version
+  subjs:
+    binary: subjs
+    category: recon.crawl
+    phases:
+    - 4
+    permission: read_only
+    install:
+      go: go install github.com/lc/subjs@latest
+    verify: subjs --version
+  linkfinder:
+    binary: linkfinder
+    category: recon.crawl
+    phases:
+    - 4
+    permission: read_only
+    install:
+      pip: pip install linkfinder
+    verify: linkfinder --version
+  xnlinkfinder:
+    binary: xnLinkFinder
+    category: recon.crawl
+    phases:
+    - 4
+    permission: read_only
+    install:
+      pip: pip install xnLinkFinder
+    verify: xnLinkFinder --version
+  crawlergo:
+    binary: crawlergo
+    category: recon.crawl
+    phases:
+    - 4
+    permission: read_only
+    install:
+      go: go install github.com/Qianlitp/crawlergo@latest
+    verify: crawlergo --version
+  hakrawler-depth:
+    binary: hakrawler
+    category: recon.crawl
+    phases:
+    - 4
+    permission: read_only
+    install: {}
+    verify: hakrawler --version
+  arjun:
+    binary: arjun
+    category: recon.param
+    phases:
+    - 5
+    permission: standard
+    install:
+      pip: pip install arjun
+    verify: arjun --version
+  paramspider:
+    binary: paramspider
+    category: recon.param
+    phases:
+    - 5
+    permission: read_only
+    install:
+      pip: pip install paramspider
+    verify: paramspider --version
+  x8:
+    binary: x8
+    category: recon.param
+    phases:
+    - 5
+    permission: standard
+    install: {}
+    verify: x8 --version
+  gf:
+    binary: gf
+    category: recon.param
+    phases:
+    - 5
+    permission: read_only
+    install:
+      go: go install github.com/tomnomnom/gf@latest
+    verify: gf --version
+  qsreplace:
+    binary: qsreplace
+    category: recon.param
+    phases:
+    - 5
+    permission: read_only
+    install:
+      go: go install github.com/tomnomnom/qsreplace@latest
+    verify: qsreplace --version
+  unfurl:
+    binary: unfurl
+    category: recon.param
+    phases:
+    - 5
+    permission: read_only
+    install:
+      go: go install github.com/tomnomnom/unfurl@latest
+    verify: unfurl --version
+  anew:
+    binary: anew
+    category: recon.param
+    phases:
+    - 5
+    permission: read_only
+    install:
+      go: go install github.com/tomnomnom/anew@latest
+    verify: anew --version
+  uro:
+    binary: uro
+    category: recon.param
+    phases:
+    - 5
+    permission: read_only
+    install:
+      pip: pip install uro
+    verify: uro --version
+  ppmap:
+    binary: ppmap
+    category: recon.param
+    phases:
+    - 5
+    permission: read_only
+    install:
+      go: go install github.com/j3ssie/ppmap@latest
+    verify: ppmap --version
+  kiterunner:
+    binary: kr
+    category: recon.param
+    phases:
+    - 5
+    permission: standard
+    install: {}
+    verify: kr --version
+  jaeles:
+    binary: jaeles
+    category: recon.param
+    phases:
+    - 5
+    permission: standard
+    install:
+      go: go install github.com/jaeles-project/jaeles@latest
+    verify: jaeles --version
+  ffuf:
+    binary: ffuf
+    category: recon.param
+    phases:
+    - 5
+    permission: standard
+    install:
+      go: go install github.com/ffuf/ffuf/v2@latest
+      brew: brew install ffuf
+    verify: ffuf --version
+  gobuster:
+    binary: gobuster
+    category: recon.param
+    phases:
+    - 5
+    permission: standard
+    install:
+      go: go install github.com/OJ/gobuster/v3@latest
+      apt: apt-get install -y gobuster
+      brew: brew install gobuster
+    verify: gobuster --version
+  wfuzz:
+    binary: wfuzz
+    category: recon.param
+    phases:
+    - 5
+    permission: standard
+    install:
+      apt: apt-get install -y wfuzz
+    verify: wfuzz --version
+  param-miner:
+    binary: param-miner
+    category: recon.param
+    phases:
+    - 5
+    permission: standard
+    install: {}
+    verify: param-miner --version
+  nuclei:
+    binary: nuclei
+    category: recon.vuln_scan
+    phases:
+    - 3
+    - 9
+    permission: standard
+    install:
+      go: go install -v github.com/projectdiscovery/nuclei/v3/cmd/nuclei@latest
+    verify: nuclei --version
+  nikto:
+    binary: nikto
+    category: recon.vuln_scan
+    phases:
+    - 9
+    permission: standard
+    install:
+      apt: apt-get install -y nikto
+      brew: brew install nikto
+    verify: nikto --version
+  wpscan:
+    binary: wpscan
+    category: recon.vuln_scan
+    phases:
+    - 9
+    permission: standard
+    install:
+      gem: gem install wpscan
+      apt: apt-get install -y wpscan
+    verify: wpscan --version
+  testssl:
+    binary: testssl.sh
+    category: recon.vuln_scan
+    phases:
+    - 8
+    permission: read_only
+    install:
+      apt: apt-get install -y testssl
+      brew: brew install testssl
+    verify: testssl.sh --version
+  sslscan:
+    binary: sslscan
+    category: recon.vuln_scan
+    phases:
+    - 8
+    permission: read_only
+    install:
+      apt: apt-get install -y sslscan
+      brew: brew install sslscan
+    verify: sslscan --version
+  sslyze:
+    binary: sslyze
+    category: recon.vuln_scan
+    phases:
+    - 8
+    permission: read_only
+    install:
+      pip: pip install sslyze
+    verify: sslyze --version
+  nmap:
+    binary: nmap
+    category: recon.vuln_scan
+    phases:
+    - 9
+    permission: standard
+    install:
+      apt: apt-get install -y nmap
+      brew: brew install nmap
+    verify: nmap --version
+  masscan:
+    binary: masscan
+    category: recon.vuln_scan
+    phases:
+    - 9
+    permission: full_lab
+    install:
+      apt: apt-get install -y masscan
+      brew: brew install masscan
+    verify: masscan --version
+  rustscan:
+    binary: rustscan
+    category: recon.vuln_scan
+    phases:
+    - 9
+    permission: standard
+    install:
+      apt: apt-get install -y rustscan
+    verify: rustscan --version
+  naabu:
+    binary: naabu
+    category: recon.vuln_scan
+    phases:
+    - 9
+    permission: standard
+    install:
+      go: go install -v github.com/projectdiscovery/naabu/v2/cmd/naabu@latest
+    verify: naabu --version
+  interactsh-client:
+    binary: interactsh-client
+    category: recon.vuln_scan
+    phases:
+    - 9
+    permission: standard
+    install:
+      go: go install -v github.com/projectdiscovery/interactsh/cmd/interactsh-client@latest
+    verify: interactsh-client --version
+  notify:
+    binary: notify
+    category: recon.vuln_scan
+    phases:
+    - 9
+    permission: read_only
+    install:
+      go: go install -v github.com/projectdiscovery/notify/cmd/notify@latest
+    verify: notify --version
+  cvemap:
+    binary: cvemap
+    category: recon.vuln_scan
+    phases:
+    - 9
+    permission: read_only
+    install:
+      go: go install github.com/projectdiscovery/cvemap/cmd/cvemap@latest
+    verify: cvemap --version
+  openrisk:
+    binary: openrisk
+    category: recon.vuln_scan
+    phases:
+    - 9
+    permission: read_only
+    install: {}
+    verify: openrisk --version
+  vulnx:
+    binary: vulnx
+    category: recon.vuln_scan
+    phases:
+    - 9
+    permission: read_only
+    install:
+      go: go install github.com/projectdiscovery/cvemap/cmd/cvemap@latest
+    verify: vulnx --version
+  dalfox:
+    binary: dalfox
+    category: recon.vuln_scan
+    phases:
+    - 9
+    permission: elevated
+    install:
+      go: go install github.com/hahwul/dalfox/v2@latest
+    verify: dalfox --version
+  sqlmap:
+    binary: sqlmap
+    category: recon.vuln_scan
+    phases:
+    - 9
+    permission: elevated
+    install:
+      apt: apt-get install -y sqlmap
+      brew: brew install sqlmap
+    verify: sqlmap --version
+  commix:
+    binary: commix
+    category: recon.vuln_scan
+    phases:
+    - 9
+    permission: elevated
+    install:
+      apt: apt-get install -y commix
+    verify: commix --version
+  xsstrike:
+    binary: xsstrike
+    category: recon.vuln_scan
+    phases:
+    - 9
+    permission: elevated
+    install:
+      pip: pip install xsstrike
+    verify: xsstrike --version
+  tplmap:
+    binary: tplmap
+    category: recon.vuln_scan
+    phases:
+    - 9
+    permission: elevated
+    install:
+      pip: pip install tplmap
+    verify: tplmap --version
+  nuclei-templates:
+    binary: nuclei
+    category: recon.vuln_scan
+    phases:
+    - 9
+    permission: standard
+    install:
+      script: nuclei -update-templates
+    verify: nuclei --version
+  retire:
+    binary: retire
+    category: recon.vuln_scan
+    phases:
+    - 9
+    permission: read_only
+    install:
+      npm: npm install -g retire
+    verify: retire --version
+  grype:
+    binary: grype
+    category: recon.vuln_scan
+    phases:
+    - 9
+    permission: read_only
+    install:
+      brew: brew install grype
+    verify: grype --version
+  trivy:
+    binary: trivy
+    category: recon.vuln_scan
+    phases:
+    - 9
+    permission: read_only
+    install:
+      apt: apt-get install -y trivy
+      brew: brew install trivy
+    verify: trivy --version
+  osv-scanner:
+    binary: osv-scanner
+    category: recon.vuln_scan
+    phases:
+    - 9
+    permission: read_only
+    install:
+      go: go install github.com/google/osv-scanner/cmd/osv-scanner@latest
+    verify: osv-scanner --version
+  kxss:
+    binary: kxss
+    category: recon.injection
+    phases:
+    - 9
+    permission: elevated
+    install:
+      go: go install github.com/Emoe/kxss@latest
+    verify: kxss --version
+  gxss:
+    binary: Gxss
+    category: recon.injection
+    phases:
+    - 9
+    permission: elevated
+    install:
+      go: go install github.com/KathanP19/Gxss@latest
+    verify: Gxss --version
+  crlfuzz:
+    binary: crlfuzz
+    category: recon.injection
+    phases:
+    - 9
+    permission: elevated
+    install:
+      go: go install github.com/dwisiswant0/crlfuzz/cmd/crlfuzz@latest
+    verify: crlfuzz --version
+  openredirex:
+    binary: openredirex
+    category: recon.injection
+    phases:
+    - 9
+    permission: standard
+    install:
+      pip: pip install openredirex
+    verify: openredirex --version
+  ssrfmap:
+    binary: ssrfmap
+    category: recon.injection
+    phases:
+    - 9
+    permission: elevated
+    install:
+      pip: pip install ssrfmap
+    verify: ssrfmap --version
+  ghauri:
+    binary: ghauri
+    category: recon.injection
+    phases:
+    - 9
+    permission: elevated
+    install:
+      pip: pip install ghauri
+    verify: ghauri --version
+  nosqlmap:
+    binary: nosqlmap
+    category: recon.injection
+    phases:
+    - 9
+    permission: elevated
+    install:
+      pip: pip install nosqlmap
+    verify: nosqlmap --version
+  jwt_tool:
+    binary: jwt_tool
+    category: recon.injection
+    phases:
+    - 9
+    permission: standard
+    install:
+      pip: pip install jwt-tool
+    verify: jwt_tool --version
+  jwt-hack:
+    binary: jwt-hack
+    category: recon.injection
+    phases:
+    - 9
+    permission: standard
+    install: {}
+    verify: jwt-hack --version
+  dotdotpwn:
+    binary: dotdotpwn
+    category: recon.injection
+    phases:
+    - 9
+    permission: elevated
+    install:
+      apt: apt-get install -y dotdotpwn
+    verify: dotdotpwn --version
+  lfi-suite:
+    binary: lfi-suite
+    category: recon.injection
+    phases:
+    - 9
+    permission: elevated
+    install: {}
+    verify: lfi-suite --version
+  fdns:
+    binary: fdns
+    category: recon.injection
+    phases:
+    - 9
+    permission: standard
+    install:
+      go: go install github.com/karust/fdns@latest
+    verify: fdns --version
+  corsy:
+    binary: corsy
+    category: recon.injection
+    phases:
+    - 9
+    permission: standard
+    install:
+      pip: pip install corsy
+    verify: corsy --version
+  smuggler:
+    binary: smuggler
+    category: recon.injection
+    phases:
+    - 9
+    permission: elevated
+    install:
+      pip: pip install smuggler
+    verify: smuggler --version
+  h2csmuggler:
+    binary: h2csmuggler
+    category: recon.injection
+    phases:
+    - 9
+    permission: elevated
+    install: {}
+    verify: h2csmuggler --version
+  cloud_enum:
+    binary: cloud_enum
+    category: recon.cloud
+    phases:
+    - 7
+    permission: read_only
+    install:
+      pip: pip install cloud_enum
+    verify: cloud_enum --version
+  s3scanner:
+    binary: s3scanner
+    category: recon.cloud
+    phases:
+    - 7
+    permission: read_only
+    install:
+      pip: pip install s3scanner
+    verify: s3scanner --version
+  trufflehog:
+    binary: trufflehog
+    category: recon.cloud
+    phases:
+    - 6
+    - 7
+    permission: read_only
+    install:
+      go: go install github.com/trufflesecurity/trufflehog/v3@latest
+      brew: brew install trufflehog
+    verify: trufflehog --version
+  gitleaks:
+    binary: gitleaks
+    category: recon.cloud
+    phases:
+    - 6
+    - 7
+    permission: read_only
+    install:
+      go: go install github.com/gitleaks/gitleaks/v8@latest
+      brew: brew install gitleaks
+    verify: gitleaks --version
+  git-secrets:
+    binary: git-secrets
+    category: recon.cloud
+    phases:
+    - 7
+    permission: read_only
+    install:
+      brew: brew install git-secrets
+    verify: git-secrets --version
+  cloudbrute:
+    binary: cloudbrute
+    category: recon.cloud
+    phases:
+    - 7
+    permission: read_only
+    install: {}
+    verify: cloudbrute --version
+  enumerate-iam:
+    binary: enumerate-iam
+    category: recon.cloud
+    phases:
+    - 7
+    permission: read_only
+    install:
+      pip: pip install enumerate-iam
+    verify: enumerate-iam --version
+  pacu:
+    binary: pacu
+    category: recon.cloud
+    phases:
+    - 7
+    permission: elevated
+    install:
+      pip: pip install pacu
+    verify: pacu --version
+  scout-suite:
+    binary: scout
+    category: recon.cloud
+    phases:
+    - 7
+    permission: read_only
+    install:
+      pip: pip install scoutsuite
+    verify: scout --version
+  prowler:
+    binary: prowler
+    category: recon.cloud
+    phases:
+    - 7
+    permission: read_only
+    install:
+      pip: pip install prowler
+    verify: prowler --version
+  cloudfox:
+    binary: cloudfox
+    category: recon.cloud
+    phases:
+    - 7
+    permission: read_only
+    install:
+      go: go install github.com/BishopFox/cloudfox@latest
+    verify: cloudfox --version
+  s3enum:
+    binary: s3enum
+    category: recon.cloud
+    phases:
+    - 7
+    permission: read_only
+    install:
+      go: go install github.com/koenrh/s3enum@latest
+    verify: s3enum --version
+  bucket_finder:
+    binary: bucket_finder
+    category: recon.cloud
+    phases:
+    - 7
+    permission: read_only
+    install: {}
+    verify: bucket_finder --version
+  lazys3:
+    binary: lazys3
+    category: recon.cloud
+    phases:
+    - 7
+    permission: read_only
+    install:
+      go: go install github.com/nahamsec/lazys3@latest
+    verify: lazys3 --version
+  cloudsplaining:
+    binary: cloudsplaining
+    category: recon.cloud
+    phases:
+    - 7
+    permission: read_only
+    install:
+      pip: pip install cloudsplaining
+    verify: cloudsplaining --version
+  kube-hunter:
+    binary: kube-hunter
+    category: recon.cloud
+    phases:
+    - 7
+    permission: standard
+    install:
+      pip: pip install kube-hunter
+    verify: kube-hunter --version
+  kube-bench:
+    binary: kube-bench
+    category: recon.cloud
+    phases:
+    - 7
+    permission: read_only
+    install:
+      apt: apt-get install -y kube-bench
+    verify: kube-bench --version
+  docker-bench:
+    binary: docker-bench-security
+    category: recon.cloud
+    phases:
+    - 7
+    permission: read_only
+    install: {}
+    verify: docker-bench-security --version
+  checkov:
+    binary: checkov
+    category: recon.cloud
+    phases:
+    - 7
+    permission: read_only
+    install:
+      pip: pip install checkov
+    verify: checkov --version
+  terrascan:
+    binary: terrascan
+    category: recon.cloud
+    phases:
+    - 7
+    permission: read_only
+    install:
+      brew: brew install terrascan
+    verify: terrascan --version
+  semgrep:
+    binary: semgrep
+    category: recon.static
+    phases:
+    - 6
+    - 10
+    permission: read_only
+    install:
+      pip: pip install semgrep
+      brew: brew install semgrep
+    verify: semgrep --version
+  bandit:
+    binary: bandit
+    category: recon.static
+    phases:
+    - 6
+    - 10
+    permission: read_only
+    install:
+      pip: pip install bandit
+      apt: apt-get install -y bandit
+    verify: bandit --version
+  eslint:
+    binary: eslint
+    category: recon.static
+    phases:
+    - 6
+    - 10
+    permission: read_only
+    install:
+      npm: npm install -g eslint
+    verify: eslint --version
+  npm-audit:
+    binary: npm
+    category: recon.static
+    phases:
+    - 6
+    - 10
+    permission: read_only
+    install: {}
+    verify: which npm
+  composer-audit:
+    binary: composer
+    category: recon.static
+    phases:
+    - 6
+    - 10
+    permission: read_only
+    install: {}
+    verify: which composer
+  pip-audit:
+    binary: pip-audit
+    category: recon.static
+    phases:
+    - 6
+    - 10
+    permission: read_only
+    install:
+      pip: pip install pip-audit
+    verify: pip-audit --version
+  safety:
+    binary: safety
+    category: recon.static
+    phases:
+    - 6
+    - 10
+    permission: read_only
+    install:
+      pip: pip install safety
+    verify: safety --version
+  brakeman:
+    binary: brakeman
+    category: recon.static
+    phases:
+    - 6
+    - 10
+    permission: read_only
+    install:
+      gem: gem install brakeman
+    verify: brakeman --version
+  bundler-audit:
+    binary: bundler-audit
+    category: recon.static
+    phases:
+    - 6
+    - 10
+    permission: read_only
+    install:
+      gem: gem install bundler-audit
+    verify: bundler-audit --version
+  cargo-audit:
+    binary: cargo-audit
+    category: recon.static
+    phases:
+    - 6
+    - 10
+    permission: read_only
+    install:
+      cargo: cargo install cargo-audit
+    verify: cargo-audit --version
+  govulncheck:
+    binary: govulncheck
+    category: recon.static
+    phases:
+    - 6
+    - 10
+    permission: read_only
+    install:
+      go: go install golang.org/x/vuln/cmd/govulncheck@latest
+    verify: govulncheck --version
+  secretfinder:
+    binary: secretfinder
+    category: recon.static
+    phases:
+    - 6
+    permission: read_only
+    install:
+      pip: pip install secretfinder
+    verify: secretfinder --version
+  mantra:
+    binary: mantra
+    category: recon.static
+    phases:
+    - 6
+    permission: read_only
+    install:
+      go: go install github.com/MrEmpy/mantra@latest
+    verify: mantra --version
+  linkfinder-py:
+    binary: linkfinder
+    category: recon.static
+    phases:
+    - 6
+    permission: read_only
+    install: {}
+    verify: linkfinder --version
+  jsluice:
+    binary: jsluice
+    category: recon.static
+    phases:
+    - 6
+    permission: read_only
+    install:
+      go: go install github.com/BishopFox/jsluice/cmd/jsluice@latest
+    verify: jsluice --version
+  jsparser:
+    binary: jsparser
+    category: recon.static
+    phases:
+    - 6
+    permission: read_only
+    install: {}
+    verify: jsparser --version
+  retire-js:
+    binary: retire
+    category: recon.static
+    phases:
+    - 6
+    permission: read_only
+    install: {}
+    verify: retire --version
+  phpstan:
+    binary: phpstan
+    category: recon.static
+    phases:
+    - 10
+    permission: read_only
+    install: {}
+    verify: phpstan --version
+  psalm:
+    binary: psalm
+    category: recon.static
+    phases:
+    - 10
+    permission: read_only
+    install: {}
+    verify: psalm --version
+  laravel-security-check:
+    binary: security-checker
+    category: recon.static
+    phases:
+    - 10
+    permission: read_only
+    install: {}
+    verify: security-checker --version
+  rustscan-net:
+    binary: rustscan
+    category: recon.network
+    phases:
+    - 9
+    permission: standard
+    install: {}
+    verify: rustscan --version
+  hping3:
+    binary: hping3
+    category: recon.network
+    phases:
+    - 9
+    permission: full_lab
+    install:
+      apt: apt-get install -y hping3
+    verify: hping3 --version
+  tcpdump:
+    binary: tcpdump
+    category: recon.network
+    phases:
+    - 9
+    permission: read_only
+    install:
+      apt: apt-get install -y tcpdump
+      brew: brew install tcpdump
+    verify: tcpdump --version
+  netcat:
+    binary: nc
+    category: recon.network
+    phases:
+    - 9
+    permission: full_lab
+    install:
+      apt: apt-get install -y netcat
+      brew: brew install netcat
+    verify: nc --version
+  socat:
+    binary: socat
+    category: recon.network
+    phases:
+    - 9
+    permission: full_lab
+    install:
+      apt: apt-get install -y socat
+      brew: brew install socat
+    verify: socat --version
+  nbtscan:
+    binary: nbtscan
+    category: recon.network
+    phases:
+    - 9
+    permission: standard
+    install:
+      apt: apt-get install -y nbtscan
+    verify: nbtscan --version
+  enum4linux:
+    binary: enum4linux
+    category: recon.network
+    phases:
+    - 9
+    permission: standard
+    install:
+      apt: apt-get install -y enum4linux
+    verify: enum4linux --version
+  smbclient:
+    binary: smbclient
+    category: recon.network
+    phases:
+    - 9
+    permission: standard
+    install:
+      apt: apt-get install -y smbclient
+    verify: smbclient --version
+  rpcclient:
+    binary: rpcclient
+    category: recon.network
+    phases:
+    - 9
+    permission: standard
+    install:
+      apt: apt-get install -y rpcclient
+    verify: rpcclient --version
+  responder:
+    binary: Responder
+    category: recon.network
+    phases:
+    - 9
+    permission: full_lab
+    install:
+      apt: apt-get install -y responder
+    verify: Responder --version
+  laravel-routes:
+    binary: php
+    category: recon.framework
+    phases:
+    - 10
+    permission: read_only
+    install: {}
+    verify: which php
+  artisan:
+    binary: php
+    category: recon.framework
+    phases:
+    - 10
+    permission: read_only
+    install: {}
+    verify: which php
+  wp-cli:
+    binary: wp
+    category: recon.framework
+    phases:
+    - 10
+    permission: read_only
+    install: {}
+    verify: wp --version
+  droopescan:
+    binary: droopescan
+    category: recon.framework
+    phases:
+    - 10
+    permission: read_only
+    install:
+      pip: pip install droopescan
+    verify: droopescan --version
+  joomscan:
+    binary: joomscan
+    category: recon.framework
+    phases:
+    - 10
+    permission: read_only
+    install:
+      apt: apt-get install -y joomscan
+    verify: joomscan --version
+  cmsmap:
+    binary: cmsmap
+    category: recon.framework
+    phases:
+    - 10
+    permission: read_only
+    install:
+      pip: pip install cmsmap
+    verify: cmsmap --version
+  wig:
+    binary: wig
+    category: recon.framework
+    phases:
+    - 10
+    permission: read_only
+    install:
+      apt: apt-get install -y wig
+    verify: wig --version
+  plecost:
+    binary: plecost
+    category: recon.framework
+    phases:
+    - 10
+    permission: read_only
+    install:
+      pip: pip install plecost
+    verify: plecost --version
+  graphql-cop:
+    binary: graphql-cop
+    category: recon.framework
+    phases:
+    - 10
+    permission: read_only
+    install:
+      pip: pip install graphql-cop
+    verify: graphql-cop --version
+  inql:
+    binary: inql
+    category: recon.framework
+    phases:
+    - 10
+    permission: read_only
+    install: {}
+    verify: inql --version
+  clairvoyance:
+    binary: clairvoyance
+    category: recon.framework
+    phases:
+    - 10
+    permission: read_only
+    install:
+      pip: pip install clairvoyance
+    verify: clairvoyance --version
+  batchql:
+    binary: batchql
+    category: recon.framework
+    phases:
+    - 10
+    permission: read_only
+    install:
+      pip: pip install batchql
+    verify: batchql --version
+  apollo:
+    binary: apollo
+    category: recon.framework
+    phases:
+    - 10
+    permission: read_only
+    install: {}
+    verify: apollo --version
+  spring-scan:
+    binary: spring-scan
+    category: recon.framework
+    phases:
+    - 10
+    permission: read_only
+    install: {}
+    verify: spring-scan --version
+  struts-scan:
+    binary: struts-scan
+    category: recon.framework
+    phases:
+    - 10
+    permission: elevated
+    install: {}
+    verify: struts-scan --version
+  jq:
+    binary: jq
+    category: recon.misc
+    phases:
+    - 5
+    permission: read_only
+    install:
+      apt: apt-get install -y jq
+      brew: brew install jq
+    verify: jq --version
+  rg:
+    binary: rg
+    category: recon.misc
+    phases:
+    - 5
+    permission: read_only
+    install:
+      apt: apt-get install -y ripgrep
+      brew: brew install ripgrep
+    verify: rg --version
+  grep:
+    binary: grep
+    category: recon.misc
+    phases:
+    - 5
+    permission: read_only
+    install:
+      apt: apt-get install -y grep
+      brew: brew install grep
+    verify: grep --version
+  git:
+    binary: git
+    category: recon.misc
+    phases:
+    - 5
+    permission: read_only
+    install:
+      apt: apt-get install -y git
+      brew: brew install git
+    verify: git --version
+  python3:
+    binary: python3
+    category: recon.misc
+    phases:
+    - 5
+    permission: read_only
+    install:
+      apt: apt-get install -y python3
+      brew: brew install python3
+    verify: python3 --version
+  go:
+    binary: go
+    category: recon.misc
+    phases:
+    - 5
+    permission: read_only
+    install:
+      apt: apt-get install -y golang-go
+      brew: brew install go
+    verify: go --version
+  node:
+    binary: node
+    category: recon.misc
+    phases:
+    - 5
+    permission: read_only
+    install:
+      apt: apt-get install -y nodejs
+      brew: brew install node
+    verify: node --version
+  pip:
+    binary: pip
+    category: recon.misc
+    phases:
+    - 5
+    permission: read_only
+    install:
+      apt: apt-get install -y python3-pip
+    verify: pip --version
+  hashcat:
+    binary: hashcat
+    category: recon.misc
+    phases:
+    - 9
+    permission: full_lab
+    install:
+      apt: apt-get install -y hashcat
+      brew: brew install hashcat
+    verify: hashcat --version
+  john:
+    binary: john
+    category: recon.misc
+    phases:
+    - 9
+    permission: full_lab
+    install:
+      apt: apt-get install -y john
+      brew: brew install john
+    verify: john --version
+  hydra:
+    binary: hydra
+    category: recon.misc
+    phases:
+    - 9
+    permission: full_lab
+    install:
+      apt: apt-get install -y hydra
+      brew: brew install hydra
+    verify: hydra --version
+  medusa:
+    binary: medusa
+    category: recon.misc
+    phases:
+    - 9
+    permission: full_lab
+    install:
+      apt: apt-get install -y medusa
+    verify: medusa --version
+  cewl:
+    binary: cewl
+    category: recon.misc
+    phases:
+    - 5
+    permission: read_only
+    install:
+      apt: apt-get install -y cewl
+    verify: cewl --version
+  crunch:
+    binary: crunch
+    category: recon.misc
+    phases:
+    - 9
+    permission: full_lab
+    install:
+      apt: apt-get install -y crunch
+    verify: crunch --version
+  wordlists:
+    binary: wordlists
+    category: recon.misc
+    phases:
+    - 5
+    permission: read_only
+    install:
+      apt: apt-get install -y wordlists
+    verify: wordlists --version
+  seclists:
+    binary: seclists
+    category: recon.misc
+    phases:
+    - 5
+    permission: read_only
+    install:
+      apt: apt-get install -y seclists
+    verify: seclists --version
+  proxychains:
+    binary: proxychains4
+    category: recon.misc
+    phases:
+    - 5
+    permission: read_only
+    install:
+      apt: apt-get install -y proxychains4
+      brew: brew install proxychains-ng
+    verify: proxychains4 --version
+  mitmproxy:
+    binary: mitmproxy
+    category: recon.misc
+    phases:
+    - 5
+    permission: standard
+    install:
+      pip: pip install mitmproxy
+      brew: brew install mitmproxy
+    verify: mitmproxy --version
+  burpsuite:
+    binary: burpsuite
+    category: recon.misc
+    phases:
+    - 5
+    permission: standard
+    install:
+      apt: apt-get install -y burpsuite
+    verify: burpsuite --version
+  zaproxy:
+    binary: zaproxy
+    category: recon.misc
+    phases:
+    - 5
+    permission: standard
+    install:
+      apt: apt-get install -y zaproxy
+    verify: zaproxy --version
+  enum4linux-ng:
+    binary: enum4linux-ng
+    category: recon.misc
+    phases:
+    - 9
+    permission: standard
+    install:
+      pip: pip install enum4linux-ng
+    verify: enum4linux-ng --version
+  impacket:
+    binary: impacket
+    category: recon.misc
+    phases:
+    - 9
+    permission: elevated
+    install:
+      pip: pip install impacket
+    verify: impacket --version
+  evil-winrm:
+    binary: evil-winrm
+    category: recon.misc
+    phases:
+    - 9
+    permission: full_lab
+    install:
+      gem: gem install evil-winrm
+    verify: evil-winrm --version
+  chisel:
+    binary: chisel
+    category: recon.misc
+    phases:
+    - 9
+    permission: full_lab
+    install:
+      go: go install github.com/jpillora/chisel@latest
+    verify: chisel --version
+  ligolo:
+    binary: ligolo-ng
+    category: recon.misc
+    phases:
+    - 9
+    permission: full_lab
+    install: {}
+    verify: ligolo-ng --version

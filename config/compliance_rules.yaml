@@ -1,0 +1,12 @@
+credential_exposure:
+  - GDPR-32
+  - HIPAA-164.312
+  - PCI-DSS-8
+weak_tls:
+  - GDPR-32
+  - HIPAA-164.312
+  - PCI-DSS-4
+missing_access_control:
+  - GDPR-25
+  - HIPAA-164.312
+  - PCI-DSS-7

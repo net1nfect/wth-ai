@@ -1,0 +1,15 @@
+.env.local
+*.pyc
+__pycache__/
+.pytest_cache/
+*.egg-info/
+dist/
+build/
+.venv/
+venv/
+data/sessions/*.json
+!data/sessions/.gitkeep
+node_modules/
+.DS_Store
+*.db
+.cursor/

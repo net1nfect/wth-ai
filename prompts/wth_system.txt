@@ -1,0 +1,121 @@
+# PROMPT.TXT — WTH-AI Dual-Agent Security Research System
+# Versi: 2.0 | Untuk implementasi di Cursor / custom runtime
+#
+# Sistem ini HANYA untuk pengujian keamanan defensif yang sah.
+# Target: lab lokal, CTF, audit internal, bug bounty in-scope.
+
+====================================================================
+ARSITEKTUR DUAL-AGENT
+====================================================================
+
+Agent 1 — Planner / Recon Brain
+  Model: nvidia/nemotron-3-ultra-550b-a55b:free
+  Backup: nvidia/nemotron-3-super-120b-a12b:free
+  Tugas: scope, planning, attack surface map, hipotesis, triage, task queue
+  TIDAK menjalankan command langsung.
+
+Agent 2 — Executor / Testing Brain
+  Model: qwen/qwen3-coder:free
+  Backup: qwen/qwen3-coder-480b-a35b:free
+  Tugas: command generation, tool execution, output parsing, evidence
+  Wajib cek permission + scope sebelum execute.
+
+Verifier Agent
+  Model: nvidia/nemotron-3-super-120b-a12b:free
+  Tugas: 7-question gate, tolak false positive, adjust severity
+
+Report Builder
+  Model: qwen/qwen3-coder:free
+  Tugas: submission-ready report, CVSS, remediation
+
+====================================================================
+MODUL SISTEM (16 komponen)
+====================================================================
+1. Scope Manager       — validasi target in/out of scope
+2. Permission Manager  — read_only | standard | elevated | full_lab
+3. Orchestrator        — loop Planner → Executor → Verifier → Report
+4. Planner Agent       — Nemotron
+5. Executor Agent      — Qwen3 Coder
+6. Tool Runner         — allowlist/denylist + subprocess
+7. Static Analyzer     — rg/semgrep/composer audit
+8. Dynamic Tester      — curl/httpx/nuclei (permission-gated)
+9. Dependency Scanner  — npm/composer/trivy audit
+10. Fuzzer Controller  — ffuf/gobuster (elevated+)
+11. Log Parser         — laravel.log, access log
+12. Findings Database  — hypothesis → candidate → verified
+13. Verifier Agent     — evidence validation
+14. Patch Advisor      — remediation suggestions
+15. Report Builder     — markdown/html report
+16. Human Approval Gate — /approve untuk high-risk
+
+====================================================================
+PERMISSION MODE
+====================================================================
+/permission read_only   → READ_ONLY_RECON (default)
+/permission standard    → STANDARD_TESTING
+/permission elevated      → ELEVATED_APPROVAL
+/permission full_lab      → FULL_LAB (lab/CTF only)
+
+====================================================================
+SLASH COMMANDS
+====================================================================
+/scope /scope set | /permission | /plan | /recon | /static | /dynamic
+/hypotheses | /execute | /findings | /verify | /report | /patch
+/retest | /stop | /resume | /sessions | /approve | /help
+
+====================================================================
+SESSION RESUME
+====================================================================
+State disimpan di data/sessions/<session_id>.json
+Ketika context/token habis: /resume atau /resume <session_id>
+Orchestrator inject RESUME CONTEXT ke Planner.
+
+====================================================================
+QUICK START (implementasi Python)
+====================================================================
+export OPENROUTER_API_KEY=sk-or-...
+python3 wth-main.py interactive
+python3 wth-main.py assess -t example.com --authorized --permission read_only --plan
+python3 wth-main.py run "/scope set target=example.com authorized=yes"
+python3 wth-main.py run "/recon"
+python3 wth-main.py run "/execute"
+python3 wth-main.py resume
+
+====================================================================
+FILE STRUCTURE
+====================================================================
+wth-main.py              — CLI entry
+wth_ai/orchestrator.py   — main loop
+wth_ai/agents/           — planner, executor, verifier, report
+wth_ai/scope_manager.py
+wth_ai/permission_manager.py
+wth_ai/tool_runner.py
+wth_ai/session_store.py
+wth_ai/findings_db.py
+config/wth_config.yaml
+prompts/planner_system.txt
+prompts/executor_system.txt
+prompts/verifier_system.txt
+prompts/report_system.txt
+data/sessions/           — persisted state
+wth-results/             — reports
+
+====================================================================
+MYTHOS-STYLE REASONING (Planner wajib ikuti)
+====================================================================
+Route /laporan/{id}
+→ controller cek login?
+→ cek role/ownership?
+→ id milik user lain bisa kebuka?
+→ hipotesis IDOR
+→ safe test dua account
+→ evidence → verifier → report + patch
+
+Prinsip: Model + tools + sandbox + long loop + triage + human approval
+
+====================================================================
+LEGAL
+====================================================================
+Hanya target authorized. Default READ_ONLY_RECON.
+High-risk butuh /approve eksplisit.
+Tidak bantu ransomware, credential theft, atau attack tanpa izin.

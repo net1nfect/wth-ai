@@ -1,0 +1,70 @@
+# WTH-AI v1.0 Configuration
+
+models:
+  planner: nvidia/nemotron-3-super-120b-a12b:free
+  planner_backup: qwen/qwen3-coder:free
+  executor: qwen/qwen3-coder:free
+  executor_backup: qwen/qwen3-coder-480b-a35b:free
+  verifier: nvidia/nemotron-3-super-120b-a12b:free
+  report: qwen/qwen3-coder:free
+  max_tokens: 8192
+  temperature: 0.3
+  planner_timeout_seconds: 90
+  executor_timeout_seconds: 120
+  streaming: true
+
+openrouter:
+  api_key_env: OPENROUTER_API_KEY
+  base_url: https://openrouter.ai/api/v1
+  site_url: https://wth-ai.local
+  app_name: WTH-AI
+
+session:
+  state_dir: data/sessions
+  auto_save: true
+  resume_on_start: false
+  max_conversation_turns: 80
+
+tools:
+  timeout_seconds: 120
+  max_output_bytes: 512000
+  default_rate_limit_rps: 2.0
+  user_bin: ~/.wth-ai/tools/bin
+
+prompts_dir: prompts
+results_dir: wth-results
+require_openrouter: false
+realtime_only: true
+require_llm: false
+setup_complete: false
+
+skills:
+  openclaw_path: ~/.openclaw/workspace/skills
+  codex_path: ~/.codex/skills
+  local_path: skills
+  auto_discover: true
+  fusion_max_chars: 8000
+
+recon:
+  adaptive_graph: true
+  rules_file: wth_ai/recon/recon_rules.yaml
+
+intel:
+  enabled: true
+  nuclei_templates_check: true
+  wayback_delta: true
+
+mcp:
+  enabled: false
+  servers:
+    - hexstrike
+
+browser:
+  headless: true
+  cloudflare_wait: 8.0
+  page_load_wait: 5.0
+
+release:
+  version: "1.0.0"
+  github_repo: wth-ai/wth-ai
+  auto_install_tools: true

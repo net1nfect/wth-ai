@@ -1,0 +1,9 @@
+feeds:
+  cisa_kev:
+    enabled: true
+    url: https://www.cisa.gov/sites/default/files/feeds/known_exploited_vulnerabilities.json
+  nvd:
+    enabled: false
+    url: https://services.nvd.nist.gov/rest/json/cves/2.0
+dark_web_monitoring:
+  enabled: false

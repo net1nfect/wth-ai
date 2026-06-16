@@ -1,0 +1,82 @@
+name: Release WTH-AI
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -r requirements.txt && pip install -e .
+      - run: pytest tests/ -v --tb=short
+
+  build:
+    needs: test
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-latest
+            platform: linux-amd64
+          - os: macos-latest
+            platform: darwin-arm64
+          - os: windows-latest
+            platform: windows-amd64
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install pyinstaller -r requirements.txt && pip install -e .
+      - run: bash scripts/build_binary.sh
+        env:
+          WTH_VERSION: ${{ github.ref_name }}
+      - name: Rename artifact
+        shell: bash
+        run: |
+          if [[ "${{ matrix.os }}" == "windows-latest" ]]; then
+            mv dist/wth-ai.exe "dist/wth-ai-${{ matrix.platform }}.exe" 2>/dev/null || mv dist/wth-ai "dist/wth-ai-${{ matrix.platform }}"
+          else
+            mv dist/wth-ai-* "dist/wth-ai-${{ matrix.platform }}"
+          fi
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wth-ai-${{ matrix.platform }}
+          path: dist/wth-ai-${{ matrix.platform }}*
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: artifacts/*
+          generate_release_notes: true
+          draft: false
+          prerelease: false
+
+  npm:
+    needs: release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          registry-url: "https://registry.npmjs.org"
+      - run: cd packages/wth-cli && npm publish --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
