@@ -175,6 +175,36 @@ class ToolDoctor:
 
     return {"ok": not issues, "enabled": enabled, "issues": issues}
 
+  def check_jobs(self) -> dict[str, Any]:
+    home = wth_home()
+    queue_dir = home / "runtime" / "queue"
+    jobs_log_dir = home / "logs" / "jobs"
+    try:
+      from wth_ai.jobs.store import JobStore
+      store = JobStore()
+      schema_ok = store.schema_ok()
+      total = len(store.list_jobs(limit=1000))
+      # worker status file is optional; reading must not fail
+      worker_status = home / "runtime" / "worker.status"
+      worker_readable = True
+      if worker_status.exists():
+        try:
+          worker_status.read_text(encoding="utf-8")
+        except OSError:
+          worker_readable = False
+      ok = schema_ok and queue_dir.exists() and worker_readable
+      return {
+        "ok": ok,
+        "schema_ok": schema_ok,
+        "db_path": str(store.db_path),
+        "queue_dir": queue_dir.exists(),
+        "jobs_log_dir": jobs_log_dir.exists(),
+        "worker_readable": worker_readable,
+        "total_jobs": total,
+      }
+    except Exception as exc:  # noqa: BLE001
+      return {"ok": False, "schema_ok": False, "error": str(exc)}
+
   def check_approval_registry(self) -> dict[str, Any]:
     try:
       from wth_ai.approvals import ApprovalRegistry
@@ -208,6 +238,7 @@ class ToolDoctor:
     bus = self.check_event_bus()
     integ = self.check_integrations()
     appr = self.check_approval_registry()
+    jobs = self.check_jobs()
     ok = (
       ws["complete"]
       and cfg["valid"]
@@ -219,6 +250,7 @@ class ToolDoctor:
       and bus["available"]
       and integ["ok"]
       and appr["ok"]
+      and jobs["ok"]
     )
     return {
       "ok": ok,
@@ -233,6 +265,7 @@ class ToolDoctor:
       "event_bus": bus,
       "integrations": integ,
       "approvals": appr,
+      "jobs": jobs,
     }
 
   def full_report(self) -> str:
@@ -243,7 +276,7 @@ class ToolDoctor:
       wv["workspace"], wv["config"], wv["vault"], wv["referenced_secrets"], wv["permissions"],
     )
     roles, prov, prof = wv["roles"], wv["provider_secrets"], wv["profile"]
-    bus, integ, appr = wv["event_bus"], wv["integrations"], wv["approvals"]
+    bus, integ, appr, jobs = wv["event_bus"], wv["integrations"], wv["approvals"], wv["jobs"]
     lines = [
       "# WTH Doctor",
       "",
@@ -286,6 +319,12 @@ class ToolDoctor:
       f"- Integrations enabled: {', '.join(integ['enabled']) or 'none'}",
       f"- Integration config: {'valid' if integ['ok'] else 'ISSUES — ' + '; '.join(integ['issues'])}",
       f"- Approval registry: {'OK' if appr['ok'] else 'ERROR'} ({appr.get('pending', 0)} pending)",
+      "",
+      "## Jobs & Worker",
+      f"- Job store: {'OK' if jobs['ok'] else 'ERROR'}"
+      + (f" — {jobs['error']}" if jobs.get('error') else f" (schema {'valid' if jobs.get('schema_ok') else 'INVALID'}, {jobs.get('total_jobs', 0)} jobs)"),
+      f"- Queue dir: {'present' if jobs.get('queue_dir') else 'MISSING'}",
+      f"- Worker status: {'readable' if jobs.get('worker_readable') else 'UNREADABLE'}",
       "",
       f"## Tools: {ts['installed']}/{ts['total']} installed ({ts['missing']} missing)",
       "",

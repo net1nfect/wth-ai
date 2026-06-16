@@ -39,9 +39,11 @@ class BotCommandService:
         config: WTHConfig,
         *,
         approvals: ApprovalRegistry | None = None,
+        jobs: Any = None,
     ) -> None:
         self.config = config
         self.approvals = approvals or ApprovalRegistry()
+        self.jobs = jobs  # optional JobManager (Fase 4); falls back to approvals
 
     def handle(
         self,
@@ -69,13 +71,26 @@ class BotCommandService:
         ig = self.config.integrations
         enabled = [n for n, c in (("telegram", ig.telegram), ("discord", ig.discord), ("webhook", ig.webhook)) if c.enabled]
         pending = len(self.approvals.list_pending())
-        return (
-            "WTH-AI status\n"
-            f"- integrations enabled: {', '.join(enabled) or 'none'}\n"
-            f"- pending approvals: {pending}"
-        )
+        lines = [
+            "WTH-AI status",
+            f"- integrations enabled: {', '.join(enabled) or 'none'}",
+            f"- pending approvals: {pending}",
+        ]
+        if self.jobs is not None:
+            s = self.jobs.summary()
+            lines.append(f"- jobs: {s['total']} total, {s['queued']} queued")
+        return "\n".join(lines)
 
     def _cmd_jobs(self, args: list[str]) -> str:
+        # Fase 4: read real jobs when a JobManager is wired; else show approvals.
+        if self.jobs is not None:
+            jobs = self.jobs.list_jobs(limit=20)
+            if not jobs:
+                return "No jobs."
+            lines = ["Jobs:"]
+            for j in jobs:
+                lines.append(f"- {j.job_id} [{j.status}] {j.type} target={j.target or '-'}")
+            return "\n".join(lines)
         pending = self.approvals.list_pending()
         if not pending:
             return "No pending approvals."
@@ -103,15 +118,23 @@ class BotCommandService:
     def _cmd_stop(self, args: list[str]) -> str:
         if not args:
             return "Usage: stop <job_id>"
-        # Full job control arrives in Fase 4; acknowledge for now.
-        return f"Stop requested for job '{args[0]}' (job manager: Fase 4)."
+        if self.jobs is not None:
+            j = self.jobs.stop_job(args[0])
+            return f"{args[0]} -> {j.status}" if j else f"{args[0]}: not found"
+        return f"Stop requested for job '{args[0]}' (job manager not wired)."
 
     def _cmd_report(self, args: list[str]) -> str:
         if not args:
             return "Usage: report <job_id>"
+        if self.jobs is not None:
+            j = self.jobs.get_job(args[0])
+            if j is None:
+                return f"{args[0]}: not found"
+            if j.result:
+                return f"Job {j.job_id} result:\n{j.result}"
+            return f"Job {j.job_id} status={j.status} (no result yet)"
         from wth_ai.workspace import wth_home
-        reports = wth_home() / "reports"
-        return f"Reports directory: {reports} (job '{args[0]}' — full lookup: Fase 4)."
+        return f"Reports directory: {wth_home() / 'reports'} (job '{args[0]}')."
 
     def _cmd_settings(self, args: list[str]) -> str:
         ig = self.config.integrations

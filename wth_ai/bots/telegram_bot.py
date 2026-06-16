@@ -31,7 +31,8 @@ class WTHTelegramBot:
     def __init__(self, config: WTHConfig) -> None:
         self.config = config
         self.sessions = BotSessionManager(config)
-        self.commands = BotCommandService(config)
+        from wth_ai.jobs.manager import JobManager
+        self.commands = BotCommandService(config, jobs=JobManager(config))
         # Prefer the vault-backed integrations token; fall back to legacy bots config.
         ref = self.config.integrations.telegram.bot_token_ref
         self.token = (SecretVault().resolve(ref) if ref else None) or config.bots.telegram_token

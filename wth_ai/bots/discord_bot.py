@@ -32,7 +32,8 @@ class WTHDiscordBot:
     def __init__(self, config: WTHConfig) -> None:
         self.config = config
         self.sessions = BotSessionManager(config)
-        self.commands = BotCommandService(config)
+        from wth_ai.jobs.manager import JobManager
+        self.commands = BotCommandService(config, jobs=JobManager(config))
         intents = discord.Intents.default()
         intents.message_content = True
         self.client = discord.Client(intents=intents)

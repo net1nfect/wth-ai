@@ -527,6 +527,148 @@ def approval_deny(approval_id: str) -> None:
     click.echo(f"{approval_id} -> {rec['status']}" if rec else f"{approval_id}: not found")
 
 
+def _job_manager(config_path: str):
+    from wth_ai.jobs.manager import JobManager
+    from wth_ai.workspace import init_workspace
+    init_workspace()
+    return JobManager(_load_config(config_path))
+
+
+@cli.group()
+def job() -> None:
+    """Create and manage jobs."""
+
+
+@job.command("create")
+@click.argument("job_type")
+@click.option("--target", default=None)
+@click.option("--profile", default=None)
+@click.option("--priority", default="normal", type=click.Choice(["low", "normal", "high"]))
+@click.option("--requires-approval", is_flag=True, help="Park the job for approval before running.")
+@click.option("--config", "config_path", default="config/wth_config.yaml", show_default=True)
+def job_create(job_type: str, target, profile, priority: str, requires_approval: bool, config_path: str) -> None:
+    """Create a JOB_TYPE job (recon|executor|report|provider_test|custom)."""
+    mgr = _job_manager(config_path)
+    j = mgr.create_job(
+        job_type, target=target, profile=profile, priority=priority,
+        requires_approval=requires_approval, created_by="cli",
+    )
+    if j.status == "failed":
+        click.echo(f"Rejected: {j.error} (job {j.job_id})")
+    else:
+        click.echo(f"Created {j.job_id} type={j.type} status={j.status}")
+
+
+@job.command("list")
+@click.option("--status", default=None)
+@click.option("--type", "job_type", default=None)
+@click.option("--config", "config_path", default="config/wth_config.yaml", show_default=True)
+def job_list(status, job_type, config_path: str) -> None:
+    """List jobs (optionally filter by --status / --type)."""
+    mgr = _job_manager(config_path)
+    jobs = mgr.list_jobs(status=status, type=job_type)
+    if not jobs:
+        click.echo("(no jobs)")
+        return
+    for j in jobs:
+        p = j.progress
+        click.echo(f"- {j.job_id} [{j.status}] {j.type} target={j.target or '-'} "
+                   f"priority={j.priority} progress={p['current']}/{p['total']}")
+
+
+@job.command("show")
+@click.argument("job_id")
+@click.option("--config", "config_path", default="config/wth_config.yaml", show_default=True)
+def job_show(job_id: str, config_path: str) -> None:
+    """Show a job as JSON."""
+    mgr = _job_manager(config_path)
+    j = mgr.get_job(job_id)
+    click.echo(json.dumps(j.to_dict(), indent=2, default=str) if j else f"{job_id}: not found")
+
+
+@job.command("logs")
+@click.argument("job_id")
+@click.option("--config", "config_path", default="config/wth_config.yaml", show_default=True)
+def job_logs(job_id: str, config_path: str) -> None:
+    """Print a job's log."""
+    mgr = _job_manager(config_path)
+    text = mgr.logs(job_id)
+    click.echo(text if text else f"(no logs for {job_id})")
+
+
+@job.command("stop")
+@click.argument("job_id")
+@click.option("--config", "config_path", default="config/wth_config.yaml", show_default=True)
+def job_stop(job_id: str, config_path: str) -> None:
+    """Stop a job."""
+    mgr = _job_manager(config_path)
+    j = mgr.stop_job(job_id)
+    click.echo(f"{job_id} -> {j.status}" if j else f"{job_id}: not found")
+
+
+@job.command("retry")
+@click.argument("job_id")
+@click.option("--config", "config_path", default="config/wth_config.yaml", show_default=True)
+def job_retry(job_id: str, config_path: str) -> None:
+    """Re-queue a failed/stopped job."""
+    mgr = _job_manager(config_path)
+    j = mgr.retry_job(job_id)
+    click.echo(f"{job_id} -> {j.status}" if j else f"{job_id}: not found")
+
+
+@job.command("delete")
+@click.argument("job_id")
+@click.option("--config", "config_path", default="config/wth_config.yaml", show_default=True)
+def job_delete(job_id: str, config_path: str) -> None:
+    """Delete a job record."""
+    mgr = _job_manager(config_path)
+    click.echo(f"Deleted {job_id}" if mgr.delete_job(job_id) else f"{job_id}: not found")
+
+
+@cli.group()
+def worker() -> None:
+    """Run and inspect the job worker."""
+
+
+@worker.command("run")
+@click.option("--no-drain", is_flag=True, help="Run as a daemon loop instead of draining once.")
+@click.option("--max-jobs", default=None, type=int)
+@click.option("--config", "config_path", default="config/wth_config.yaml", show_default=True)
+def worker_run(no_drain: bool, max_jobs, config_path: str) -> None:
+    """Process queued jobs (drains by default; --no-drain loops as a daemon)."""
+    from wth_ai.jobs.worker import WorkerEngine
+    w = WorkerEngine(_job_manager(config_path))
+    summary = w.run(drain=not no_drain, max_jobs=max_jobs)
+    click.echo(json.dumps(summary))
+
+
+@worker.command("run-once")
+@click.option("--config", "config_path", default="config/wth_config.yaml", show_default=True)
+def worker_run_once(config_path: str) -> None:
+    """Process a single job and report what happened."""
+    from wth_ai.jobs.worker import WorkerEngine
+    w = WorkerEngine(_job_manager(config_path))
+    click.echo(json.dumps(w.run_once(), indent=2, default=str))
+
+
+@worker.command("status")
+@click.option("--config", "config_path", default="config/wth_config.yaml", show_default=True)
+def worker_status(config_path: str) -> None:
+    """Show worker + job summary."""
+    from wth_ai.jobs.worker import WorkerEngine
+    w = WorkerEngine(_job_manager(config_path))
+    click.echo(json.dumps(w.status(), indent=2, default=str))
+
+
+@worker.command("stop")
+@click.option("--config", "config_path", default="config/wth_config.yaml", show_default=True)
+def worker_stop(config_path: str) -> None:
+    """Mark the worker stopped (clears the run flag)."""
+    from wth_ai.jobs.worker import WorkerEngine
+    WorkerEngine(_job_manager(config_path)).stop()
+    click.echo("worker stopped")
+
+
 @cli.group()
 def bot() -> None:
     """Discord / Telegram bot daemons."""
