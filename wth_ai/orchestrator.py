@@ -18,6 +18,9 @@ from wth_ai.config import WTHConfig
 from wth_ai.findings_db import FindingsDB
 from wth_ai.brain.chain_planner import ChainPlanner
 from wth_ai.brain.hypothesis_engine import HypothesisEngine
+from wth_ai.cognition import CognitiveEngine
+from wth_ai.planning import TestPlanner
+from wth_ai.analysis import TriageEngine
 from wth_ai.evidence.vault import EvidenceVault
 from wth_ai.graph.asset_graph import AssetGraph
 from wth_ai.models import (
@@ -87,6 +90,10 @@ class WTHOrchestrator:
         self.asset_graph = AssetGraph(self.state.session_id)
         self.hypothesis_engine = HypothesisEngine()
         self.chain_planner = ChainPlanner()
+        self.cognition = CognitiveEngine()
+        self.feedback = self.cognition.feedback
+        self.test_planner = TestPlanner()
+        self.triage_engine = TriageEngine()
         self.evidence_vault = EvidenceVault(self.state.session_id)
         if not fresh:
             self._try_load_latest()
@@ -191,6 +198,8 @@ class WTHOrchestrator:
             return self.findings_db.format_summary_table()
         if cmd == "/hypotheses":
             return self.findings_db.format_hypotheses()
+        if cmd == "/triage":
+            return self._run_triage(args)
         if cmd == "/skills":
             return self.skills.format_catalog(args[0] if args else None)
         if cmd == "/skill":
@@ -215,6 +224,10 @@ class WTHOrchestrator:
             return self._run_hunt(args)
         if cmd == "/graph":
             return self.asset_graph.format_summary()
+        if cmd == "/reason":
+            return self._run_reason(args)
+        if cmd == "/testplan":
+            return self._run_testplan(args)
         if cmd in {"/plan", "/static", "/dynamic", "/patch", "/retest"}:
             return self._assess_loop(user_input)
         if cmd == "/execute":
@@ -295,6 +308,14 @@ class WTHOrchestrator:
         graph_ctx = self.asset_graph.export_for_planner() if self.asset_graph.nodes else ""
         tech_stack = (self.state.metadata.get("attack_surface_obj") or {}).get("tech_stack", {})
         pre_hypotheses = self.hypothesis_engine.generate(self.asset_graph, tech_stack)
+        # Cognition layer: dedup + explainable risk-rank before the LLM sees them.
+        cognition_report = self.cognition.deliberate(
+            pre_hypotheses, tech_profile=tech_profile, learning=self.learning,
+            killed_titles=self.feedback.killed_titles(),
+        )
+        if cognition_report.items:
+            pre_hypotheses = cognition_report.ranked_hypotheses()
+        self.state.metadata["cognition"] = cognition_report.to_summary_dict()
         chains = self.chain_planner.plan_from_hypotheses(pre_hypotheses, self.state.scope.target or "")
         chain_dicts = [c.to_dict() for c in chains]
         self.state.metadata["pre_hypotheses"] = pre_hypotheses
@@ -340,9 +361,123 @@ class WTHOrchestrator:
             parts.append(f"\n*[Critic killed {len(plan_result['killed'])} weak hypotheses]*")
         if pre_hypotheses:
             parts.append(f"\n*[Graph hypotheses: {len(pre_hypotheses)} | chains: {len(chain_dicts)}]*")
+        if cognition_report.items:
+            parts.append(
+                f"\n*[Cognition: {len(cognition_report.items)} risk-ranked · "
+                f"plan confidence {int(cognition_report.plan_confidence * 100)}% · "
+                f"top {cognition_report.items[0].risk.severity_band}]*"
+            )
         if tasks:
             parts.append(f"\n---\n**{len(tasks)} task queued** → `/execute`")
         return "\n".join(parts)
+
+    def _current_tech_profile(self) -> str:
+        tech_profile = self.state.metadata.get("tech_profile", "generic_web")
+        recon_meta = self.state.metadata.get("last_recon", {})
+        if recon_meta.get("adaptive_profile"):
+            tech_profile = recon_meta["adaptive_profile"]
+        return tech_profile
+
+    def _run_reason(self, args: list[str]) -> str:
+        """Cognition engine: explainable, risk-ranked plan (works fully offline)."""
+        tech_profile = self._current_tech_profile()
+        tech_stack = (self.state.metadata.get("attack_surface_obj") or {}).get("tech_stack", {})
+
+        if "--targets" in args:
+            targets = self.cognition.prioritize_recon_targets(self.asset_graph)
+            if not targets:
+                return (
+                    "## Cognition — Recon Focus\n"
+                    "Asset graph kosong. Jalankan `/recon` dulu untuk mengisi graph."
+                )
+            lines = ["## Cognition — Recon Focus (risk-ranked targets)"]
+            for i, t in enumerate(targets, 1):
+                lines.append(
+                    f"{i}. [{t['severity_band'].upper()} {t['risk_score']:.0f}] "
+                    f"`{t['param']}` @ {t['url'][:70]}"
+                )
+            return "\n".join(lines)
+
+        pre_hypotheses = self.hypothesis_engine.generate(self.asset_graph, tech_stack)
+        killed_titles = {
+            h.get("title", "")
+            for h in self.state.hypotheses
+            if h.get("state") in {"false_positive", "killed"}
+        }
+        report = self.cognition.deliberate(
+            pre_hypotheses,
+            tech_profile=tech_profile,
+            learning=self.learning,
+            killed_titles=killed_titles | self.feedback.killed_titles(),
+        )
+        self.state.metadata["cognition"] = report.to_summary_dict()
+        self._persist()
+        out = report.format_cli()
+        if report.items:
+            out += "\n\n*Lanjut: `/testplan` untuk antrian test ber-modul, atau `/plan` untuk refine via LLM.*"
+        return out
+
+    def _run_testplan(self, args: list[str]) -> str:
+        """Build a module-bound, gated, budgeted non-destructive test queue."""
+        tech_profile = self._current_tech_profile()
+        tech_stack = (self.state.metadata.get("attack_surface_obj") or {}).get("tech_stack", {})
+        pre_hypotheses = self.hypothesis_engine.generate(self.asset_graph, tech_stack)
+        report = self.cognition.deliberate(
+            pre_hypotheses, tech_profile=tech_profile, learning=self.learning,
+            killed_titles=self.feedback.killed_titles(),
+        )
+
+        budget = None
+        for a in args:
+            if a.startswith("--budget="):
+                try:
+                    budget = int(a.split("=", 1)[1])
+                except ValueError:
+                    budget = None
+
+        plan = self.test_planner.build_plan(
+            report,
+            scope=self.state.scope,
+            permission_mode=self.permission_mgr.mode,
+            request_budget=budget,
+        )
+        self.state.metadata["test_plan"] = plan.to_summary_dict()
+        tasks = plan.to_executor_tasks()
+        if tasks:
+            self.state.task_queue = [self._task_to_dict(t) for t in tasks]
+            schemas = {t.id: t.evidence_schema for t in tasks if t.evidence_schema}
+            if schemas:
+                self.state.metadata["task_evidence_schemas"] = schemas
+            # Remember which strategy/module backs each task for feedback attribution.
+            self.state.metadata["task_strategy_map"] = {
+                pt.id: {"vuln_class": pt.vuln_class, "strategy": pt.family}
+                for pt in plan.executable()
+            }
+        self._persist()
+
+        out = plan.format_cli()
+        if plan.executable():
+            out += f"\n\n**{len(plan.executable())} task ter-antri** → `/execute --all` (butuh tools + permission sesuai)."
+        return out
+
+    def _collect_finding_candidates(self) -> list[dict[str, Any]]:
+        """Gather raw finding candidates from probes, planner, and findings DB."""
+        candidates: list[dict[str, Any]] = []
+        candidates.extend(self.state.metadata.get("pre_findings", []))
+        for f in self.findings_db.list_findings():
+            candidates.append(f.to_dict())
+        for f in self.state.findings:
+            if isinstance(f, dict):
+                candidates.append(f)
+        return candidates
+
+    def _run_triage(self, args: list[str]) -> str:
+        """Correlate/dedup/false-positive-filter current finding candidates (flowchart 16)."""
+        candidates = self._collect_finding_candidates()
+        report = self.triage_engine.triage(candidates)
+        self.state.metadata["triage"] = report.to_summary_dict()
+        self._persist()
+        return report.format_cli()
 
     def _run_recon(self, args: list[str]) -> str:
         fast = "--fast" in args
@@ -494,12 +629,77 @@ class WTHOrchestrator:
         return self.tool_registry.format_report(args[0])
 
     def _run_hunt(self, args: list[str]) -> str:
-        err = self._require_llm()
-        if err:
-            return err
-        goal = " ".join(args) if args else f"Audit {self.state.scope.target} — defensive vuln hunt"
-        loop = EngagementLoop(self)
-        return loop.run(goal)
+        goal = " ".join(a for a in args if not a.startswith("--")) or f"Audit {self.state.scope.target} — defensive vuln hunt"
+        force_cognitive = "--cognitive" in args
+        # LLM-driven engagement loop when a provider is available, else the
+        # deterministic iterative cognition loop (offline-capable).
+        if self.client.available() and not force_cognitive:
+            err = self._require_llm()
+            if err:
+                return err
+            loop = EngagementLoop(self)
+            return loop.run(goal)
+        max_iters = 5
+        for a in args:
+            if a.startswith("--iters="):
+                try:
+                    max_iters = max(1, min(10, int(a.split("=", 1)[1])))
+                except ValueError:
+                    max_iters = 5
+        return self._run_cognitive_hunt(goal, max_iters=max_iters)
+
+    def _run_cognitive_hunt(self, goal: str, *, max_iters: int = 5) -> str:
+        """Deterministic, offline iterative hunt: deliberate -> plan -> triage -> re-rank."""
+        tech_profile = self._current_tech_profile()
+        tech_stack = (self.state.metadata.get("attack_surface_obj") or {}).get("tech_stack", {})
+        covered: set[str] = set()
+        iter_log: list[str] = []
+        last_report = None
+        last_plan = None
+
+        for i in range(1, max_iters + 1):
+            pre = self.hypothesis_engine.generate(self.asset_graph, tech_stack)
+            killed = covered | self.feedback.killed_titles()
+            report = self.cognition.deliberate(
+                pre, tech_profile=tech_profile, learning=self.learning, killed_titles=killed,
+            )
+            if not report.items:
+                iter_log.append(f"- iter {i}: no remaining hypotheses → stop")
+                break
+            last_report = report
+            plan = self.test_planner.build_plan(
+                report, scope=self.state.scope, permission_mode=self.permission_mgr.mode,
+            )
+            last_plan = plan
+            top = report.items[0]
+            covered.add(top.hypothesis.get("title", ""))
+            iter_log.append(
+                f"- iter {i}: {len(report.items)} ranked (conf {int(report.plan_confidence * 100)}%), "
+                f"{len(plan.executable())} testable → focus [{top.risk.severity_band}] "
+                f"{top.hypothesis.get('title', '')[:50]}"
+            )
+            if report.plan_confidence < 0.25:
+                iter_log.append(f"- iter {i}: confidence below threshold → stop")
+                break
+
+        triage = self.triage_engine.triage(self._collect_finding_candidates())
+        self.state.metadata["hunt"] = {
+            "goal": goal, "iterations": len(iter_log),
+            "cognition": last_report.to_summary_dict() if last_report else {},
+            "triage": triage.to_summary_dict(),
+        }
+        self._persist()
+
+        parts = [f"## Cognitive Hunt — {goal}", "", "### Iteration log"]
+        parts.extend(iter_log or ["- (no hypotheses; run /recon first)"])
+        if last_plan is not None and last_plan.executable():
+            parts.append("")
+            parts.append(f"### Final test queue ({len(last_plan.executable())} executable)")
+            for t in last_plan.executable()[:8]:
+                parts.append(f"- [{t.severity_band.upper()} {t.risk_score:.0f}] {t.module_name} · `{t.family}` → {t.target[:55]}")
+        parts.append("")
+        parts.append(triage.format_cli())
+        return "\n".join(parts)
 
     def _browser_probe(self, args: list[str]) -> str:
         if not browser_allowed(self.permission_mgr.mode):
@@ -617,6 +817,29 @@ class WTHOrchestrator:
             return f"✓ Approval {aid} granted."
         return f"Approval tidak ditemukan: {aid}"
 
+    def _record_execution_feedback(self, task_dict: dict[str, Any], result: Any) -> None:
+        """Route an execution outcome into the bandit + learning store (flowchart L6)."""
+        schema = task_dict.get("evidence_schema") or {}
+        vuln_class = schema.get("type") if isinstance(schema, dict) else None
+        strat_map = self.state.metadata.get("task_strategy_map", {})
+        mapped = strat_map.get(task_dict.get("id"), {})
+        vuln_class = mapped.get("vuln_class") or vuln_class or "unknown"
+        strategy_name = mapped.get("strategy")
+        if not strategy_name:
+            choice = self.cognition.recommend_strategy(vuln_class, tech_profile=self._current_tech_profile())
+            strategy_name = choice.name if choice else "safe_recon_probe"
+        status = getattr(result, "status", "") if not isinstance(result, dict) else result.get("status", "")
+        evidence = getattr(result, "evidence", None) if not isinstance(result, dict) else result.get("evidence")
+        success = status == "success" and bool(evidence)
+        self.feedback.record_execution(
+            vuln_class=vuln_class,
+            strategy_name=strategy_name,
+            success=success,
+            tech_profile=self._current_tech_profile(),
+            endpoint=task_dict.get("target", ""),
+            session_id=self.state.session_id,
+        )
+
     def _execute_next(self, task_id: str | None, *, run_all: bool = False) -> str:
         if not self.state.task_queue and not task_id:
             return "Task queue kosong. Coba `/plan` atau `/recon` dulu."
@@ -645,6 +868,8 @@ class WTHOrchestrator:
                 tid = item["task_id"]
                 done_ids.add(tid)
                 self.state.completed_tasks.append(result.to_dict())
+                task_dict = next((t for t in self.state.task_queue if t.get("id") == tid), {"id": tid})
+                self._record_execution_feedback(task_dict, result)
                 outputs.append(self.executor.format_result(result))
             self.state.task_queue = [t for t in self.state.task_queue if t.get("id") not in done_ids]
             self._persist()
@@ -661,6 +886,7 @@ class WTHOrchestrator:
         if pairs:
             self.evidence_vault.store_from_executor(task.id, pairs, task.evidence_schema)
         self.state.completed_tasks.append(result.to_dict())
+        self._record_execution_feedback(task_dict, result)
         self.state.task_queue = [t for t in self.state.task_queue if t.get("id") != task.id]
         if result.status == "success" and result.output_summary:
             snippet = result.output_summary[:300]
@@ -704,6 +930,11 @@ class WTHOrchestrator:
                 )
             elif verdict == "false_positive":
                 self.findings_db.update_finding_state(finding.id, FindingState.FALSE_POSITIVE)
+                self.feedback.record_verdict(
+                    finding.title, finding.cwe or finding.title.split()[0].lower(),
+                    verified=False, tech_profile=self.state.metadata.get("tech_profile", "generic_web"),
+                    endpoint=finding.component, session_id=self.state.session_id,
+                )
             outputs.append(self.verifier.format_verification(v))
 
         self._sync_state_from_db()
@@ -711,14 +942,42 @@ class WTHOrchestrator:
         return "\n\n".join(outputs)
 
     def _report(self) -> str:
-        err = self._require_llm()
-        if err:
-            return err
-        content = self.reporter.build(self.state, self.findings_db, evidence_vault=self.evidence_vault)
+        content = ""
+        if self.client.available():
+            try:
+                content = self.reporter.build(self.state, self.findings_db, evidence_vault=self.evidence_vault)
+            except Exception:
+                content = ""
+        if not content:
+            content = self._offline_report_body()
+        # Append deterministic triage-driven section (flowchart node 17).
+        triage = self.triage_engine.triage(self._collect_finding_candidates())
+        self.state.metadata["triage"] = triage.to_summary_dict()
+        content = f"{content}\n\n---\n\n{triage.format_report_section()}"
         path = self.reporter.save(content, self.state)
         self.state.current_phase = AssessmentPhase.REPORT
         self._persist()
         return f"Report: {path}\n\n{content[:5000]}{'...' if len(content) > 5000 else ''}"
+
+    def _offline_report_body(self) -> str:
+        cov = self.asset_graph.coverage() if self.asset_graph.nodes else {}
+        lines = [
+            f"# Security Assessment Report — {self.state.scope.target or 'target'}",
+            "",
+            "> Offline report body (no LLM provider configured). The triage-driven "
+            "section below is generated deterministically from collected evidence.",
+            "",
+            "## Scope",
+            f"- Target: {self.state.scope.target or 'unset'}",
+            f"- Authorized: {self.state.scope.authorized}",
+            f"- Permission: {self.state.permission_mode.value}",
+            "",
+            "## Findings (DB)",
+            self.findings_db.format_summary_table(),
+        ]
+        if cov:
+            lines += ["", f"## Coverage", f"- Graph nodes: {cov.get('nodes', 0)} · coverage {cov.get('coverage_pct', 0)}%"]
+        return "\n".join(lines)
 
     def _status_summary(self, prefix: str) -> str:
         return "\n".join([
