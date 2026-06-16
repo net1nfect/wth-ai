@@ -22,6 +22,7 @@ from wth_ai.evidence.vault import EvidenceVault
 from wth_ai.graph.asset_graph import AssetGraph
 from wth_ai.models import (
     AssessmentPhase,
+    ExecutorResult,
     ExecutorTask,
     FindingState,
     PermissionMode,
@@ -45,6 +46,7 @@ from wth_ai.skills.registry import SkillRegistry
 from wth_ai.skills.fusion import SkillFusionEngine
 from wth_ai.slash_commands import SlashCommandHandler
 from wth_ai.cli.recon_wizard import ReconWizard
+from wth_ai.cli.theme import PROMPT_SYMBOL
 from wth_ai.terminal.bridge import AgentTerminalBridge
 from wth_ai.tool_runner import ToolRunner
 
