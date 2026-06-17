@@ -14,7 +14,7 @@ the test suite. The primary CLI entry point is `wth-main.py` (also exposed as `w
 
 ### Run / test / lint
 Standard commands (see `README.md`, `pyproject.toml`, `.github/workflows/ci.yml`):
-- Tests: `python3 -m pytest tests/ -v` (52 tests; the `core/*` and `wth_ai/*` suites run together).
+- Tests: `python3 -m pytest tests/ -v` (123 tests; the `core/*` and `wth_ai/*` suites run together).
 - Run app (one-shot): `python3 wth-main.py run '/doctor' --fresh`
 - Run app (REPL): `python3 wth-main.py`
 - Version: `python3 wth-main.py --version`
