@@ -215,6 +215,79 @@ class ToolDoctor:
     except Exception as exc:  # noqa: BLE001
       return {"ok": False, "pending": 0, "error": str(exc)}
 
+  def check_recon(self) -> dict[str, Any]:
+    """Fase 5 recon platform health. Missing external tools are warnings only."""
+    info: dict[str, Any] = {
+      "importable": False,
+      "registry_count": 0,
+      "registry_ok": False,
+      "builtin_ok": False,
+      "results_writable": False,
+      "wordlist_ok": False,
+      "dns_resolver": False,
+      "http_client": False,
+      "report_writer": False,
+      "profile_recon_only": False,
+      "local_policy": False,
+      "available_tools": 0,
+      "missing_tools": 0,
+      "warnings": [],
+    }
+    try:
+      from wth_ai.recon.registry import ReconToolRegistry
+      from wth_ai.recon.planner import ReconPlanner, PROFILE_CAP, detect_target_type
+      from wth_ai.recon.tools.builtin import BuiltinContext, run_builtin
+      from wth_ai.recon.wordlists import safe_paths
+
+      info["importable"] = True
+      reg = ReconToolRegistry()
+      info["registry_count"] = len(reg)
+      info["registry_ok"] = len(reg) >= 200
+      summ = reg.summary()  # exercises availability without crashing
+      info["available_tools"] = summ["available"]
+      info["missing_tools"] = summ["missing"]
+
+      # builtin recon works (offline: just dispatches without raising)
+      ctx = BuiltinContext(target="example.com", host="example.com", base_url="https://example.com")
+      run_builtin("params", ctx)  # pure parse, no network
+      info["builtin_ok"] = True
+
+      info["wordlist_ok"] = len(safe_paths()) > 0
+      info["http_client"] = self._module_present("requests")
+      info["dns_resolver"] = self._module_present("dns") or self._module_present("socket")
+      info["profile_recon_only"] = "recon-only" in PROFILE_CAP
+      info["local_policy"] = detect_target_type("127.0.0.1") == "local"
+
+      results_dir = wth_home() / "wth-results"
+      try:
+        results_dir.mkdir(parents=True, exist_ok=True)
+        probe = results_dir / ".doctor_write_test"
+        probe.write_text("ok", encoding="utf-8")
+        probe.unlink(missing_ok=True)
+        info["results_writable"] = True
+      except OSError:
+        info["results_writable"] = False
+
+      # report writer is importable + callable
+      from wth_ai.recon import report as _rep  # noqa: F401
+      info["report_writer"] = True
+
+      if info["missing_tools"]:
+        info["warnings"].append(f"{info['missing_tools']} external/api tools not installed (optional)")
+    except Exception as exc:  # noqa: BLE001
+      info["error"] = str(exc)
+
+    info["ok"] = bool(
+      info["importable"] and info["registry_ok"] and info["builtin_ok"]
+      and info["results_writable"] and info["report_writer"]
+    )
+    return info
+
+  @staticmethod
+  def _module_present(name: str) -> bool:
+    import importlib.util
+    return importlib.util.find_spec(name) is not None
+
   def check_tools(self, category: str | None = None) -> dict[str, Any]:
     summary = self.registry.summary()
     missing = self.registry.missing_tools()
@@ -325,6 +398,25 @@ class ToolDoctor:
       + (f" — {jobs['error']}" if jobs.get('error') else f" (schema {'valid' if jobs.get('schema_ok') else 'INVALID'}, {jobs.get('total_jobs', 0)} jobs)"),
       f"- Queue dir: {'present' if jobs.get('queue_dir') else 'MISSING'}",
       f"- Worker status: {'readable' if jobs.get('worker_readable') else 'UNREADABLE'}",
+      "",
+    ]
+    rec = self.check_recon()
+    lines += [
+      "## Recon Platform (Fase 5)",
+      f"- Engine importable: {'yes' if rec['importable'] else 'NO'}",
+      f"- Tool registry: {rec['registry_count']} tools "
+      + ("(OK >=200)" if rec['registry_ok'] else "(TOO FEW — expected >=200)"),
+      f"- Available now: {rec['available_tools']} · missing (optional): {rec['missing_tools']}",
+      f"- Builtin recon: {'OK' if rec['builtin_ok'] else 'FAIL'}",
+      f"- HTTP client: {'OK' if rec['http_client'] else 'missing'} · "
+      + f"DNS resolver: {'OK' if rec['dns_resolver'] else 'missing'}",
+      f"- Wordlist: {'OK' if rec['wordlist_ok'] else 'missing'} · "
+      + f"Report writer: {'OK' if rec['report_writer'] else 'missing'}",
+      f"- Results dir writable: {'yes' if rec['results_writable'] else 'NO'}",
+      f"- Profile recon-only: {'valid' if rec['profile_recon_only'] else 'INVALID'} · "
+      + f"local policy: {'valid' if rec['local_policy'] else 'INVALID'}",
+      f"- Recon status: {'OK' if rec['ok'] else 'ISSUES'}"
+      + (f" — warnings: {'; '.join(rec['warnings'])}" if rec.get('warnings') else ""),
       "",
       f"## Tools: {ts['installed']}/{ts['total']} installed ({ts['missing']} missing)",
       "",
