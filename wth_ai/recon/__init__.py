@@ -1,9 +1,25 @@
+ cursor/fase5-recon-platform-93fe
+"""Recon integration — v4 phases + orchestrator + Fase 5 recon platform."""
 # wth_ai/recon/__init__.py
 """
 Recon Engine - Fase 5.1 Foundation
+main
 
 Extends existing recon components with structured Tool Registry + Planner.
 
+cursor/fase5-recon-platform-93fe
+# Fase 5 — real-time recon platform (lazy-friendly, additive)
+from wth_ai.recon.engine import ReconEngine
+from wth_ai.recon.planner import ReconPlanner
+from wth_ai.recon.registry import ReconToolRegistry
+
+__all__ = [
+    "ReconOrchestrator",
+    "AdaptiveReconGraph",
+    "ToolPipeline",
+    "ReconEngine",
+    "ReconPlanner",
+    "ReconToolRegistry",
 Follows AGENTS.md strictly:
 - CLI/library-first testing
 - All secrets via vault
@@ -31,4 +47,5 @@ __all__ = [
     "ReconOrchestrator",
     "AdaptiveReconGraph",
     "ToolPipeline",
+main
 ]

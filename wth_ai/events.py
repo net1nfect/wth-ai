@@ -30,6 +30,11 @@ EVENT_TYPES: tuple[str, ...] = (
     "finding.high_priority",
     "report.ready",
     "integration.error",
+    # Fase 5 — recon platform events
+    "recon.new_asset",
+    "recon.new_endpoint",
+    "recon.change_detected",
+    "recon.report_ready",
 )
 
 # Default severity per event type (info unless noted).
@@ -55,6 +60,8 @@ EVENT_NOTIFY_KEY: dict[str, str] = {
     "job.completed": "job_completed",
     "provider.failed": "provider_error",
     "integration.error": "integration_error",
+    "recon.change_detected": "high_priority_finding",
+    "recon.report_ready": "report_ready",
 }
 
 
