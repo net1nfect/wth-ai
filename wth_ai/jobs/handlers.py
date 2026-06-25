@@ -166,14 +166,28 @@ def handler_executor(job: Any, ctx: Any) -> dict[str, Any]:
         bus=bus, job_id=job.job_id, approve=approve,
     )
 
-    # 4) persist artifacts ---------------------------------------------------
+    # 4) response analysis + triage (Fase 6 Stage 7/8) -----------------------
+    ctx.progress(95, 100, "analysis & triage")
+    from wth_ai.analysis import analyze_exec_results
+    from wth_ai.triage import TriageEngine
+
+    all_findings = list(result["findings"]) + analyze_exec_results(result["results"])
+    triage = TriageEngine(scope_hosts=scope_hosts).triage(
+        all_findings, bus=bus, job_id=job.job_id)
+
+    # 5) persist artifacts ---------------------------------------------------
     with (out_dir / "exec_runs.jsonl").open("w", encoding="utf-8") as fh:
         for r in result["results"]:
             fh.write(json.dumps(r) + "\n")
     (out_dir / "exec_findings.json").write_text(
         json.dumps(result["findings"], indent=2), encoding="utf-8")
+    (out_dir / "triage_findings.json").write_text(
+        json.dumps(triage, indent=2), encoding="utf-8")
+    (out_dir / "evidence_bundles.json").write_text(
+        json.dumps([f["evidence_bundle"] for f in triage["findings"]], indent=2), encoding="utf-8")
 
     ctx.progress(100, 100, "execution complete")
+    ctx.log(f"triage: {triage['count']} findings ({triage['severity_counts']})")
     if bus is not None:
         try:
             bus.emit("report.ready", job_id=job.job_id, data={"target": target, "type": "executor"})
@@ -187,6 +201,8 @@ def handler_executor(job: Any, ctx: Any) -> dict[str, Any]:
         "output_dir": str(out_dir),
         "stats": result["stats"],
         "findings": len(result["findings"]),
+        "triaged": triage["count"],
+        "severity_counts": triage["severity_counts"],
         "recovery": result["recovery"],
     }
 
