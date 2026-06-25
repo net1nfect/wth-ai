@@ -881,3 +881,39 @@ Setelah selesai, laporkan:
 - struktur wth-results/<job_id>
 - acceptance criteria
 - hasil pytest
+
+## Cursor Cloud specific instructions
+
+Project layout: Python 3.10+ CLI (`requires-python >=3.10`; VM has 3.12). The active
+package is `wth_ai/` (entry point `wth` / `wth-ai` → `wth_ai.cli.entry:main`, which
+execs `wth-main.py`). `core/`, `learning/`, `exploitation/`, `agents/` are legacy
+Fase 1-4 top-level packages still exercised by some tests.
+
+Dependencies are refreshed by the startup update script (`pip install -r requirements.txt`,
+`pip install -e .[full]`, `pip install pytest`). `pydantic` is NOT in `requirements.txt`;
+it comes from `pip install -e .` (declared in `pyproject.toml`). The `[full]` extra adds
+`dnspython` + `beautifulsoup4` which the recon builtins use. On this VM pip needs
+`--break-system-packages` (externally-managed system Python); the update script includes it.
+
+Run / test / lint (all from repo root):
+- Generate tool manifest first (CI does this before tests): `python3 wth_ai/tools/generate_manifest.py` (writes `wth_ai/tools/manifest.yaml`, ~215 tools).
+- Tests: `python3 -m pytest tests/ -q`. Use `python3 -m pytest` (NOT the bare `pytest` console script) so the repo root is on `sys.path` — legacy tests (`test_integration.py`, `test_learning.py`, `test_agents.py`, `test_exploitation.py`) import top-level `core` / `learning` packages that are not exposed by the editable install.
+- Lint/type check: pyright (config in `pyrightconfig.json` + `[tool.pyright]`). Not installed by default.
+- App: `wth --version`, `wth doctor`, `wth recon tools list`, etc. First interactive run triggers a setup wizard; pass `--skip-setup` or set `WTH_SKIP_SETUP=1` for non-interactive use. LLM features need `OPENROUTER_API_KEY` (recon/doctor work offline without it).
+
+KNOWN BLOCKER (state as of merge `b9eda4b "Merge branch 'main' into cursor/fase5-recon-platform-93fe"`):
+the merge was committed with UNRESOLVED conflicts and AI placeholder text
+(`# ... (previous content remains the same ...)`) in these files:
+`wth_ai/tools/doctor.py`, `wth_ai/jobs/handlers.py`, `wth_ai/recon/__init__.py`,
+`wth_ai/recon/planner.py`, `wth_ai/recon/registry.py`, `wth_ai/recon/runner.py`.
+`wth_ai/tools/doctor.py` has a hard `IndentationError`, so importing `wth_ai.tools`
+fails — this breaks the entire `wth` CLI and aborts full `pytest` collection.
+The two merge parents are divergent Fase 5 implementations with INCOMPATIBLE recon APIs
+(`e7d404a` exposes `ReconEngine`/`ReconToolRegistry`; `63227f1` exposes
+`ToolRegistry`/`ToolSpec`, which is what the current test files import). Neither parent is
+independently runnable (`63227f1`'s `doctor.py` is itself a truncated placeholder).
+This is application/integration work (the Fase 5 task above), NOT environment setup, so it
+must be resolved in code before the app or full suite can run. Evidence that the toolchain
+itself is healthy: `python3 -m pytest tests/test_vault.py` passes fully, and
+`tests/test_vault.py tests/test_provider.py tests/test_integration_layer.py` = 43 passed /
+7 failed where all 7 failures are caused only by the broken `doctor.py`.
