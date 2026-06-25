@@ -724,6 +724,58 @@ def _run_recon_job(
         click.echo(f"  priority targets: {res.get('priority_targets', 0)}")
 
 
+def _run_exec_job(config_path: str, target: str, *, mode: str, profile: str,
+                  recon_job_id: str | None = None) -> None:
+    """Create a gated, non-destructive executor job and drain the worker."""
+    from wth_ai.jobs.worker import WorkerEngine
+    mgr = _job_manager(config_path)
+    meta = {"authorized": True, "profile": profile}
+    if recon_job_id:
+        meta["recon_job_id"] = recon_job_id
+    j = mgr.create_job("executor", target=target, profile=profile, created_by="cli",
+                       execution_mode=mode, metadata=meta)
+    if j.status == "failed":
+        click.echo(f"Rejected: {j.error} (job {j.job_id})")
+        return
+    eff_mode = (j.metadata or {}).get("execution_mode", mode)
+    approval = (j.metadata or {}).get("requires_approval", False)
+    click.echo(f"Created {j.job_id} (executor {target}, mode={eff_mode}, "
+               f"approval={approval}) — running...")
+    WorkerEngine(mgr).run(drain=True)
+    done = mgr.get_job(j.job_id)
+    if not done:
+        click.echo(f"{j.job_id}: not found after run")
+        return
+    res = done.result or {}
+    click.echo(f"Job {j.job_id} -> {done.status}")
+    if done.status == "waiting_approval":
+        click.echo(f"  approval required: approve with `wth approval approve <id>` then `wth worker once`")
+    if res:
+        click.echo(f"  output: {res.get('output_dir', '-')}")
+        click.echo(f"  stats: {json.dumps(res.get('stats', {}))}")
+        click.echo(f"  findings: {res.get('findings', 0)}")
+
+
+@cli.group("exec")
+def exec_group() -> None:
+    """Active (non-destructive, gated) execution engine (Fase 6)."""
+    from wth_ai.workspace import init_workspace
+    init_workspace()
+
+
+@exec_group.command("run")
+@click.argument("target")
+@click.option("--mode", default="safe-active",
+              type=click.Choice(["safe-active", "authenticated-safe", "approval-required"]),
+              help="Execution-mode envelope for active testing.")
+@click.option("--profile", default="recon-only")
+@click.option("--recon-job", "recon_job_id", default=None, help="Reuse a prior recon job's results.")
+@click.option("--config", "config_path", default="config/wth_config.yaml", show_default=True)
+def exec_run(target: str, mode: str, profile: str, recon_job_id: str | None, config_path: str) -> None:
+    """Run gated, non-destructive active testing on TARGET (via the job system)."""
+    _run_exec_job(config_path, target, mode=mode, profile=profile, recon_job_id=recon_job_id)
+
+
 @cli.group()
 def recon() -> None:
     """Real-time recon platform (Fase 5): plan, run, watch, diff, tools."""
