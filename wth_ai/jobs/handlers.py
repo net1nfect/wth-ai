@@ -69,6 +69,15 @@ def handler_recon(job: Any, ctx: Any) -> dict[str, Any]:
         baseline=baseline,
     )
 
+    # Unified multi-format report (Fase 6 Stage 9) alongside recon artifacts.
+    try:
+        from wth_ai.reporting import build_report
+        out = result.get("output_dir")
+        if out:
+            build_report(out, target=target)
+    except Exception as exc:  # noqa: BLE001 — reporting never breaks recon
+        ctx.log(f"report build skipped: {exc}")
+
     # Persist watch bookkeeping when this run is part of a watch.
     if realtime:
         try:
@@ -186,6 +195,13 @@ def handler_executor(job: Any, ctx: Any) -> dict[str, Any]:
     (out_dir / "evidence_bundles.json").write_text(
         json.dumps([f["evidence_bundle"] for f in triage["findings"]], indent=2), encoding="utf-8")
 
+    # unified report (Fase 6 Stage 9)
+    try:
+        from wth_ai.reporting import build_report
+        build_report(out_dir, target=target)
+    except Exception as exc:  # noqa: BLE001
+        ctx.log(f"report build skipped: {exc}")
+
     ctx.progress(100, 100, "execution complete")
     ctx.log(f"triage: {triage['count']} findings ({triage['severity_counts']})")
     if bus is not None:
@@ -208,9 +224,44 @@ def handler_executor(job: Any, ctx: Any) -> dict[str, Any]:
 
 
 def handler_report(job: Any, ctx: Any) -> dict[str, Any]:
-    ctx.log("report (mock)")
-    ctx.progress(100, 100, "done")
-    return {"type": "report", "path": None, "summary": "mock report"}
+    """Build a unified multi-format report from a source job's artifacts."""
+    from wth_ai.reporting import build_report
+
+    meta = getattr(job, "metadata", {}) or {}
+    manager = getattr(ctx, "_manager", None)
+    store = getattr(manager, "store", None)
+    source_job_id = meta.get("source_job_id")
+    target = job.target or ""
+
+    # resolve the source job dir (explicit, else most recent completed job for target)
+    if not source_job_id and store is not None:
+        try:
+            jobs = store.list_jobs(status="completed", limit=50)
+            for j in jobs:
+                if j.type in ("recon", "executor") and (not target or (j.target or "") == target):
+                    source_job_id = j.job_id
+                    break
+        except Exception:  # noqa: BLE001
+            source_job_id = None
+
+    if not source_job_id or store is None:
+        ctx.progress(100, 100, "no source job")
+        return {"type": "report", "status": "failed", "error": "no source job to report on"}
+
+    src_dir = Path(store.results_dir) / source_job_id
+    ctx.progress(40, 100, "building report")
+    formats = tuple(meta.get("formats") or ("json", "md", "html"))
+    written = build_report(src_dir, target=target, formats=formats)
+    ctx.progress(100, 100, "report ready")
+    bus = getattr(manager, "bus", None)
+    if bus is not None:
+        try:
+            bus.emit("report.ready", job_id=job.job_id,
+                     data={"target": target, "source": source_job_id})
+        except Exception:  # noqa: BLE001
+            pass
+    return {"type": "report", "status": "completed", "source_job_id": source_job_id,
+            "paths": written}
 
 
 def handler_provider_test(job: Any, ctx: Any) -> dict[str, Any]:
