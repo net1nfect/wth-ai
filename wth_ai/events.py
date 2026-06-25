@@ -35,6 +35,12 @@ EVENT_TYPES: tuple[str, ...] = (
     "recon.new_endpoint",
     "recon.change_detected",
     "recon.report_ready",
+    # Fase 6 — realtime recon/execution telemetry
+    "recon.layer_started",
+    "recon.step_completed",
+    "exec.task_started",
+    "exec.task_completed",
+    "exec.finding_candidate",
 )
 
 # Default severity per event type (info unless noted).
