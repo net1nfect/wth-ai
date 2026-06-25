@@ -207,6 +207,21 @@ class ReconEngine:
         normalizer.write_normalized(normalized_dir)
 
         priority = scoring.score(normalizer)
+
+        # 5b) LLM smart layer (Fase 6 P4) — augments ranking + grounded hypotheses.
+        #     Fully optional: disabled in test-mode / without a provider key.
+        hypotheses: list[dict[str, Any]] = []
+        try:
+            from wth_ai.recon.ai import ReconAI
+
+            ai = ReconAI()
+            if ai.enabled():
+                progress(93, 100, "ai augmentation")
+                priority, hypotheses = ai.augment(priority, normalizer.summary(), log=log)
+        except Exception as exc:  # noqa: BLE001 — AI never breaks recon
+            log(f"recon-ai skipped: {exc}")
+        (out_dir / "hypotheses.json").write_text(json.dumps(hypotheses, indent=2), encoding="utf-8")
+
         # full typed asset graph (13 node + 12 edge types) with risk propagation
         self._write_asset_graph(normalized_dir, normalizer, target, priority)
         scoring.write_priority(
