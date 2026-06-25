@@ -545,18 +545,32 @@ def job() -> None:
 @click.option("--profile", default=None)
 @click.option("--priority", default="normal", type=click.Choice(["low", "normal", "high"]))
 @click.option("--requires-approval", is_flag=True, help="Park the job for approval before running.")
+@click.option("--mode", default=None,
+              type=click.Choice(["passive-only", "safe-active", "authenticated-safe",
+                                 "approval-required", "report-only", "recovery"]),
+              help="Execution-mode envelope (default: derived from profile).")
+@click.option("--objective", "objectives", multiple=True, help="Engagement objective (repeatable).")
+@click.option("--budget", "request_budget", default=None, type=int, help="Max request budget.")
 @click.option("--config", "config_path", default="config/wth_config.yaml", show_default=True)
-def job_create(job_type: str, target, profile, priority: str, requires_approval: bool, config_path: str) -> None:
+def job_create(job_type: str, target, profile, priority: str, requires_approval: bool,
+               mode: str | None, objectives, request_budget, config_path: str) -> None:
     """Create a JOB_TYPE job (recon|executor|report|provider_test|custom)."""
     mgr = _job_manager(config_path)
     j = mgr.create_job(
         job_type, target=target, profile=profile, priority=priority,
         requires_approval=requires_approval, created_by="cli",
+        execution_mode=mode, objectives=list(objectives) or None,
+        request_budget=request_budget,
     )
     if j.status == "failed":
         click.echo(f"Rejected: {j.error} (job {j.job_id})")
     else:
-        click.echo(f"Created {j.job_id} type={j.type} status={j.status}")
+        meta = j.metadata or {}
+        click.echo(
+            f"Created {j.job_id} type={j.type} status={j.status} "
+            f"mode={meta.get('execution_mode')} env={meta.get('environment')} "
+            f"approval={meta.get('requires_approval', False)}"
+        )
 
 
 @job.command("list")
@@ -676,18 +690,27 @@ def _recon_registry():
     return ReconToolRegistry()
 
 
-def _run_recon_job(config_path: str, target: str, profile: str, *, realtime: bool = False) -> None:
+def _run_recon_job(
+    config_path: str, target: str, profile: str, *,
+    realtime: bool = False, mode: str | None = None,
+) -> None:
     """Create a recon job and drain the worker (never bypasses the job system)."""
     from wth_ai.jobs.worker import WorkerEngine
     mgr = _job_manager(config_path)
     j = mgr.create_job(
         "recon", target=target, profile=profile, created_by="cli",
+        execution_mode=mode,
         metadata={"authorized": True, "realtime": realtime, "profile": profile},
     )
     if j.status == "failed":
         click.echo(f"Rejected: {j.error} (job {j.job_id})")
         return
-    click.echo(f"Created {j.job_id} (recon {target}, profile={profile}) — running...")
+    eff_mode = (j.metadata or {}).get("execution_mode", "safe-active")
+    eff_env = (j.metadata or {}).get("environment", "unknown")
+    click.echo(
+        f"Created {j.job_id} (recon {target}, profile={profile}, "
+        f"mode={eff_mode}, env={eff_env}) — running..."
+    )
     WorkerEngine(mgr).run(drain=True)
     done = mgr.get_job(j.job_id)
     if not done:
@@ -712,10 +735,14 @@ def recon() -> None:
 @click.argument("target")
 @click.option("--profile", default="recon-only",
               type=click.Choice(["budget", "recon-only", "default", "high-quality", "local"]))
+@click.option("--mode", default=None,
+              type=click.Choice(["passive-only", "safe-active", "authenticated-safe",
+                                 "approval-required", "report-only", "recovery"]),
+              help="Execution-mode envelope (default: derived from profile).")
 @click.option("--config", "config_path", default="config/wth_config.yaml", show_default=True)
-def recon_run(target: str, profile: str, config_path: str) -> None:
+def recon_run(target: str, profile: str, mode: str | None, config_path: str) -> None:
     """Run authorized, non-destructive recon on TARGET (via the job system)."""
-    _run_recon_job(config_path, target, profile)
+    _run_recon_job(config_path, target, profile, mode=mode)
 
 
 @recon.command("quick")

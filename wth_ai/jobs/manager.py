@@ -63,16 +63,36 @@ class JobManager:
         requires_approval: bool = False,
         forbidden: tuple[str, ...] = (),
         metadata: dict[str, Any] | None = None,
+        execution_mode: str | None = None,
+        environment: str | None = None,
+        objectives: list[str] | None = None,
+        request_budget: int | None = None,
+        time_window: str | None = None,
+        allowlist: tuple[str, ...] | list[str] | None = None,
+        denylist: tuple[str, ...] | list[str] | None = None,
     ) -> Job:
-        allowed, reason = self.policy.evaluate(type=type, target=target, forbidden=forbidden)
+        decision = self.policy.admit(
+            type=type, target=target, profile=profile, execution_mode=execution_mode,
+            environment=environment, forbidden=forbidden,
+            allowlist=allowlist, denylist=denylist,
+        )
         meta = dict(metadata or {})
-        if requires_approval:
+        # Intake fields (Fase 6 Stage 0/1) — additive, audited.
+        meta.update(decision.to_metadata())
+        if objectives:
+            meta["objectives"] = list(objectives)
+        if request_budget is not None:
+            meta["request_budget"] = int(request_budget)
+        if time_window:
+            meta["time_window"] = time_window
+        if requires_approval or decision.requires_approval:
             meta["requires_approval"] = True
         job = Job(
             type=type, target=target, profile=profile, priority=priority,
             created_by=created_by, metadata=meta,
         )
-        if not allowed:
+        if not decision.allowed:
+            reason = decision.reason
             job.status = "failed"
             job.error = f"policy: {reason}"
             self.store.create_job(job)
@@ -82,9 +102,21 @@ class JobManager:
                           data={"reason": reason, "stage": "policy"})
             return job
         self.store.create_job(job)
-        self.store.append_log(job.job_id, f"created type={type} target={target} priority={priority}")
+        self.store.append_log(
+            job.job_id,
+            f"created type={type} target={target} priority={priority} "
+            f"mode={meta.get('execution_mode')} env={meta.get('environment')} "
+            f"sensitivity={meta.get('sensitivity')}",
+        )
+        self._audit(
+            f"job_admit job={job.job_id} type={type} target={target} "
+            f"mode={meta.get('execution_mode')} env={meta.get('environment')} "
+            f"approval={meta.get('requires_approval', False)}"
+        )
         self.bus.emit("job.created", source=created_by, job_id=job.job_id,
-                      data={"type": type, "target": target})
+                      data={"type": type, "target": target,
+                            "mode": meta.get("execution_mode"),
+                            "environment": meta.get("environment")})
         return job
 
     # --- queries ---
