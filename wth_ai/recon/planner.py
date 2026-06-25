@@ -1,4 +1,3 @@
-cursor/fase5-recon-platform-93fe
 """Recon tool planner: profile-aware, safe-by-default tool selection.
 
 The planner never selects all 200+ tools. It picks a profile-sized, safe subset
@@ -9,7 +8,7 @@ disabled tools are excluded with explicit reasons. Unavailable tools are still
 
 from __future__ import annotations
 
-import ipa<<<<<<< ddress
+import ipaddress
 import re
 from urllib.parse import urlparse
 
@@ -56,37 +55,10 @@ def detect_target_type(target: str) -> str:
 class ReconPlanner:
     def __init__(self, registry: ReconToolRegistry | None = None) -> None:
         self.registry = registry or ReconToolRegistry()
-=======
-# wth_ai/recon/planner.py
-"""
-Recon Planner (Fase 5.1)
-
-Simple but effective planner that selects tools based on:
-- Profile (budget, default, recon-only, high-quality)
-- Risk level
-- Permission requirements
-- Enabled status
-
-This is the foundation. Will be expanded in later sub-phases.
-"""
-
-from typing import List, Dict
-
-from .registry import ToolRegistry
-from .models import ToolSpec, ReconPlan
-
-
-class ReconPlanner:
-    """Selects appropriate tools for a recon job."""
-
-    def __init__(self, registry: ToolRegistry):
-        self.registry = registry
- main
 
     def plan(
         self,
         target: str,
- cursor/fase5-recon-platform-93fe
         *,
         profile: str = "recon-only",
         realtime: bool = False,
@@ -157,49 +129,3 @@ class ReconPlanner:
         if spec.execution_mode == "api" and not self.registry.is_available(name):
             return False, "api key missing"
         return True, "ok"
-
-        profile: str = "default",
-        max_risk: str = "safe",
-        max_tools: int = 40,
-    ) -> ReconPlan:
-        """
-        Generate a recon plan.
-
-        Args:
-            target: The target domain/IP/URL
-            profile: budget | default | recon-only | high-quality | local
-            max_risk: safe | medium | high
-            max_tools: hard limit on number of tools
-        """
-        all_tools = self.registry.list_tools(enabled_only=True)
-
-        # Filter by risk
-        filtered = self.registry.get_tools_by_risk(max_risk)
-
-        # Profile-based selection (simple rules for Fase 5.1)
-        if profile == "budget":
-            filtered = [t for t in filtered if t.risk_level == "safe"][:15]
-        elif profile == "recon-only":
-            filtered = filtered[:35]
-        elif profile == "high-quality":
-            filtered = filtered[:60]
-        else:  # default
-            filtered = filtered[:30]
-
-        # Apply hard limit
-        selected = filtered[:max_tools]
-
-        skipped = []
-        for tool in all_tools:
-            if tool not in selected:
-                reason = "risk_too_high" if tool.risk_level == "high" else "profile_limit"
-                skipped.append({"name": tool.name, "reason": reason})
-
-        return ReconPlan(
-            target=target,
-            profile=profile,
-            selected_tools=selected,
-            skipped_tools=skipped,
-            total_tools=len(all_tools),
-        )
- main
