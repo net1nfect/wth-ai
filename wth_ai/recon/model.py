@@ -453,6 +453,16 @@ class PriorityTarget:
     asset: str
     score: int
     reasons: list[str] = field(default_factory=list)
+    severity: str = "info"   # critical|high|medium|low|info
+    confidence: float = 0.5
+    signals: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
-        return {"asset": self.asset, "score": self.score, "reasons": self.reasons}
+        return {
+            "asset": self.asset,
+            "score": self.score,
+            "severity": self.severity,
+            "confidence": round(self.confidence, 3),
+            "reasons": self.reasons,
+            "signals": self.signals or self.reasons,
+        }

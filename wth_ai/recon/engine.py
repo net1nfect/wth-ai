@@ -205,12 +205,14 @@ class ReconEngine:
         self._emit_layer(bus, job_id, "layer5", "Intelligence correlation")
         progress(92, 100, "normalize/scoring/diff")
         normalizer.write_normalized(normalized_dir)
-        self._write_asset_graph(normalized_dir, normalizer)
 
         priority = scoring.score(normalizer)
+        # full typed asset graph (13 node + 12 edge types) with risk propagation
+        self._write_asset_graph(normalized_dir, normalizer, target, priority)
         scoring.write_priority(
             priority, normalized_dir / "priority_targets.json", out_dir / "priority_targets.csv"
         )
+        scoring.write_heatmap(priority, normalized_dir / "risk_heatmap.json")
         # also expose at job root for convenience
         (out_dir / "priority_targets.json").write_text(
             json.dumps([t.to_dict() for t in priority], indent=2), encoding="utf-8"
@@ -316,19 +318,14 @@ class ReconEngine:
             pass
         return run
 
-    def _write_asset_graph(self, normalized_dir: Path, normalizer: ReconNormalizer) -> None:
-        nodes: list[dict[str, Any]] = []
-        edges: list[dict[str, Any]] = []
-        for sub in normalizer.subdomains.values():
-            nodes.append({"id": sub.host, "type": "host"})
-        for probe in normalizer.http_probes.values():
-            nodes.append({"id": probe.url, "type": "url", "status": probe.status})
-        for ep in normalizer.endpoints.values():
-            nodes.append({"id": ep.url, "type": "endpoint", "kind": ep.kind})
-        for p in normalizer.params.values():
-            nodes.append({"id": f"{p.url}?{p.name}", "type": "parameter", "interest": p.interest})
-            edges.append({"from": p.url, "to": f"{p.url}?{p.name}", "type": "param_of"})
-        graph = {"nodes": nodes, "edges": edges, "node_count": len(nodes), "edge_count": len(edges)}
+    def _write_asset_graph(
+        self, normalized_dir: Path, normalizer: ReconNormalizer,
+        target: str = "", priority: list[Any] | None = None,
+    ) -> None:
+        from wth_ai.recon.asset_graph import build_graph
+
+        graph = build_graph(normalizer, target=target, priorities=priority or [])
+        normalized_dir.mkdir(parents=True, exist_ok=True)
         (normalized_dir / "asset_graph.json").write_text(json.dumps(graph, indent=2), encoding="utf-8")
 
     def _emit_events(
