@@ -777,6 +777,74 @@ def exec_run(target: str, mode: str, profile: str, recon_job_id: str | None, con
 
 
 @cli.group()
+def report() -> None:
+    """Unified multi-format reporting (Fase 6)."""
+    from wth_ai.workspace import init_workspace
+    init_workspace()
+
+
+@report.command("build")
+@click.argument("job_id")
+@click.option("--pdf", is_flag=True, help="Also export PDF (requires weasyprint).")
+@click.option("--config", "config_path", default="config/wth_config.yaml", show_default=True)
+def report_build(job_id: str, pdf: bool, config_path: str) -> None:
+    """Build JSON/Markdown/HTML (and optional PDF) report for JOB_ID."""
+    from wth_ai.jobs.manager import JobManager
+    from wth_ai.reporting import build_report
+    mgr = JobManager(_load_config(config_path))
+    src = Path(mgr.store.results_dir) / job_id
+    if not src.exists():
+        click.echo(f"{job_id}: no results dir")
+        return
+    formats = ("json", "md", "html", "pdf") if pdf else ("json", "md", "html")
+    written = build_report(src, formats=formats)
+    for fmt, path in written.items():
+        click.echo(f"  {fmt}: {path}")
+    if pdf and "pdf" not in written:
+        click.echo("  pdf: skipped (install weasyprint: pip install 'wth-ai[report]')")
+
+
+@cli.group()
+def continuous() -> None:
+    """Continuous operation: change detection, delta reports, retests (Fase 6)."""
+    from wth_ai.workspace import init_workspace
+    init_workspace()
+
+
+@continuous.command("changes")
+@click.argument("target")
+@click.option("--config", "config_path", default="config/wth_config.yaml", show_default=True)
+def continuous_changes(target: str, config_path: str) -> None:
+    """Diff the two most recent recon runs for TARGET."""
+    from wth_ai.continuous import ContinuousMonitor
+    from wth_ai.jobs.manager import JobManager
+    out = ContinuousMonitor(JobManager(_load_config(config_path))).changes(target)
+    if out.get("markdown"):
+        click.echo(out["markdown"])
+    else:
+        click.echo(f"changed={out.get('changed')} ({out.get('reason', '')})")
+
+
+@continuous.command("retest")
+@click.argument("job_id")
+@click.option("--config", "config_path", default="config/wth_config.yaml", show_default=True)
+def continuous_retest(job_id: str, config_path: str) -> None:
+    """Schedule executor retest jobs from JOB_ID's triage findings."""
+    from wth_ai.continuous import ContinuousMonitor
+    from wth_ai.jobs.manager import JobManager
+    mgr = JobManager(_load_config(config_path))
+    tri_path = Path(mgr.store.results_dir) / job_id / "triage_findings.json"
+    if not tri_path.exists():
+        click.echo(f"{job_id}: no triage_findings.json")
+        return
+    findings = json.loads(tri_path.read_text(encoding="utf-8")).get("findings", [])
+    job = mgr.get_job(job_id)
+    target = job.target if job else ""
+    ids = ContinuousMonitor(mgr).schedule_retests(target, findings)
+    click.echo(f"scheduled {len(ids)} retest job(s): {', '.join(ids) or '(none)'}")
+
+
+@cli.group()
 def recon() -> None:
     """Real-time recon platform (Fase 5): plan, run, watch, diff, tools."""
     from wth_ai.workspace import init_workspace
