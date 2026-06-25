@@ -891,29 +891,53 @@ Fase 1-4 top-level packages still exercised by some tests.
 
 Dependencies are refreshed by the startup update script (`pip install -r requirements.txt`,
 `pip install -e .[full]`, `pip install pytest`). `pydantic` is NOT in `requirements.txt`;
-it comes from `pip install -e .` (declared in `pyproject.toml`). The `[full]` extra adds
-`dnspython` + `beautifulsoup4` which the recon builtins use. On this VM pip needs
-`--break-system-packages` (externally-managed system Python); the update script includes it.
+it comes from `pip install -e .` (declared in `pyproject.toml`). `requirements.txt` now
+includes `textual` (TUI) and `rich>=13.7`. The `[full]` extra adds `dnspython` +
+`beautifulsoup4` (recon builtins); `[report]` adds `weasyprint` (optional PDF export, gracefully
+skipped if absent); `[tui]` adds `textual`. On this VM pip needs `--break-system-packages`
+(externally-managed system Python); the update script includes it.
 
 Run / test / lint (all from repo root):
 - Generate tool manifest first (CI does this before tests): `python3 wth_ai/tools/generate_manifest.py` (writes `wth_ai/tools/manifest.yaml`, ~215 tools).
 - Tests: `python3 -m pytest tests/ -q`. Use `python3 -m pytest` (NOT the bare `pytest` console script) so the repo root is on `sys.path` — legacy tests (`test_integration.py`, `test_learning.py`, `test_agents.py`, `test_exploitation.py`) import top-level `core` / `learning` packages that are not exposed by the editable install.
 - Lint/type check: pyright (config in `pyrightconfig.json` + `[tool.pyright]`). Not installed by default.
-- App: `wth --version`, `wth doctor`, `wth recon tools list`, etc. First interactive run triggers a setup wizard; pass `--skip-setup` or set `WTH_SKIP_SETUP=1` for non-interactive use. LLM features need `OPENROUTER_API_KEY` (recon/doctor work offline without it).
+- App: `wth --version`, `wth doctor`, `wth recon tools list`, etc. First interactive run triggers a setup wizard; pass `--skip-setup` or set `WTH_SKIP_SETUP=1` for non-interactive use.
 
-KNOWN BLOCKER (state as of merge `b9eda4b "Merge branch 'main' into cursor/fase5-recon-platform-93fe"`):
-the merge was committed with UNRESOLVED conflicts and AI placeholder text
-(`# ... (previous content remains the same ...)`) in these files:
-`wth_ai/tools/doctor.py`, `wth_ai/jobs/handlers.py`, `wth_ai/recon/__init__.py`,
-`wth_ai/recon/planner.py`, `wth_ai/recon/registry.py`, `wth_ai/recon/runner.py`.
-`wth_ai/tools/doctor.py` has a hard `IndentationError`, so importing `wth_ai.tools`
-fails — this breaks the entire `wth` CLI and aborts full `pytest` collection.
-The two merge parents are divergent Fase 5 implementations with INCOMPATIBLE recon APIs
-(`e7d404a` exposes `ReconEngine`/`ReconToolRegistry`; `63227f1` exposes
-`ToolRegistry`/`ToolSpec`, which is what the current test files import). Neither parent is
-independently runnable (`63227f1`'s `doctor.py` is itself a truncated placeholder).
-This is application/integration work (the Fase 5 task above), NOT environment setup, so it
-must be resolved in code before the app or full suite can run. Evidence that the toolchain
-itself is healthy: `python3 -m pytest tests/test_vault.py` passes fully, and
-`tests/test_vault.py tests/test_provider.py tests/test_integration_layer.py` = 43 passed /
-7 failed where all 7 failures are caused only by the broken `doctor.py`.
+Fase 6 platform (full realtime AI bug-hunting; supersedes the Fase 5 "recon-only" limit
+with an "active-but-gated" model — still authorized-only, non-destructive canaries, approval
+gates, rate-aware, secret masking):
+- Execution modes (`wth_ai/policy/execution_mode.py`): `passive-only | safe-active |
+  authenticated-safe | approval-required | report-only | recovery`. Job admission
+  (`wth_ai/jobs/policy.py` `PolicyEngine.admit`) tags env/sensitivity and may require approval
+  (prod + high-sensitivity, or `approval-required` mode). `executor` jobs are rejected in
+  passive/report/recovery modes.
+- Recon (`wth recon run/quick/plan/watch/diff/changes`): 5-layer scheduler + deep steps in
+  `wth_ai/recon/deepscan.py`; typed asset graph in `wth_ai/recon/asset_graph.py`; 12-signal
+  risk engine + heatmap in `wth_ai/recon/scoring.py`.
+- LLM smart layer (`wth_ai/recon/ai.py`): augments ranking + emits grounded `HIPOTESIS`
+  hypotheses. Enabled only outside `WTH_TEST_MODE` when an OpenRouter key is present; it
+  bridges a vault-stored `openrouter_api_key` into `OPENROUTER_API_KEY` env automatically.
+  Set the key via `wth vault set openrouter_api_key <key>` or the Secrets panel
+  (`OPENROUTER_API_KEY`). Default model falls back to the planner model. Disable with
+  `WTH_RECON_AI=0`.
+- Active execution (`wth exec run <target> --mode ...`): gated, non-destructive engine in
+  `wth_ai/executor/engine.py` (GET/HEAD only, inert canaries, per-domain rate limit,
+  per-endpoint budget, retry/backoff, recovery). Reuses a prior recon via
+  `metadata.recon_job_id` else runs a recon-only pass first.
+- Analysis/triage (`wth_ai/analysis`, `wth_ai/evidence/bundle.py`, `wth_ai/triage`): SHA-256
+  evidence bundles + deduped/scope-verified findings; emits `finding.high_priority`.
+- Reporting (`wth report build <job_id> [--pdf]`): JSON/MD/HTML auto-built on every recon/exec
+  job; PDF needs `[report]` extra. Continuous loop: `wth continuous changes <target>` /
+  `wth continuous retest <job_id>`.
+- TUI (`wth tui`, or `wth tui --snapshot` for headless/CI/screenshots): Textual cyberpunk
+  dashboard; the snapshot path uses Rich and works without a TTY.
+- Plugins (`wth_ai/plugins`): auto-discovered from `$WTH_HOME/plugins/*.py`. Error/recovery
+  taxonomy in `wth_ai/recovery`.
+
+Non-obvious caveats:
+- The job worker's per-job timeout is ~120s. Heavy profiles (`default`/`high-quality`) on slow
+  targets can exceed it; prefer `recon-only` for quick demos or raise the worker timeout.
+- Screenshots (`wth_ai/analysis/response_engine.capture_screenshot`) are best-effort via
+  `nodriver` and disabled unless `WTH_SCREENSHOTS=1`.
+- Live recon/exec on slow third-party targets may hit `web.archive.org`/`crt.sh`; these deep
+  steps degrade gracefully on network errors.

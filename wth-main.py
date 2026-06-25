@@ -68,6 +68,25 @@ def doctor(config_path: str) -> None:
     click.echo(ToolDoctor(_load_config(config_path)).full_report())
 
 
+@cli.command()
+@click.option("--snapshot", is_flag=True, help="Print a one-shot dashboard (headless) instead of the live TUI.")
+@click.option("--config", "config_path", default="config/wth_config.yaml", show_default=True)
+def tui(snapshot: bool, config_path: str) -> None:
+    """Launch the futuristic realtime recon dashboard (Fase 6)."""
+    from wth_ai.workspace import init_workspace
+    init_workspace()
+    if snapshot:
+        from rich.console import Console
+        from wth_ai.cli.tui import DashboardData, render_snapshot
+        Console().print(render_snapshot(DashboardData(_job_manager(config_path))))
+        return
+    try:
+        from wth_ai.cli.tui import run_tui
+        run_tui()
+    except Exception as exc:  # noqa: BLE001
+        click.echo(f"TUI unavailable ({exc}). Try `wth tui --snapshot`.")
+
+
 @cli.group()
 def vault() -> None:
     """Manage the encrypted secret vault (~/.wth-ai/vault.enc)."""
@@ -531,7 +550,20 @@ def _job_manager(config_path: str):
     from wth_ai.jobs.manager import JobManager
     from wth_ai.workspace import init_workspace
     init_workspace()
-    return JobManager(_load_config(config_path))
+    mgr = JobManager(_load_config(config_path))
+    # Fase 6: wire the event bus to integrations + discover plugins at startup so
+    # Telegram/Discord notifications and plugins are active for CLI job flows.
+    try:
+        from wth_ai.integrations.app import build_integration_runtime
+        build_integration_runtime(mgr.config, bus=mgr.bus)
+    except Exception:  # noqa: BLE001 — integrations are optional
+        pass
+    try:
+        from wth_ai.plugins import get_plugin_registry
+        get_plugin_registry().discover()
+    except Exception:  # noqa: BLE001
+        pass
+    return mgr
 
 
 @cli.group()
