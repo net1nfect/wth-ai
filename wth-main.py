@@ -68,6 +68,25 @@ def doctor(config_path: str) -> None:
     click.echo(ToolDoctor(_load_config(config_path)).full_report())
 
 
+@cli.command()
+@click.option("--snapshot", is_flag=True, help="Print a one-shot dashboard (headless) instead of the live TUI.")
+@click.option("--config", "config_path", default="config/wth_config.yaml", show_default=True)
+def tui(snapshot: bool, config_path: str) -> None:
+    """Launch the futuristic realtime recon dashboard (Fase 6)."""
+    from wth_ai.workspace import init_workspace
+    init_workspace()
+    if snapshot:
+        from rich.console import Console
+        from wth_ai.cli.tui import DashboardData, render_snapshot
+        Console().print(render_snapshot(DashboardData(_job_manager(config_path))))
+        return
+    try:
+        from wth_ai.cli.tui import run_tui
+        run_tui()
+    except Exception as exc:  # noqa: BLE001
+        click.echo(f"TUI unavailable ({exc}). Try `wth tui --snapshot`.")
+
+
 @cli.group()
 def vault() -> None:
     """Manage the encrypted secret vault (~/.wth-ai/vault.enc)."""
@@ -531,7 +550,20 @@ def _job_manager(config_path: str):
     from wth_ai.jobs.manager import JobManager
     from wth_ai.workspace import init_workspace
     init_workspace()
-    return JobManager(_load_config(config_path))
+    mgr = JobManager(_load_config(config_path))
+    # Fase 6: wire the event bus to integrations + discover plugins at startup so
+    # Telegram/Discord notifications and plugins are active for CLI job flows.
+    try:
+        from wth_ai.integrations.app import build_integration_runtime
+        build_integration_runtime(mgr.config, bus=mgr.bus)
+    except Exception:  # noqa: BLE001 — integrations are optional
+        pass
+    try:
+        from wth_ai.plugins import get_plugin_registry
+        get_plugin_registry().discover()
+    except Exception:  # noqa: BLE001
+        pass
+    return mgr
 
 
 @cli.group()
@@ -545,18 +577,32 @@ def job() -> None:
 @click.option("--profile", default=None)
 @click.option("--priority", default="normal", type=click.Choice(["low", "normal", "high"]))
 @click.option("--requires-approval", is_flag=True, help="Park the job for approval before running.")
+@click.option("--mode", default=None,
+              type=click.Choice(["passive-only", "safe-active", "authenticated-safe",
+                                 "approval-required", "report-only", "recovery"]),
+              help="Execution-mode envelope (default: derived from profile).")
+@click.option("--objective", "objectives", multiple=True, help="Engagement objective (repeatable).")
+@click.option("--budget", "request_budget", default=None, type=int, help="Max request budget.")
 @click.option("--config", "config_path", default="config/wth_config.yaml", show_default=True)
-def job_create(job_type: str, target, profile, priority: str, requires_approval: bool, config_path: str) -> None:
+def job_create(job_type: str, target, profile, priority: str, requires_approval: bool,
+               mode: str | None, objectives, request_budget, config_path: str) -> None:
     """Create a JOB_TYPE job (recon|executor|report|provider_test|custom)."""
     mgr = _job_manager(config_path)
     j = mgr.create_job(
         job_type, target=target, profile=profile, priority=priority,
         requires_approval=requires_approval, created_by="cli",
+        execution_mode=mode, objectives=list(objectives) or None,
+        request_budget=request_budget,
     )
     if j.status == "failed":
         click.echo(f"Rejected: {j.error} (job {j.job_id})")
     else:
-        click.echo(f"Created {j.job_id} type={j.type} status={j.status}")
+        meta = j.metadata or {}
+        click.echo(
+            f"Created {j.job_id} type={j.type} status={j.status} "
+            f"mode={meta.get('execution_mode')} env={meta.get('environment')} "
+            f"approval={meta.get('requires_approval', False)}"
+        )
 
 
 @job.command("list")
@@ -676,18 +722,27 @@ def _recon_registry():
     return ReconToolRegistry()
 
 
-def _run_recon_job(config_path: str, target: str, profile: str, *, realtime: bool = False) -> None:
+def _run_recon_job(
+    config_path: str, target: str, profile: str, *,
+    realtime: bool = False, mode: str | None = None,
+) -> None:
     """Create a recon job and drain the worker (never bypasses the job system)."""
     from wth_ai.jobs.worker import WorkerEngine
     mgr = _job_manager(config_path)
     j = mgr.create_job(
         "recon", target=target, profile=profile, created_by="cli",
+        execution_mode=mode,
         metadata={"authorized": True, "realtime": realtime, "profile": profile},
     )
     if j.status == "failed":
         click.echo(f"Rejected: {j.error} (job {j.job_id})")
         return
-    click.echo(f"Created {j.job_id} (recon {target}, profile={profile}) — running...")
+    eff_mode = (j.metadata or {}).get("execution_mode", "safe-active")
+    eff_env = (j.metadata or {}).get("environment", "unknown")
+    click.echo(
+        f"Created {j.job_id} (recon {target}, profile={profile}, "
+        f"mode={eff_mode}, env={eff_env}) — running..."
+    )
     WorkerEngine(mgr).run(drain=True)
     done = mgr.get_job(j.job_id)
     if not done:
@@ -701,6 +756,126 @@ def _run_recon_job(config_path: str, target: str, profile: str, *, realtime: boo
         click.echo(f"  priority targets: {res.get('priority_targets', 0)}")
 
 
+def _run_exec_job(config_path: str, target: str, *, mode: str, profile: str,
+                  recon_job_id: str | None = None) -> None:
+    """Create a gated, non-destructive executor job and drain the worker."""
+    from wth_ai.jobs.worker import WorkerEngine
+    mgr = _job_manager(config_path)
+    meta = {"authorized": True, "profile": profile}
+    if recon_job_id:
+        meta["recon_job_id"] = recon_job_id
+    j = mgr.create_job("executor", target=target, profile=profile, created_by="cli",
+                       execution_mode=mode, metadata=meta)
+    if j.status == "failed":
+        click.echo(f"Rejected: {j.error} (job {j.job_id})")
+        return
+    eff_mode = (j.metadata or {}).get("execution_mode", mode)
+    approval = (j.metadata or {}).get("requires_approval", False)
+    click.echo(f"Created {j.job_id} (executor {target}, mode={eff_mode}, "
+               f"approval={approval}) — running...")
+    WorkerEngine(mgr).run(drain=True)
+    done = mgr.get_job(j.job_id)
+    if not done:
+        click.echo(f"{j.job_id}: not found after run")
+        return
+    res = done.result or {}
+    click.echo(f"Job {j.job_id} -> {done.status}")
+    if done.status == "waiting_approval":
+        click.echo(f"  approval required: approve with `wth approval approve <id>` then `wth worker once`")
+    if res:
+        click.echo(f"  output: {res.get('output_dir', '-')}")
+        click.echo(f"  stats: {json.dumps(res.get('stats', {}))}")
+        click.echo(f"  findings: {res.get('findings', 0)}")
+
+
+@cli.group("exec")
+def exec_group() -> None:
+    """Active (non-destructive, gated) execution engine (Fase 6)."""
+    from wth_ai.workspace import init_workspace
+    init_workspace()
+
+
+@exec_group.command("run")
+@click.argument("target")
+@click.option("--mode", default="safe-active",
+              type=click.Choice(["safe-active", "authenticated-safe", "approval-required"]),
+              help="Execution-mode envelope for active testing.")
+@click.option("--profile", default="recon-only")
+@click.option("--recon-job", "recon_job_id", default=None, help="Reuse a prior recon job's results.")
+@click.option("--config", "config_path", default="config/wth_config.yaml", show_default=True)
+def exec_run(target: str, mode: str, profile: str, recon_job_id: str | None, config_path: str) -> None:
+    """Run gated, non-destructive active testing on TARGET (via the job system)."""
+    _run_exec_job(config_path, target, mode=mode, profile=profile, recon_job_id=recon_job_id)
+
+
+@cli.group()
+def report() -> None:
+    """Unified multi-format reporting (Fase 6)."""
+    from wth_ai.workspace import init_workspace
+    init_workspace()
+
+
+@report.command("build")
+@click.argument("job_id")
+@click.option("--pdf", is_flag=True, help="Also export PDF (requires weasyprint).")
+@click.option("--config", "config_path", default="config/wth_config.yaml", show_default=True)
+def report_build(job_id: str, pdf: bool, config_path: str) -> None:
+    """Build JSON/Markdown/HTML (and optional PDF) report for JOB_ID."""
+    from wth_ai.jobs.manager import JobManager
+    from wth_ai.reporting import build_report
+    mgr = JobManager(_load_config(config_path))
+    src = Path(mgr.store.results_dir) / job_id
+    if not src.exists():
+        click.echo(f"{job_id}: no results dir")
+        return
+    formats = ("json", "md", "html", "pdf") if pdf else ("json", "md", "html")
+    written = build_report(src, formats=formats)
+    for fmt, path in written.items():
+        click.echo(f"  {fmt}: {path}")
+    if pdf and "pdf" not in written:
+        click.echo("  pdf: skipped (install weasyprint: pip install 'wth-ai[report]')")
+
+
+@cli.group()
+def continuous() -> None:
+    """Continuous operation: change detection, delta reports, retests (Fase 6)."""
+    from wth_ai.workspace import init_workspace
+    init_workspace()
+
+
+@continuous.command("changes")
+@click.argument("target")
+@click.option("--config", "config_path", default="config/wth_config.yaml", show_default=True)
+def continuous_changes(target: str, config_path: str) -> None:
+    """Diff the two most recent recon runs for TARGET."""
+    from wth_ai.continuous import ContinuousMonitor
+    from wth_ai.jobs.manager import JobManager
+    out = ContinuousMonitor(JobManager(_load_config(config_path))).changes(target)
+    if out.get("markdown"):
+        click.echo(out["markdown"])
+    else:
+        click.echo(f"changed={out.get('changed')} ({out.get('reason', '')})")
+
+
+@continuous.command("retest")
+@click.argument("job_id")
+@click.option("--config", "config_path", default="config/wth_config.yaml", show_default=True)
+def continuous_retest(job_id: str, config_path: str) -> None:
+    """Schedule executor retest jobs from JOB_ID's triage findings."""
+    from wth_ai.continuous import ContinuousMonitor
+    from wth_ai.jobs.manager import JobManager
+    mgr = JobManager(_load_config(config_path))
+    tri_path = Path(mgr.store.results_dir) / job_id / "triage_findings.json"
+    if not tri_path.exists():
+        click.echo(f"{job_id}: no triage_findings.json")
+        return
+    findings = json.loads(tri_path.read_text(encoding="utf-8")).get("findings", [])
+    job = mgr.get_job(job_id)
+    target = job.target if job else ""
+    ids = ContinuousMonitor(mgr).schedule_retests(target, findings)
+    click.echo(f"scheduled {len(ids)} retest job(s): {', '.join(ids) or '(none)'}")
+
+
 @cli.group()
 def recon() -> None:
     """Real-time recon platform (Fase 5): plan, run, watch, diff, tools."""
@@ -712,10 +887,14 @@ def recon() -> None:
 @click.argument("target")
 @click.option("--profile", default="recon-only",
               type=click.Choice(["budget", "recon-only", "default", "high-quality", "local"]))
+@click.option("--mode", default=None,
+              type=click.Choice(["passive-only", "safe-active", "authenticated-safe",
+                                 "approval-required", "report-only", "recovery"]),
+              help="Execution-mode envelope (default: derived from profile).")
 @click.option("--config", "config_path", default="config/wth_config.yaml", show_default=True)
-def recon_run(target: str, profile: str, config_path: str) -> None:
+def recon_run(target: str, profile: str, mode: str | None, config_path: str) -> None:
     """Run authorized, non-destructive recon on TARGET (via the job system)."""
-    _run_recon_job(config_path, target, profile)
+    _run_recon_job(config_path, target, profile, mode=mode)
 
 
 @recon.command("quick")

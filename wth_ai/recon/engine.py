@@ -18,6 +18,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
 
+from wth_ai.recon import deepscan
 from wth_ai.recon import http as rhttp
 from wth_ai.recon import report as report_mod
 from wth_ai.recon import scoring
@@ -26,7 +27,7 @@ from wth_ai.recon.model import ToolRun, ToolSpec
 from wth_ai.recon.normalizer import ReconNormalizer
 from wth_ai.recon.planner import ReconPlanner, detect_target_type
 from wth_ai.recon.registry import ReconToolRegistry
-from wth_ai.recon.runner import SafeToolRunner
+from wth_ai.recon.runner import SafeToolRunner, redact
 from wth_ai.recon.tools.builtin import BuiltinContext, run_builtin
 from wth_ai.recon.tools.catalog import BUILTIN_TOOLS
 from wth_ai.workspace import wth_home
@@ -35,6 +36,28 @@ from wth_ai.workspace import wth_home
 _KEY_TO_NAME = {v: k for k, v in BUILTIN_TOOLS.items()}
 # sensible builtin execution order (data deps + monotonic progress marks)
 _BUILTIN_ORDER = ["dns", "http", "headers", "tls", "robots", "crawler", "js", "params", "cloud"]
+
+# Fase 6: the 5-layer recon scheduler (flowchart Stage 2, node D0). Each layer
+# groups core builtin keys + deep-scan steps. Deep steps always run (offline-safe,
+# non-destructive) so a fresh install still maps the full attack surface.
+_RECON_LAYERS: tuple[tuple[str, str, tuple[str, ...]], ...] = (
+    ("layer1", "Passive intelligence",
+     ("dns", "tls", "ct_logs", "archive_urls", "third_party")),
+    ("layer2", "Safe active enumeration",
+     ("http", "headers", "robots", "security_txt", "crawler", "spa_routes", "api_schema")),
+    ("layer3", "Application analysis",
+     ("js", "params", "auth_surface", "upload_surface", "websocket")),
+    ("layer4", "Cloud & infrastructure mapping",
+     ("cloud", "fingerprint", "cdn_waf")),
+    ("layer5", "Intelligence correlation", ()),
+)
+# Deep steps grouped by layer (everything not handled by the core builtin runner).
+_DEEP_BY_LAYER: dict[str, tuple[str, ...]] = {
+    "layer1": ("ct_logs", "archive_urls", "third_party"),
+    "layer2": ("security_txt", "spa_routes", "api_schema"),
+    "layer3": ("auth_surface", "upload_surface", "websocket"),
+    "layer4": ("cdn_waf",),
+}
 
 NoOp = lambda *a, **k: None  # noqa: E731
 
@@ -133,17 +156,33 @@ class ReconEngine:
             if BUILTIN_TOOLS.get(s.name) in _BUILTIN_ORDER else 99,
         )
         stage_marks = {"http": 35, "dns": 20, "tls": 50, "crawler": 65, "params": 75, "cloud": 85}
+        self._emit_layer(bus, job_id, "layer1", "Passive intelligence")
         for spec in ordered_builtins:
             key = BUILTIN_TOOLS.get(spec.name, "")
             run = runner.run(spec, target=target, ctx=ctx)
             _record(run)
             if key in stage_marks:
                 progress(stage_marks[key], 100, f"builtin:{key}")
+            self._emit_step(bus, job_id, "core", spec.name, run.status, len(run.normalized_items))
             log(f"builtin {spec.name}: {run.status} ({len(run.normalized_items)} items)")
 
         # builtin fingerprint (no catalog name; always runs, cheap)
         fp_run = self._run_fingerprint(ctx, raw_dir, runlog_path)
         _record(fp_run)
+        self._emit_step(bus, job_id, "core", "fingerprint", fp_run.status, len(fp_run.normalized_items))
+
+        # 3b) deep recon layers (Fase 6) — always-on, offline-safe deep steps ----
+        progress(86, 100, "deep recon layers")
+        for layer_id, label, _ in _RECON_LAYERS:
+            steps = _DEEP_BY_LAYER.get(layer_id, ())
+            if not steps:
+                continue
+            self._emit_layer(bus, job_id, layer_id, label)
+            for step_name in steps:
+                run = self._run_deep_step(step_name, ctx, raw_dir, runlog_path)
+                _record(run)
+                self._emit_step(bus, job_id, layer_id, step_name, run.status, len(run.normalized_items))
+                log(f"deep {step_name}: {run.status} ({len(run.normalized_items)} items)")
 
         # 4) external/api tools (availability-gated; builtins already covered
         #    the 20..85 milestones, so externals run within the 88..90 band) ---
@@ -162,15 +201,33 @@ class ReconEngine:
                 log(f"external {spec.name}: {run.status} ({len(run.normalized_items)} items)")
         progress(90, 100, "enrichment done")
 
-        # 5) normalize / scoring / diff -----------------------------------
+        # 5) normalize / scoring / diff (Layer 5: correlation) ------------
+        self._emit_layer(bus, job_id, "layer5", "Intelligence correlation")
         progress(92, 100, "normalize/scoring/diff")
         normalizer.write_normalized(normalized_dir)
-        self._write_asset_graph(normalized_dir, normalizer)
 
         priority = scoring.score(normalizer)
+
+        # 5b) LLM smart layer (Fase 6 P4) — augments ranking + grounded hypotheses.
+        #     Fully optional: disabled in test-mode / without a provider key.
+        hypotheses: list[dict[str, Any]] = []
+        try:
+            from wth_ai.recon.ai import ReconAI
+
+            ai = ReconAI()
+            if ai.enabled():
+                progress(93, 100, "ai augmentation")
+                priority, hypotheses = ai.augment(priority, normalizer.summary(), log=log)
+        except Exception as exc:  # noqa: BLE001 — AI never breaks recon
+            log(f"recon-ai skipped: {exc}")
+        (out_dir / "hypotheses.json").write_text(json.dumps(hypotheses, indent=2), encoding="utf-8")
+
+        # full typed asset graph (13 node + 12 edge types) with risk propagation
+        self._write_asset_graph(normalized_dir, normalizer, target, priority)
         scoring.write_priority(
             priority, normalized_dir / "priority_targets.json", out_dir / "priority_targets.csv"
         )
+        scoring.write_heatmap(priority, normalized_dir / "risk_heatmap.json")
         # also expose at job root for convenience
         (out_dir / "priority_targets.json").write_text(
             json.dumps([t.to_dict() for t in priority], indent=2), encoding="utf-8"
@@ -204,6 +261,53 @@ class ReconEngine:
         }
 
     # ----------------------------------------------------------------- #
+    def _run_deep_step(self, name: str, ctx: BuiltinContext, raw_dir: Path, runlog: Path) -> ToolRun:
+        """Run a deep-scan step as a recorded ToolRun (redaction-safe raw output)."""
+        start = time.time()
+        run = ToolRun(tool=f"deep-{name}", started_at=_now())
+        try:
+            items = deepscan.run_step(name, ctx)
+            run.normalized_items = items
+            run.status = "success"
+            try:
+                raw_dir.mkdir(parents=True, exist_ok=True)
+                payload = redact(json.dumps(items, indent=2))
+                (raw_dir / f"deep-{name}.json").write_text(payload, encoding="utf-8")
+                run.output_path = str(raw_dir / f"deep-{name}.json")
+            except OSError:
+                pass
+        except Exception as exc:  # noqa: BLE001 — deep steps never break the run
+            run.status = "failed"
+            run.error = str(exc)
+        run.finished_at = _now()
+        run.duration_ms = int((time.time() - start) * 1000)
+        try:
+            with runlog.open("a", encoding="utf-8") as fh:
+                fh.write(json.dumps({"tool": run.tool, "status": run.status,
+                                     "items": len(run.normalized_items)}) + "\n")
+        except OSError:
+            pass
+        return run
+
+    @staticmethod
+    def _emit_layer(bus: Any, job_id: str | None, layer_id: str, label: str) -> None:
+        if bus is None:
+            return
+        try:
+            bus.emit("recon.layer_started", job_id=job_id, data={"layer": layer_id, "label": label})
+        except Exception:  # noqa: BLE001
+            pass
+
+    @staticmethod
+    def _emit_step(bus: Any, job_id: str | None, layer: str, step: str, status: str, count: int) -> None:
+        if bus is None:
+            return
+        try:
+            bus.emit("recon.step_completed", job_id=job_id,
+                     data={"layer": layer, "step": step, "status": status, "items": count})
+        except Exception:  # noqa: BLE001
+            pass
+
     def _run_fingerprint(self, ctx: BuiltinContext, raw_dir: Path, runlog: Path) -> ToolRun:
         start = time.time()
         run = ToolRun(tool="builtin-fingerprint", started_at=_now())
@@ -229,19 +333,14 @@ class ReconEngine:
             pass
         return run
 
-    def _write_asset_graph(self, normalized_dir: Path, normalizer: ReconNormalizer) -> None:
-        nodes: list[dict[str, Any]] = []
-        edges: list[dict[str, Any]] = []
-        for sub in normalizer.subdomains.values():
-            nodes.append({"id": sub.host, "type": "host"})
-        for probe in normalizer.http_probes.values():
-            nodes.append({"id": probe.url, "type": "url", "status": probe.status})
-        for ep in normalizer.endpoints.values():
-            nodes.append({"id": ep.url, "type": "endpoint", "kind": ep.kind})
-        for p in normalizer.params.values():
-            nodes.append({"id": f"{p.url}?{p.name}", "type": "parameter", "interest": p.interest})
-            edges.append({"from": p.url, "to": f"{p.url}?{p.name}", "type": "param_of"})
-        graph = {"nodes": nodes, "edges": edges, "node_count": len(nodes), "edge_count": len(edges)}
+    def _write_asset_graph(
+        self, normalized_dir: Path, normalizer: ReconNormalizer,
+        target: str = "", priority: list[Any] | None = None,
+    ) -> None:
+        from wth_ai.recon.asset_graph import build_graph
+
+        graph = build_graph(normalizer, target=target, priorities=priority or [])
+        normalized_dir.mkdir(parents=True, exist_ok=True)
         (normalized_dir / "asset_graph.json").write_text(json.dumps(graph, indent=2), encoding="utf-8")
 
     def _emit_events(

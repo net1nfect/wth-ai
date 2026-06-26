@@ -24,6 +24,8 @@ dependencies = [
 [project.optional-dependencies]
 browser = ["nodriver>=0.38"]
 full = ["nodriver>=0.38", "aiohttp>=3.9", "dnspython>=2.4", "beautifulsoup4>=4.12"]
+report = ["weasyprint>=60"]
+tui = ["textual>=0.60"]
 
 [project.scripts]
 wth = "wth_ai.cli.entry:main"

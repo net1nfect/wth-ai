@@ -14,3 +14,10 @@ node_modules/
 .DS_Store
 *.db
 .cursor/
+
+# Runtime/test artifacts
+reports/*.json
+data/ml_models/*.json
+logs/engagement_logs/*.jsonl
+!logs/engagement_logs/system.jsonl
+wth-results/

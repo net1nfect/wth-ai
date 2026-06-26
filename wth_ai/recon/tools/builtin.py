@@ -24,6 +24,8 @@ class BuiltinContext:
     urls: list[str] = field(default_factory=list)
     js_files: list[str] = field(default_factory=list)
     homepage_html: str = ""
+    homepage_headers: dict[str, str] = field(default_factory=dict)
+    js_bodies: dict[str, str] = field(default_factory=dict)
 
     def absorb(self, items: list[dict[str, Any]]) -> None:
         """Fold normalized items back into accumulators for later builtins."""
@@ -43,6 +45,7 @@ def _builtin_http(ctx: BuiltinContext) -> list[dict[str, Any]]:
     if not resp.ok:
         return []
     ctx.homepage_html = resp.text
+    ctx.homepage_headers = dict(resp.headers or {})
     title = ""
     import re
 
@@ -122,6 +125,7 @@ def _builtin_js(ctx: BuiltinContext) -> list[dict[str, Any]]:
     for jf in targets:
         resp = rhttp.fetch(jf, method="GET")
         if resp.ok:
+            ctx.js_bodies[jf] = resp.text
             items.extend(js.analyze(jf, resp.text))
     return items
 
