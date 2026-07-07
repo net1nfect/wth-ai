@@ -87,6 +87,14 @@ class ExecutorAgent(BaseLLMAgent):
             task.target = state.scope.target or ""
         vuln_type = (task.evidence_schema or {}).get("type", "").lower()
         if vuln_type in VULN_EXECUTORS:
+            from wth_ai.models import PermissionMode
+            if state.permission_mode == PermissionMode.READ_ONLY_RECON:
+                return ExecutorResult(
+                    task_id=task.id, status="blocked", permission_check={"allowed": False},
+                    commands_used=[], output_summary="Vuln modules require standard permission or higher",
+                    evidence=[], observations=[], risk="medium",
+                    recommended_next_step="/permission standard", errors="read_only",
+                )
             try:
                 executor_cls = VULN_EXECUTORS[vuln_type]
                 return executor_cls(state).execute(task)
@@ -120,6 +128,7 @@ class ExecutorAgent(BaseLLMAgent):
     ) -> ExecutorResult:
         loop = AgentToolLoop(
             self.client, self.terminal, graph=self.asset_graph, vault=self.evidence_vault,
+            max_iters=self.config.agent.max_iters,
         )
         prompt = (
             f"Execute this security task using run_shell and/or http_probe.\n"

@@ -154,6 +154,10 @@ class ReconPlan:
     selected: list[PlannedTool] = field(default_factory=list)
     skipped: list[SkippedTool] = field(default_factory=list)
     created_at: str = field(default_factory=utc_now)
+    adaptive_profile: str | None = None
+    matched_rules: list[str] = field(default_factory=list)
+    boost_categories: list[str] = field(default_factory=list)
+    skip_categories: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -166,6 +170,10 @@ class ReconPlan:
             "selected": [t.to_dict() for t in self.selected],
             "skipped": [t.to_dict() for t in self.skipped],
             "created_at": self.created_at,
+            "adaptive_profile": self.adaptive_profile,
+            "matched_rules": self.matched_rules,
+            "boost_categories": self.boost_categories,
+            "skip_categories": self.skip_categories,
         }
 
 

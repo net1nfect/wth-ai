@@ -36,6 +36,15 @@ class LLMProviderRouter:
                 streaming=self.config.models.streaming,
                 default_timeout=self.config.models.executor_timeout_seconds,
             )
+        elif ptype == "9router":
+            p = OpenAICompatProvider(
+                provider_name="9router",
+                api_key=secrets.router9_api_key or os.environ.get("ROUTER9_API_KEY") or os.environ.get("9ROUTER_API_KEY"),
+                base_url=secrets.router9_base_url or self.config.nine_router.base_url,
+                temperature=self.config.models.temperature,
+                max_tokens=self.config.models.max_tokens,
+                default_timeout=self.config.models.executor_timeout_seconds,
+            )
         elif ptype == "ollama":
             p = OllamaProvider(
                 base_url=secrets.ollama_base_url or "http://127.0.0.1:11434",
@@ -81,6 +90,10 @@ class LLMProviderRouter:
         return p
 
     def _role_config(self, role: str) -> ProviderRoleConfig:
+        if role == "supervisor":
+            role = "planner"
+        if role == "report":
+            role = "reporter"
         role_cfg = self.config.providers.get(role)
         if role_cfg:
             return role_cfg
@@ -97,7 +110,13 @@ class LLMProviderRouter:
             "fallback": (m.fallback, m.fallback),
         }
         primary, backup = model_map.get(role, (m.planner, m.planner_backup))
-        return ProviderRoleConfig(type="openrouter", model=primary, backup_model=backup)
+        planner_cfg = self.config.providers.get("planner")
+        ptype = (
+            planner_cfg.type
+            if planner_cfg
+            else (self.config.provider_prefs.primary or "openrouter")
+        )
+        return ProviderRoleConfig(type=ptype, model=primary, backup_model=backup)
 
     def provider_for_role(self, role: str) -> BaseLLMProvider:
         if role not in self._role_providers:
@@ -112,11 +131,22 @@ class LLMProviderRouter:
     def available(self) -> bool:
         if os.environ.get("WTH_TEST_MODE") == "1":
             return True
+        secrets = self.config.secrets
+        if secrets.openrouter_api_key or os.environ.get("OPENROUTER_API_KEY"):
+            if self._get_or_create_provider("openrouter").available():
+                return True
         for role in ("planner", "executor", "verifier"):
             rc = self._role_config(role)
             if self._get_or_create_provider(rc.type).available():
                 return True
-        return bool(os.environ.get("OPENROUTER_API_KEY"))
+        return False
+
+    def agentic_available(self) -> bool:
+        """Whether supervisor tool-loop can reach an LLM."""
+        if os.environ.get("WTH_TEST_MODE") == "1":
+            return True
+        rc = self._role_config("planner")
+        return self._get_or_create_provider(rc.type).available()
 
     def require_available(self) -> None:
         if os.environ.get("WTH_TEST_MODE") == "1":
@@ -139,6 +169,29 @@ class LLMProviderRouter:
         response_format: dict[str, Any] | None = None,
     ) -> tuple[str, str]:
         self.require_available()
+        rc = self._role_config(role)
+        providers_to_try = [rc.type]
+        if self.config.provider_prefs.failover_enabled:
+            for p in self.config.provider_prefs.failover_order:
+                if p not in providers_to_try:
+                    providers_to_try.append(p)
+        last_err: Exception | None = None
+        for ptype in providers_to_try:
+            try:
+                provider = self._get_or_create_provider(ptype)
+                if not provider.available():
+                    continue
+                primary = rc.model if ptype == rc.type else self._role_config(role).model
+                backup = rc.backup_model or primary
+                return provider.chat_with_fallback(
+                    primary, backup, messages,
+                    timeout=timeout, stream=stream, on_token=on_token, response_format=response_format,
+                )
+            except Exception as exc:  # noqa: BLE001
+                last_err = exc
+                continue
+        if last_err:
+            raise last_err
         provider = self.provider_for_role(role)
         primary, backup = self.model_for_role(role)
         return provider.chat_with_fallback(
@@ -175,6 +228,25 @@ class LLMProviderRouter:
         tools: list[dict[str, Any]],
         timeout: int | None = None,
     ) -> dict[str, Any]:
+        if os.environ.get("WTH_TEST_MODE") == "1":
+            user = messages[-1].get("content", "") if messages else ""
+            rc = self._role_config(role)
+            model = rc.model
+            if "scope" in user.lower() and "example.com" in user:
+                return {
+                    "message": {
+                        "role": "assistant",
+                        "content": "Scope set for example.com (test mode).",
+                    },
+                    "model": model,
+                }
+            return {
+                "message": {
+                    "role": "assistant",
+                    "content": f"Test mode response. ({user[:80]})",
+                },
+                "model": model,
+            }
         self.require_available()
         provider = self.provider_for_role(role)
         primary, backup = self.model_for_role(role)
@@ -215,6 +287,7 @@ class LLMProviderRouter:
             return "local"  # local provider, no key required
         s = self.config.secrets
         from_config = {
+            "9router": s.router9_api_key,
             "openrouter": s.openrouter_api_key,
             "openai": s.openai_api_key,
             "anthropic": s.anthropic_api_key,
@@ -227,6 +300,7 @@ class LLMProviderRouter:
         # Fall back to the vault directly (covers secrets not yet referenced
         # in user.yaml, e.g. right after `vault set` in the same process).
         vname = {
+            "9router": "router9_api_key",
             "openrouter": "openrouter_api_key",
             "openai": "openai_api_key",
             "anthropic": "anthropic_api_key",
@@ -249,18 +323,26 @@ class LLMProviderRouter:
             "available": p.available(),
         }
 
-    def test_provider(self, provider_type: str, model: str | None = None) -> dict[str, Any]:
+    def test_provider(
+        self,
+        provider_type: str,
+        model: str | None = None,
+        *,
+        completion_timeout: int = 30,
+    ) -> dict[str, Any]:
         """Reachability + optional short completion, normalized."""
         p = self._get_or_create_provider(provider_type)
         conn = p.test_connection(model)
         result: dict[str, Any] = {
             "provider": provider_type,
             "reachable": conn["ok"],
-            "error": conn["error"],
+            "reach_error": conn["error"],
+            "error": None,
             "models_listed": 0,
             "completion_ok": False,
         }
         if not conn["ok"]:
+            result["error"] = conn["error"]
             return result
         try:
             models = p.list_models()
@@ -268,7 +350,9 @@ class LLMProviderRouter:
         except Exception as exc:  # noqa: BLE001
             result["error"] = p.normalize_error(exc)
         if model:
-            env = p.complete(model, [{"role": "user", "content": "ping"}], timeout=30, max_tokens=8)
+            env = p.complete(
+                model, [{"role": "user", "content": "ping"}], timeout=completion_timeout, max_tokens=8,
+            )
             result["completion_ok"] = env["status"] == "success"
             if env["status"] != "success":
                 result["error"] = env["error"]
@@ -287,6 +371,12 @@ class LLMProviderRouter:
         primary, _backup = self.model_for_role(role)
         return provider.complete(primary, messages, role=role, timeout=timeout, max_tokens=max_tokens)
 
+    def _primary_provider_type(self) -> str:
+        planner_cfg = self.config.providers.get("planner")
+        if planner_cfg:
+            return planner_cfg.type
+        return self.config.provider_prefs.primary or "openrouter"
+
     # Backward-compat shim for OpenRouterClient interface
     def chat_with_fallback(
         self,
@@ -299,7 +389,8 @@ class LLMProviderRouter:
         on_token: Callable[[str], None] | None = None,
         response_format: dict[str, Any] | None = None,
     ) -> tuple[str, str]:
-        provider = self._get_or_create_provider("openrouter")
+        ptype = self._primary_provider_type()
+        provider = self._get_or_create_provider(ptype)
         return provider.chat_with_fallback(
             primary, backup, messages,
             timeout=timeout, stream=stream, on_token=on_token, response_format=response_format,
@@ -313,10 +404,7 @@ class LLMProviderRouter:
         backup: str | None = None,
         timeout: int | None = None,
     ) -> tuple[dict[str, Any], str]:
-        provider = self._get_or_create_provider("openrouter")
-        if isinstance(provider, OpenRouterProvider):
-            return provider.chat_json(model, messages, backup=backup, timeout=timeout)
-        raise LLMError("chat_json requires OpenRouter provider")
+        return self.chat_json_for_role("planner", messages, timeout=timeout)
 
     def chat_with_tools(
         self,
@@ -327,8 +415,25 @@ class LLMProviderRouter:
         backup: str | None = None,
         timeout: int | None = None,
         tool_choice: str | dict[str, Any] = "auto",
+        role: str = "planner",
     ) -> dict[str, Any]:
-        provider = self._get_or_create_provider("openrouter")
-        return provider.chat_with_tools(
-            model, messages, tools=tools, backup=backup, timeout=timeout, tool_choice=tool_choice,
+        if os.environ.get("WTH_TEST_MODE") == "1":
+            user = messages[-1].get("content", "") if messages else ""
+            if "scope" in user.lower() and "example.com" in user:
+                return {
+                    "message": {
+                        "role": "assistant",
+                        "content": "Scope set for example.com (test mode).",
+                    },
+                    "model": model,
+                }
+            return {
+                "message": {
+                    "role": "assistant",
+                    "content": f"Test mode response. Configure LLM for full agentic tools. ({user[:80]})",
+                },
+                "model": model,
+            }
+        return self.chat_with_tools_for_role(
+            role, messages, tools=tools, timeout=timeout,
         )

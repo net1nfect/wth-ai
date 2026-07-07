@@ -59,7 +59,7 @@ class ScopeManager:
     def is_in_scope(self, target: str) -> tuple[bool, str]:
         """Check if target host/path is in scope."""
         if not self.scope.in_scope and not self.scope.target:
-            return False, "Scope belum diset. Gunakan /scope set dulu."
+            return False, "Scope belum diset. Gunakan `/target domain.com` dulu."
 
         host = self._normalize_host(target)
 

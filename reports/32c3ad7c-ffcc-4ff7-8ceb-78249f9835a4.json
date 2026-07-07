@@ -1,0 +1,45 @@
+{
+  "engagement": {
+    "target": "example.com",
+    "scope": [
+      "example.com"
+    ],
+    "objectives": [
+      "safe smoke test"
+    ],
+    "authorization_verified": true,
+    "dry_run": true
+  },
+  "summary": {
+    "total_findings": 1
+  },
+  "findings": [
+    {
+      "type": "recon_subdomain_enumeration",
+      "severity": "info",
+      "evidence": [
+        "example.com"
+      ],
+      "id": "c19abc8f-72ac-4f83-b5dd-48a863f41eed"
+    }
+  ],
+  "compliance": {
+    "c19abc8f-72ac-4f83-b5dd-48a863f41eed": []
+  },
+  "visualizations": {
+    "severity": {
+      "labels": [
+        "info"
+      ],
+      "values": [
+        1
+      ]
+    }
+  },
+  "remediation": [
+    {
+      "finding": "c19abc8f-72ac-4f83-b5dd-48a863f41eed",
+      "recommendation": "Review and remediate the identified control gap."
+    }
+  ]
+}

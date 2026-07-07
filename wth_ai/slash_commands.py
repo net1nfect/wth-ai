@@ -7,10 +7,11 @@ import shlex
 
 class SlashCommandHandler:
     COMMANDS = [
-        "/help", "/status", "/scope", "/permission", "/plan", "/recon", "/hunt", "/graph",
+        "/help", "/status", "/target", "/scope", "/model", "/provider", "/profile", "/ui",
+        "/permission", "/plan", "/recon", "/hunt", "/graph",
         "/doctor", "/intel", "/mcp", "/tools", "/static", "/dynamic", "/execute", "/findings", "/verify", "/report",
         "/skills", "/skill", "/browser", "/hypotheses", "/approve", "/resume",
-        "/sessions", "/new-session", "/stop", "/patch", "/retest",
+        "/sessions", "/new-session", "/quit", "/exit", "/stop", "/patch", "/retest", "/config", "/mode", "/gateway", "/cron", "/memory",
     ]
 
     def parse(self, text: str) -> tuple[str, list[str]]:
@@ -25,24 +26,31 @@ class SlashCommandHandler:
 # WTH-AI Commands
 
 ## Setup
-`/scope` · `/scope set target=domain.com authorized=yes accounts=userA:pass,userB:pass`
-`/permission read_only|standard|elevated|full_lab`
-`/status` · `/new-session` · `/resume`
+`/target example.com` · `/target https://host/path` · `/target clear`
+`/model list` · `/model 4` · `/model set planner Hacker` · `/model set all cu/default`
+`/provider show` · `/provider set all 9router`
+`/profile list` · `/profile use bug-bounty`
+`/permission read_only|standard|elevated|full_lab|unrestricted` (alias: `active_test` → elevated)
+`/ui compact on|off` · `/ui mode plain|tui`
+`/scope set target=domain.com authorized=yes` (advanced)
+`/config show` · `/status` · `/new-session` · `/resume`
 
 ## Assessment
 `/plan` · `/recon [target] [--fast]` · `/graph` · `/hunt` — graph-driven expert loop
-`/doctor` · `/intel` · `/mcp` · `/tools` · `/tools install [category|all]`
+`/doctor` · `/intel` · `/mcp` · `/tools` · `/tools install all` (Linux/macOS/Windows)
+`/tools install recon.subdomain` · `/tools install all --no-sudo`
 `/execute` · `/execute --all` · `/verify` · `/report`
 `/browser https://target.com` — nodriver + Cloudflare bypass
+`/mode ctf|bounty|default` · `/gateway status` · `/cron list` · `/memory show`
 
 ## Skills (118+ HackSkills)
 `/skills` · `/skills ctf` · `/skill xss-cross-site-scripting`
 
 ## Safety
-`/approve <task_id>` · `/stop`
+`/approve <task_id>` · `/stop` (hentikan agent) · `/quit` (keluar)
 
 ## Chat
-Ketik apa saja — halo, tanya kemampuan, diskusi bug, dll.
+Natural language untuk diskusi — setup & config gunakan slash di atas.
 
 ## Keyboard
 ↑↓ history · Tab autocomplete · Ctrl+L clear · Ctrl+D exit

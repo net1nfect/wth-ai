@@ -1,0 +1,108 @@
+"""Safe subprocess runner — argv list only, no shell=True."""
+
+from __future__ import annotations
+
+import os
+import re
+import shlex
+import subprocess
+from typing import Callable
+
+MAX_OUTPUT_BYTES = 512_000
+
+_REDACT_PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
+    (re.compile(r"(?i)(api[_-]?key|token|password|secret|authorization)\s*[:=]\s*\S+"), r"\1=***REDACTED***"),
+    (re.compile(r"Bearer\s+[A-Za-z0-9\-._~+/]+=*"), "Bearer ***REDACTED***"),
+)
+
+
+def redact_output(text: str) -> str:
+    out = text or ""
+    for pat, repl in _REDACT_PATTERNS:
+        out = pat.sub(repl, out)
+    return out
+
+
+def tokenize_command(command: str) -> list[str]:
+    """Split a command string into argv without invoking a shell."""
+    command = command.strip()
+    if not command:
+        return []
+    try:
+        return shlex.split(command, posix=os.name != "nt")
+    except ValueError:
+        return command.split()
+
+
+def run_argv(
+    argv: list[str],
+    *,
+    timeout: int = 120,
+    cwd: str | None = None,
+    env: dict[str, str] | None = None,
+    max_bytes: int = MAX_OUTPUT_BYTES,
+    on_line: Callable[[str], None] | None = None,
+) -> tuple[str, str, int]:
+    """Run argv list safely. Returns (stdout, stderr, exit_code)."""
+    if not argv:
+        return "", "empty command", 1
+    base_env = {k: os.environ[k] for k in ("PATH", "HOME", "LANG", "LC_ALL", "TMPDIR") if k in os.environ}
+    if env:
+        base_env.update(env)
+    try:
+        if on_line is not None:
+            proc = subprocess.Popen(
+                argv,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                cwd=cwd,
+                env=base_env,
+            )
+            stdout_lines: list[str] = []
+            assert proc.stdout is not None
+            for line in proc.stdout:
+                line = line.rstrip("\n")
+                stdout_lines.append(line)
+                on_line(line)
+            proc.wait(timeout=timeout)
+            stderr = (proc.stderr.read() if proc.stderr else "") or ""
+            stdout = redact_output("\n".join(stdout_lines))[:max_bytes]
+            return stdout, redact_output(stderr)[:max_bytes], proc.returncode or 0
+        proc = subprocess.run(
+            argv,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            cwd=cwd,
+            env=base_env,
+        )
+        return (
+            redact_output(proc.stdout or "")[:max_bytes],
+            redact_output(proc.stderr or "")[:max_bytes],
+            proc.returncode,
+        )
+    except subprocess.TimeoutExpired:
+        return "", f"timeout after {timeout}s", 124
+    except OSError as exc:
+        return "", str(exc), 1
+
+
+def run_command(
+    command: str,
+    *,
+    timeout: int = 120,
+    cwd: str | None = None,
+    env: dict[str, str] | None = None,
+    max_bytes: int = MAX_OUTPUT_BYTES,
+    on_line: Callable[[str], None] | None = None,
+) -> tuple[str, str, int]:
+    """Parse command to argv and run without shell."""
+    return run_argv(
+        tokenize_command(command),
+        timeout=timeout,
+        cwd=cwd,
+        env=env,
+        max_bytes=max_bytes,
+        on_line=on_line,
+    )

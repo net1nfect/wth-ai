@@ -126,20 +126,13 @@ class ToolRunner:
         )
 
     def _run_command(self, command: str) -> tuple[str, str, int]:
-        try:
-            proc = subprocess.run(
-                command,
-                shell=True,
-                capture_output=True,
-                text=True,
-                timeout=self.config.tools.timeout_seconds,
-                cwd=None,
-            )
-            return proc.stdout, proc.stderr, proc.returncode
-        except subprocess.TimeoutExpired:
-            return "", f"Command timed out after {self.config.tools.timeout_seconds}s", 124
-        except OSError as exc:
-            return "", str(exc), 1
+        from wth_ai.shell_runner import run_command
+
+        return run_command(
+            command,
+            timeout=self.config.tools.timeout_seconds,
+            max_bytes=self.config.tools.max_output_bytes,
+        )
 
     def _extract_evidence(self, output: str, command: str) -> list[str]:
         evidence = []

@@ -1,0 +1,51 @@
+services:
+  wth-worker:
+    build: .
+    command: ["wth-ai", "worker", "run", "--no-drain"]
+    env_file: .env
+    environment:
+      WTH_HOME: /data/wth-ai
+      WTH_UNRESTRICTED: "1"
+      ROUTER9_BASE_URL: http://9router:20128/v1
+      OLLAMA_BASE_URL: http://ollama:11434
+    volumes:
+      - wth-home:/data/wth-ai
+    depends_on:
+      - 9router
+    restart: unless-stopped
+
+  wth-cli:
+    build: .
+    command: ["sleep", "infinity"]
+    env_file: .env
+    environment:
+      WTH_HOME: /data/wth-ai
+      WTH_UNRESTRICTED: "1"
+      ROUTER9_BASE_URL: http://9router:20128/v1
+    volumes:
+      - wth-home:/data/wth-ai
+    depends_on:
+      - 9router
+
+  9router:
+    image: node:20-slim
+    command: ["npx", "-y", "9router"]
+    ports:
+      - "20128:20128"
+    restart: unless-stopped
+
+  ollama:
+    image: ollama/ollama:latest
+    volumes:
+      - ollama-data:/root/.ollama
+    ports:
+      - "11434:11434"
+    profiles: ["ollama"]
+
+  interactsh:
+    image: projectdiscovery/interactsh-client:latest
+    profiles: ["oob"]
+
+volumes:
+  wth-home:
+  ollama-data:

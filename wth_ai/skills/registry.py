@@ -46,6 +46,8 @@ class SkillRegistry:
             for entry in sorted(base.iterdir()):
                 if not entry.is_dir():
                     continue
+                if entry.is_symlink() and not entry.exists():
+                    continue
                 skill = self._parse_skill(entry, source)
                 if skill:
                     self.skills[skill.id] = skill

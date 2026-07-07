@@ -8,7 +8,10 @@ from typing import Any
 from wth_ai.skills.registry import Skill, SkillRegistry
 
 INTENT_SKILL_MAP: dict[str, list[str]] = {
-    "recon": ["recon-and-methodology", "recon-for-sec", "api-recon-and-docs", "insecure-source-code-management"],
+    "recon": [
+        "recon-and-methodology", "recon-for-sec", "api-recon-and-docs",
+        "insecure-source-code-management", "9router-web-search", "9router-web-fetch",
+    ],
     "xss": ["xss-cross-site-scripting", "csp-bypass-advanced", "dangling-markup-injection"],
     "sqli": ["sqli-sql-injection", "nosql-injection", "ghost-bits-cast-attack"],
     "ssrf": ["ssrf-server-side-request-forgery", "dns-rebinding-attacks"],
@@ -18,7 +21,7 @@ INTENT_SKILL_MAP: dict[str, list[str]] = {
     "business": ["business-logic-vuln", "business-logic-vulnerabilities", "race-condition"],
     "cloud": ["kubernetes-pentesting", "unauthorized-access-common-services", "subdomain-takeover"],
     "waf": ["waf-bypass-techniques", "ghost-bits-cast-attack"],
-    "llm": ["llm-prompt-injection", "ai-ml-security"],
+    "llm": ["llm-prompt-injection", "ai-ml-security", "9router", "9router-chat"],
     "upload": ["upload-insecure-files", "file-access-vuln"],
     "smuggling": ["request-smuggling", "http2-specific-attacks"],
     "ctf": ["solve-challenge", "ctf-web", "ctf-pwn", "ctf-crypto"],
@@ -98,6 +101,8 @@ class SkillRouter:
                 return "chat"
         assess_patterns = [
             r"\b(audit|scan|recon|test|pentest|assess|cve|vuln|exploit|idor|xss|sqli)\b",
+            r"^(plan|hunt|recon|execute|verify|report|graph)\b",
+            r"\b(asset\s+graph|attack\s+surface|findings?)\b",
             r"/(plan|recon|static|dynamic|execute|verify|report)\b",
         ]
         for pat in assess_patterns:

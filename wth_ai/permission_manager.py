@@ -12,6 +12,7 @@ PERMISSION_LEVEL = {
     PermissionMode.STANDARD_TESTING: 1,
     PermissionMode.ELEVATED_APPROVAL: 2,
     PermissionMode.FULL_LAB: 3,
+    PermissionMode.UNRESTRICTED: 4,
 }
 
 READ_ONLY_TOOLS = {
@@ -63,6 +64,13 @@ MODE_TOOLS = {
     PermissionMode.STANDARD_TESTING: STANDARD_TOOLS,
     PermissionMode.ELEVATED_APPROVAL: ELEVATED_TOOLS,
     PermissionMode.FULL_LAB: FULL_LAB_TOOLS,
+    PermissionMode.UNRESTRICTED: FULL_LAB_TOOLS | {"*"},
+}
+
+PERMISSION_ALIASES = {
+    "active_test": PermissionMode.ELEVATED_APPROVAL.value,
+    "elevated": PermissionMode.ELEVATED_APPROVAL.value,
+    "unrestricted": PermissionMode.UNRESTRICTED.value,
 }
 
 MODE_DESCRIPTIONS = {
@@ -70,6 +78,7 @@ MODE_DESCRIPTIONS = {
     PermissionMode.STANDARD_TESTING: "Standard: low-rate dynamic tests, nuclei info-low-medium",
     PermissionMode.ELEVATED_APPROVAL: "Elevated: controlled fuzzing, IDOR tests — approval per high-risk action",
     PermissionMode.FULL_LAB: "Full lab: disposable local/CTF only — still no real-world harm",
+    PermissionMode.UNRESTRICTED: "Unrestricted: all tools enabled, no rate limits, auto-approve",
 }
 
 
@@ -82,10 +91,16 @@ class PermissionManager:
 
     def set_mode(self, mode: PermissionMode | str) -> PermissionMode:
         if isinstance(mode, str):
+            normalized = mode.strip().lower()
+            normalized = PERMISSION_ALIASES.get(normalized, normalized)
             mapping = {p.value: p for p in PermissionMode}
-            if mode not in mapping:
-                raise ValueError(f"Unknown permission mode: {mode}")
-            mode = mapping[mode]
+            if normalized not in mapping:
+                raise ValueError(
+                    f"Unknown permission mode: {mode}. "
+                    f"Valid: {', '.join(p.value for p in PermissionMode)} "
+                    f"(alias: active_test → elevated)"
+                )
+            mode = mapping[normalized]
         self.mode = mode
         return self.mode
 
@@ -93,7 +108,7 @@ class PermissionManager:
         return (
             f"PERMISSION MODE: {self.mode.value}\n"
             f"Description: {MODE_DESCRIPTIONS[self.mode]}\n"
-            f"Level: {PERMISSION_LEVEL[self.mode]}/3"
+            f"Level: {PERMISSION_LEVEL[self.mode]}/{max(PERMISSION_LEVEL.values())}"
         )
 
     def mode_sufficient(self, required: PermissionMode | str) -> bool:
@@ -112,6 +127,10 @@ class PermissionManager:
             "risk": "low",
             "approval_needed": False,
         }
+
+        if self.mode == PermissionMode.UNRESTRICTED:
+            result["reason"] = "unrestricted mode"
+            return result
 
         for pattern in DENYLIST_PATTERNS:
             if pattern in cmd_lower:

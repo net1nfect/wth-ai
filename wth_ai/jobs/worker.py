@@ -26,6 +26,9 @@ class JobContext:
 
     def log(self, line: str) -> None:
         self._manager.store.append_log(self.job_id, line)
+        self._manager.bus.emit(
+            "job.log", job_id=self.job_id, data={"line": line},
+        )
 
     def progress(self, current: int, total: int = 100, message: str = "") -> None:
         self._manager.store.update_progress(self.job_id, current, total, message)

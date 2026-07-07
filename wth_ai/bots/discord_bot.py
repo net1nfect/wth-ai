@@ -103,16 +103,16 @@ class WTHDiscordBot:
         @self.tree.command(name="recon", description="Jalankan recon pada target")
         @app_commands.describe(target="Domain atau URL target")
         async def cmd_recon(interaction: discord.Interaction, target: str) -> None:
-            await self._handle_slash(interaction, f"/recon {target}")
+            await self._handle_slash(interaction, f"recon {target}")
 
         @self.tree.command(name="plan", description="Buat rencana audit")
         @app_commands.describe(goal="Tujuan audit")
         async def cmd_plan(interaction: discord.Interaction, goal: str) -> None:
-            await self._handle_slash(interaction, f"/plan {goal}")
+            await self._handle_slash(interaction, f"plan hunt: {goal}")
 
         @self.tree.command(name="graph", description="Tampilkan asset graph")
         async def cmd_graph(interaction: discord.Interaction) -> None:
-            await self._handle_slash(interaction, "/graph")
+            await self._handle_slash(interaction, "show asset graph summary")
 
         @self.client.event
         async def on_message(message: discord.Message) -> None:

@@ -86,6 +86,22 @@ def builtin_presets() -> dict[str, dict[str, Any]]:
             "safety": {"default_permission": "read_only"},
             "tuning": {"max_tokens": 8192, "temperature": 0.3},
         },
+        "bug-bounty": {
+            "active_provider": "9router",
+            "engagement_mode": "bug_bounty",
+            "models": _roles_for("9router", defaults),
+            "safety": {"default_permission": "full_lab", "require_authorized": False, "unrestricted": True},
+            "recon": {"profile": "high-quality", "rate_limit_rps": 0},
+            "tuning": {"max_tokens": 8192, "temperature": 0.3},
+        },
+        "ctf-aggressive": {
+            "active_provider": "9router",
+            "engagement_mode": "ctf",
+            "models": _roles_for("9router", defaults),
+            "safety": {"default_permission": "full_lab", "require_authorized": False, "unrestricted": True},
+            "recon": {"profile": "high-quality", "rate_limit_rps": 0},
+            "tuning": {"max_tokens": 8192, "temperature": 0.4},
+        },
     }
 
 
@@ -160,6 +176,17 @@ def apply_profile(name: str) -> dict[str, Any]:
     safety = data.get("safety", {})
     if safety.get("default_permission"):
         config.default_permission = safety["default_permission"]
+        config.safety.default_permission = safety["default_permission"]
+    if "unrestricted" in safety:
+        config.safety.unrestricted = bool(safety["unrestricted"])
+    if "require_authorized" in safety:
+        config.safety.require_authorized = bool(safety["require_authorized"])
+    if data.get("engagement_mode"):
+        from wth_ai.engagement.mode import set_engagement_mode
+        set_engagement_mode(data["engagement_mode"])
+    if config.safety.unrestricted:
+        from wth_ai.engagement.mode import set_unrestricted
+        set_unrestricted(True)
     tuning = data.get("tuning", {})
     if "max_tokens" in tuning:
         config.models.max_tokens = int(tuning["max_tokens"])

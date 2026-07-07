@@ -79,10 +79,38 @@ class FakeProvider(BaseLLMProvider):
 def test_provider_names_and_capabilities():
     config = WTHConfig.load()
     router = LLMProviderRouter(config)
-    assert set(("openrouter", "groq", "custom", "ollama")).issubset(set(PROVIDER_NAMES))
+    assert set(("9router", "openrouter", "groq", "custom", "ollama")).issubset(set(PROVIDER_NAMES))
     caps = router.provider_capabilities("openrouter")
     assert caps["tool_calling"] is True
     assert router.provider_capabilities("groq")["provider"] == "groq"
+
+
+def test_9router_provider_constructed():
+    config = WTHConfig.load()
+    config.secrets.router9_api_key = "r9-test"
+    config.secrets.router9_base_url = "http://127.0.0.1:20128/v1"
+    config.providers["planner"] = ProviderRoleConfig(type="9router", model="Hacker")
+    router = LLMProviderRouter(config)
+    p = router._get_or_create_provider("9router")
+    assert p.name == "9router"
+    assert "20128" in p.base_url
+    rc = router._role_config("supervisor")
+    assert rc.type == "9router"
+    assert rc.model == "Hacker"
+
+
+def test_parse_sse_and_extra_json():
+    from wth_ai.llm.providers.openai_compat import _parse_response_json
+
+    body = '{"choices":[{"message":{"role":"assistant","content":"ok"}}]}'
+    assert _parse_response_json(body)["choices"][0]["message"]["content"] == "ok"
+
+    extra = body + "\n" + body
+    assert _parse_response_json(extra)["choices"][0]["message"]["content"] == "ok"
+
+    sse = 'data: {"choices":[{"delta":{"content":"hi"}}]}\n\ndata: [DONE]\n'
+    parsed = _parse_response_json(sse)
+    assert "choices" in parsed
 
 
 def test_groq_and_custom_providers_constructed():
@@ -112,7 +140,8 @@ def test_router_roles_and_set_role():
 def test_complete_envelope_normalizes_error():
     config = WTHConfig.load()
     router = LLMProviderRouter(config)
-    router._providers["openrouter"] = FakeProvider(ok=False)
+    fake = FakeProvider(ok=False)
+    router._role_providers["planner"] = fake
     env = router.complete("planner", [{"role": "user", "content": "hi"}])
     assert env["status"] == "error"
     assert env["error"]["type"] == "auth"
@@ -123,7 +152,8 @@ def test_complete_envelope_normalizes_error():
 def test_complete_envelope_success():
     config = WTHConfig.load()
     router = LLMProviderRouter(config)
-    router._providers["openrouter"] = FakeProvider(ok=True)
+    fake = FakeProvider(ok=True)
+    router._role_providers["planner"] = fake
     env = router.complete("planner", [{"role": "user", "content": "hi"}])
     assert env["status"] == "success"
     assert env["content"] == "pong"
@@ -270,3 +300,38 @@ def test_doctor_full_report_has_provider_section():
         report = ToolDoctor(WTHConfig.load()).full_report()
         assert "Providers & Roles" in report
         assert "Role models" in report
+
+
+def test_planner_plan_uses_role_provider_not_openrouter():
+    """Hunt/plan must not require OPENROUTER_API_KEY when 9router is configured."""
+    from wth_ai.agents.planner import PlannerAgent
+    from wth_ai.models import SessionState
+
+    config = WTHConfig.load()
+    config.secrets.openrouter_api_key = None
+    config.secrets.router9_api_key = "r9-test"
+    config.secrets.router9_base_url = "http://127.0.0.1:20128/v1"
+    config.providers["planner"] = ProviderRoleConfig(
+        type="9router", model="ag/claude-opus-4-6-thinking",
+    )
+    router = LLMProviderRouter(config)
+    called: dict[str, Any] = {}
+
+    def _mock_chat_json_for_role(role, messages, *, timeout=None):
+        called["role"] = role
+        called["messages"] = messages
+        return {
+            "tasks": [],
+            "hypotheses": [],
+            "killed": [],
+            "planner_summary": "test plan",
+            "confidence": 0.6,
+        }, "ag/claude-opus-4-6-thinking"
+
+    router.chat_json_for_role = _mock_chat_json_for_role  # type: ignore[method-assign]
+    planner = PlannerAgent(config, router)
+    state = SessionState()
+    state.scope.target = "example.com"
+    result = planner.plan("defensive hunt", state)
+    assert called.get("role") == "planner"
+    assert result.get("planner_summary") == "test plan"
