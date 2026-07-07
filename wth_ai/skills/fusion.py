@@ -7,6 +7,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from wth_ai.config import WTHConfig
+from wth_ai.models import tech_stack_blob
 from wth_ai.skills.indexer import SkillIndex
 from wth_ai.skills.registry import Skill, SkillRegistry
 from wth_ai.skills.router import INTENT_SKILL_MAP, SkillRouter
@@ -57,7 +58,7 @@ class SkillFusionEngine:
         for intent in INTENT_SKILL_MAP:
             if intent in text:
                 found.append(intent)
-        tech_blob = " ".join((tech_stack or {}).values()).lower()
+        tech_blob = tech_stack_blob(tech_stack)
         if "laravel" in tech_blob or "php" in tech_blob:
             found.append("idor")
         if "api" in tech_blob or "graphql" in tech_blob:

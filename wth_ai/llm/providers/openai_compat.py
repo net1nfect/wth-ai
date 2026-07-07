@@ -15,7 +15,100 @@ DEFAULT_BASE_URLS = {
     "anthropic": "https://api.anthropic.com/v1",
     "google": "https://generativelanguage.googleapis.com/v1beta/openai",
     "groq": "https://api.groq.com/openai/v1",
+    "9router": "http://127.0.0.1:20128/v1",
 }
+
+
+def _normalize_base_url(provider_name: str, base_url: str | None) -> str:
+    raw = (base_url or DEFAULT_BASE_URLS.get(provider_name, DEFAULT_BASE_URLS["openai"])).rstrip("/")
+    if provider_name == "9router" and not raw.endswith("/v1"):
+        raw = f"{raw}/v1"
+    return raw
+
+
+def _http_error_message(provider_name: str, model: str, url: str, status: int, body: str) -> str:
+    snippet = (body or "").strip()[:240]
+    if status == 401:
+        return (
+            f"{provider_name}: API key ditolak (HTTP 401). "
+            f"Cek vault/env (`ROUTER9_API_KEY` atau `wth doctor`)."
+        )
+    if status == 404:
+        if provider_name == "9router" and "qwen/" in model:
+            return (
+                f"9router: model {model!r} tidak ada di gateway (HTTP 404). "
+                f"Set reporter/planner ke model 9router, mis. `ag/gemini-pro-agent` via `/model set all ag/gemini-pro-agent`."
+            )
+        return (
+            f"{provider_name}: model atau endpoint tidak ditemukan (HTTP 404) — model={model!r}, url={url}. "
+            f"Jalankan `wth model list`."
+        )
+    if status == 429:
+        return f"{provider_name}: rate limit (HTTP 429). Tunggu sebentar atau ganti model."
+    if snippet:
+        return f"{provider_name}: HTTP {status} — {snippet}"
+    return f"{provider_name}: HTTP {status} for {url}"
+
+
+def _raise_for_status(provider_name: str, model: str, url: str, response: requests.Response) -> None:
+    if response.ok:
+        return
+    try:
+        body = response.text
+    except Exception:
+        body = ""
+    raise LLMError(_http_error_message(provider_name, model, url, response.status_code, body))
+
+
+def _parse_response_json(text: str) -> dict[str, Any]:
+    """Parse OpenAI JSON or SSE bodies (9router may stream even when stream=false)."""
+    raw = (text or "").strip()
+    if not raw:
+        raise LLMError("empty LLM response body")
+    if raw.startswith("data:") or "\ndata:" in raw:
+        return _parse_sse_payload(raw)
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError as exc:
+        if "Extra data" in str(exc):
+            obj, _ = json.JSONDecoder().raw_decode(raw)
+            return obj
+        raise
+
+
+def _parse_sse_payload(text: str) -> dict[str, Any]:
+    content_parts: list[str] = []
+    last_obj: dict[str, Any] | None = None
+    for line in text.splitlines():
+        line = line.strip()
+        if not line.startswith("data:"):
+            continue
+        payload = line[5:].strip()
+        if not payload or payload == "[DONE]":
+            continue
+        try:
+            obj = json.loads(payload)
+        except json.JSONDecodeError:
+            continue
+        last_obj = obj
+        choice = (obj.get("choices") or [{}])[0]
+        msg = choice.get("message")
+        if msg and msg.get("content"):
+            return obj
+        delta = choice.get("delta") or {}
+        if delta.get("content"):
+            content_parts.append(str(delta["content"]))
+    if content_parts and last_obj is not None:
+        merged = dict(last_obj)
+        merged["choices"] = [{
+            "index": 0,
+            "message": {"role": "assistant", "content": "".join(content_parts)},
+            "finish_reason": "stop",
+        }]
+        return merged
+    if last_obj is not None:
+        return last_obj
+    raise LLMError("could not parse streaming LLM response")
 
 
 class OpenAICompatProvider(BaseLLMProvider):
@@ -40,7 +133,7 @@ class OpenAICompatProvider(BaseLLMProvider):
     ) -> None:
         self.provider_name = provider_name
         self.api_key = api_key
-        self.base_url = (base_url or DEFAULT_BASE_URLS.get(provider_name, DEFAULT_BASE_URLS["openai"])).rstrip("/")
+        self.base_url = _normalize_base_url(provider_name, base_url)
         self.temperature = temperature
         self.max_tokens = max_tokens
         self.default_timeout = default_timeout
@@ -95,13 +188,15 @@ class OpenAICompatProvider(BaseLLMProvider):
             "messages": messages,
             "temperature": temperature if temperature is not None else self.temperature,
             "max_tokens": max_tokens or self.max_tokens,
+            "stream": False,
         }
         if response_format:
             payload["response_format"] = response_format
         url = f"{self.base_url}/chat/completions"
         r = requests.post(url, headers=self._headers(), json=payload, timeout=timeout or self.default_timeout)
-        r.raise_for_status()
-        return r.json()["choices"][0]["message"]["content"]
+        _raise_for_status(self.provider_name, model, url, r)
+        data = _parse_response_json(r.text)
+        return data["choices"][0]["message"]["content"]
 
     def chat_with_tools(
         self,
@@ -122,9 +217,10 @@ class OpenAICompatProvider(BaseLLMProvider):
             "tool_choice": tool_choice,
             "temperature": self.temperature,
             "max_tokens": self.max_tokens,
+            "stream": False,
         }
         url = f"{self.base_url}/chat/completions"
         r = requests.post(url, headers=self._headers(), json=payload, timeout=timeout or self.default_timeout)
-        r.raise_for_status()
-        data = r.json()
+        _raise_for_status(self.provider_name, model, url, r)
+        data = _parse_response_json(r.text)
         return {"message": data["choices"][0]["message"], "model": model, "raw": data}

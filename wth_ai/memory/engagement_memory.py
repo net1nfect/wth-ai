@@ -76,6 +76,20 @@ class EngagementMemory:
             self.tech_profile = "api"
         self.save()
 
+    def sync_from_graph(self, graph: Any) -> None:
+        """Sync asset labels from AssetGraph into engagement memory."""
+        from wth_ai.graph.models import NodeType
+
+        labels: list[str] = []
+        routes: list[dict[str, Any]] = []
+        for node in graph.nodes.values():
+            labels.append(node.label)
+            if node.type in (NodeType.ENDPOINT, NodeType.HOST):
+                routes.append({"path": node.label, "type": node.type.value})
+        self.assets = list(dict.fromkeys(self.assets + labels[:100]))
+        self.routes.extend(routes[:50])
+        self.save()
+
     def update_from_executor(self, result: dict[str, Any]) -> None:
         for ev in result.get("evidence", []):
             if isinstance(ev, str) and "route" in ev.lower():

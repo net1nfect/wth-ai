@@ -83,16 +83,12 @@ class BaseLLMAgent:
             self.client.require_available()
         if self.client.available():
             use_stream = bool(on_token and self.config.models.streaming)
-            primary, fb = self.client.model_for_role(role) if role in self.config.providers else (model, backup)
             return self.client.chat_for_role(
                 role,
                 messages,
                 timeout=timeout,
                 stream=use_stream,
                 on_token=on_token,
-            ) if role in self.config.providers else self.client.chat_with_fallback(
-                primary or model, fb or backup, messages,
-                timeout=timeout, stream=use_stream, on_token=on_token,
             )
         if self.config.realtime_only:
             raise LLMUnavailableError(

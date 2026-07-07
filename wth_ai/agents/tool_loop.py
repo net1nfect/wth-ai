@@ -3,15 +3,22 @@
 from __future__ import annotations
 
 import json
+import threading
+import time
 from typing import Any, Callable
+from urllib.parse import urlparse
 
 from wth_ai.agents.grounding import GroundingFirewall
+from wth_ai.agents.supervisor_dispatch import dispatch_supervisor_tool
 from wth_ai.agents.tool_registry import tools_for_actor
 from wth_ai.evidence.vault import EvidenceVault
 from wth_ai.graph.asset_graph import AssetGraph
 from wth_ai.llm.errors import LLMUnavailableError
 from wth_ai.llm.router import LLMProviderRouter
 from wth_ai.terminal.bridge import AgentTerminalBridge
+
+if True:
+    from wth_ai.agents.supervisor_context import SupervisorContext
 
 
 class AgentToolLoop:
@@ -25,12 +32,16 @@ class AgentToolLoop:
         graph: AssetGraph | None = None,
         vault: EvidenceVault | None = None,
         max_iters: int = 8,
+        supervisor_ctx: SupervisorContext | None = None,
+        on_token: Callable[[str], None] | None = None,
     ) -> None:
         self.client = client
         self.bridge = bridge
         self.graph = graph
         self.vault = vault
         self.max_iters = max_iters
+        self.supervisor_ctx = supervisor_ctx
+        self.on_token = on_token
         self.grounding = GroundingFirewall()
 
     def run(
@@ -44,11 +55,11 @@ class AgentToolLoop:
         timeout: int = 120,
         approved: bool = False,
     ) -> dict[str, Any]:
-        if not self.client.available():
+        if not self.client.agentic_available():
             import os
             if os.environ.get("WTH_TEST_MODE") == "1":
                 return {"content": "LLM offline", "transcripts": [], "grounded": True}
-            raise LLMUnavailableError("LLM tidak tersedia untuk tool loop. Jalankan `wth-ai setup`.")
+            raise LLMUnavailableError("LLM tidak tersedia untuk tool loop. Jalankan `wth setup`.")
 
         messages: list[dict[str, Any]] = [
             {"role": "system", "content": system},
@@ -57,15 +68,18 @@ class AgentToolLoop:
         tools = tools_for_actor(actor)
         transcripts: list[str] = []
 
-        for _ in range(self.max_iters):
-            data = self.client.chat_with_tools(
-                model, messages, tools=tools, backup=backup, timeout=timeout,
-            )
+        for iteration in range(self.max_iters):
+            role = "planner" if actor == "supervisor" else actor
+            if role not in {"planner", "executor", "verifier", "supervisor", "recon", "code", "reporter", "fallback"}:
+                role = "planner"
+            data = self._chat_with_tools(role, messages, tools, timeout=timeout)
             msg = data.get("message", {})
             tool_calls = msg.get("tool_calls") or []
 
             if not tool_calls:
                 content = msg.get("content") or ""
+                if self.on_token and content:
+                    self.on_token(content)
                 gr = self.grounding.validate_claims(content, transcript_ids=transcripts)
                 return {
                     "content": gr.text,
@@ -96,11 +110,78 @@ class AgentToolLoop:
         gr = self.grounding.validate_claims("Tool loop max iterations reached", transcript_ids=transcripts)
         return {"content": gr.text, "transcripts": transcripts, "grounded": False, "violations": ["max_iters"]}
 
+    def _chat_with_tools(
+        self,
+        role: str,
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]],
+        *,
+        timeout: int,
+    ) -> dict[str, Any]:
+        ctx = self.supervisor_ctx
+        provider = self.client.provider_for_role(role)
+        model, _backup = self.client.model_for_role(role)
+        rc = self.client.role_config(role)
+        host = ""
+        try:
+            parsed = urlparse(getattr(provider, "base_url", "") or "")
+            host = parsed.netloc or parsed.path or ""
+        except Exception:
+            host = ""
+        meta = {
+            "tools": len(tools),
+            "messages": len(messages),
+            "host": host,
+            "provider_type": rc.type,
+        }
+        stop = threading.Event()
+        started = time.time()
+
+        def _tick() -> None:
+            while not stop.wait(1.0):
+                elapsed = int(time.time() - started)
+                if ctx:
+                    ctx.notify_llm_tick(role, elapsed)
+
+        if ctx:
+            ctx.notify_llm_start(role, provider.name, model, meta)
+        tick_thread = threading.Thread(target=_tick, daemon=True)
+        tick_thread.start()
+        try:
+            data = self.client.chat_with_tools_for_role(
+                role, messages, tools=tools, timeout=timeout,
+            )
+        except Exception as exc:
+            ms = int((time.time() - started) * 1000)
+            if ctx:
+                ctx.notify_llm_end(role, model, ms, {"error": str(exc)})
+            raise
+        finally:
+            stop.set()
+        ms = int((time.time() - started) * 1000)
+        msg = data.get("message", {})
+        tool_calls = msg.get("tool_calls") or []
+        content = msg.get("content") or ""
+        if ctx:
+            ctx.notify_llm_end(
+                role,
+                data.get("model", model),
+                ms,
+                {
+                    "tool_calls": len(tool_calls),
+                    "content_len": len(content),
+                },
+            )
+        return data
+
     def _dispatch_tool(self, name: str, args: dict[str, Any], *, actor: str, approved: bool) -> str:
+        if actor == "supervisor" and self.supervisor_ctx is not None:
+            return dispatch_supervisor_tool(self.supervisor_ctx, name, args, approved=approved)
+
         if name == "query_graph":
             if self.graph and self.graph.nodes:
                 return self.graph.export_for_planner(limit=40)
-            return "Graph empty — run /recon first"
+            return "Graph empty — run recon first"
 
         if name == "store_evidence":
             tid = args.get("transcript_id", "")

@@ -436,8 +436,13 @@ def build_manifest() -> dict:
                 install["script"] = go_i
         if apt_i:
             install["apt"] = f"apt-get install -y {apt_i}"
+            # RHEL/Arch fallbacks when regenerating manifest
+            install.setdefault("dnf", f"dnf install -y {apt_i}")
+            install.setdefault("pacman", f"pacman -S --noconfirm {apt_i}")
         if brew_i:
             install["brew"] = f"brew install {brew_i}"
+            install.setdefault("scoop", f"scoop install {brew_i}")
+            install.setdefault("choco", f"choco install -y {brew_i}")
         tools[tid] = {
             "binary": binary,
             "category": category,

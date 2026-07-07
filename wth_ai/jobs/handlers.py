@@ -1,22 +1,9 @@
- cursor/fase5-recon-platform-93fe
 """Default job handlers.
 
 Handler signature: ``handler(job, ctx) -> dict``. ``ctx`` exposes
 ``ctx.log(str)``, ``ctx.progress(current, total, message)`` and
 ``ctx.should_stop()``. Fase 5 wires the real recon platform behind
-``handler_recon`` while keeping the other handlers as safe placeholders.
-=======
-# wth_ai/jobs/handlers.py
-"""Job handlers (Fase 5.2)
-
-Recon handler now uses the real Recon Engine (ToolRegistry + Planner).
-Still non-destructive in Fase 5.2.
-
-Follows AGENTS.md:
-- All actions respect Policy Engine + Permission
-- Progress + logging via ctx
-- No destructive actions without approval
-main
+``handler_recon``; executor/report use orchestrator bridge.
 """
 
 from __future__ import annotations
@@ -25,13 +12,6 @@ import json
 from pathlib import Path
 from typing import Any, Callable
 
- cursor/fase5-recon-platform-93fe
-=======
-# New Fase 5 imports
-from wth_ai.recon import ToolRegistry, ReconPlanner
-
-
-main
 Handler = Callable[[Any, Any], dict[str, Any]]
 
 
@@ -55,8 +35,58 @@ def _load_baseline(store: Any, target: str, current_job_id: str) -> dict[str, An
     return None
 
 
+def _sync_graph_after_recon(
+    result: dict[str, Any],
+    job: Any,
+    ctx: Any,
+    *,
+    target: str,
+) -> dict[str, Any] | None:
+    """Populate session AssetGraph from recon job output."""
+    output_dir = result.get("output_dir")
+    if not output_dir:
+        return None
+    meta = getattr(job, "metadata", {}) or {}
+    session_id = meta.get("session_id")
+    graph_sync: dict[str, Any] | None = None
+    try:
+        from wth_ai.graph.asset_graph import AssetGraph
+        from wth_ai.graph.recon_bridge import sync_recon_to_graph
+        from wth_ai.session_store import SessionStore
+        from wth_ai.config import WTHConfig
+
+        if session_id:
+            graph = AssetGraph(session_id)
+            graph_sync = sync_recon_to_graph(output_dir, graph, target=target)
+            store = SessionStore(WTHConfig.load())
+            state = store.load(session_id)
+            if state:
+                state.metadata["last_recon"] = {
+                    "job_id": job.job_id,
+                    "target": target,
+                    "graph_nodes": graph_sync.get("nodes", 0) if graph_sync else 0,
+                }
+                attack = result.get("summary", {})
+                if isinstance(attack, dict):
+                    state.metadata["attack_surface_obj"] = {
+                        "target": target,
+                        "tech_stack": attack.get("fingerprints", {}),
+                    }
+                store.save(state)
+        manager = getattr(ctx, "_manager", None)
+        bus = getattr(manager, "bus", None)
+        if bus:
+            bus.emit(
+                "recon.completed",
+                job_id=job.job_id,
+                data={"target": target, "output_dir": output_dir, "graph_sync": graph_sync or {}},
+            )
+    except Exception as exc:  # noqa: BLE001
+        ctx.log(f"graph sync warning: {exc}")
+    return graph_sync
+
+
 def handler_recon(job: Any, ctx: Any) -> dict[str, Any]:
-cursor/fase5-recon-platform-93fe
     """Run the real recon engine (authorized, recon-only, non-destructive)."""
     from wth_ai.recon.engine import ReconEngine
 
@@ -90,7 +120,6 @@ cursor/fase5-recon-platform-93fe
         baseline=baseline,
     )
 
-    # Persist watch bookkeeping when this run is part of a watch.
     if realtime:
         try:
             from wth_ai.recon.realtime import record_run
@@ -99,7 +128,8 @@ cursor/fase5-recon-platform-93fe
         except Exception:  # noqa: BLE001
             pass
 
-    # Return a slim, JSON-serializable result (full data lives in wth-results/).
+    graph_sync = _sync_graph_after_recon(result, job, ctx, target=target)
+
     return {
         "type": "recon",
         "target": target,
@@ -109,91 +139,50 @@ cursor/fase5-recon-platform-93fe
         "summary": result.get("summary", {}),
         "priority_targets": result.get("priority_targets", 0),
         "changes": result.get("changes", {}),
+        "graph_sync": graph_sync,
     }
-=======
-    """
-    Real recon handler using Fase 5 Recon Engine.
-
-    Steps in Fase 5.2:
-    1. Load ToolRegistry (215 tools)
-    2. Run ReconPlanner based on job profile
-    3. Log selected tools + plan
-    4. Return structured plan (non-destructive)
-    """
-    target = getattr(job, "target", None) or job.metadata.get("target", "unknown")
-    profile = getattr(job, "profile", None) or job.metadata.get("profile", "default")
-
-    ctx.log(f"[recon] Starting real recon for target={target} profile={profile}")
-    ctx.progress(5, 100, "Loading tool registry")
-
-    try:
-        registry = ToolRegistry()
-        planner = ReconPlanner(registry)
-
-        ctx.progress(15, 100, "Generating recon plan")
-        plan = planner.plan(target=target, profile=profile, max_risk="safe")
-
-        ctx.progress(40, 100, f"Plan ready: {len(plan.selected_tools)} tools selected")
-
-        # Log selected tools (for transparency)
-        selected_names = [t.name for t in plan.selected_tools[:10]]
-        ctx.log(f"[recon] Selected tools (first 10): {selected_names}")
-        if len(plan.selected_tools) > 10:
-            ctx.log(f"[recon] ... and {len(plan.selected_tools) - 10} more tools")
-
-        ctx.progress(70, 100, "Recon plan complete (non-destructive mode)")
-
-        result = {
-            "type": "recon",
-            "target": target,
-            "profile": profile,
-            "plan_summary": {
-                "total_tools_available": plan.total_tools,
-                "tools_selected": len(plan.selected_tools),
-                "tools_skipped": len(plan.skipped_tools),
-            },
-            "selected_tools": [t.name for t in plan.selected_tools],
-            "skipped_reasons": plan.skipped_tools[:5],  # sample
-            "summary": f"Recon plan generated with {len(plan.selected_tools)} tools",
-        }
-
-        ctx.progress(100, 100, "done")
-        ctx.log("[recon] Recon planning phase completed successfully")
-        return result
-
-    except Exception as e:
-        ctx.log(f"[recon] ERROR: {str(e)}")
-        return {
-            "type": "recon",
-            "target": target,
-            "error": str(e),
-            "summary": "Recon planning failed",
-        }
-main
 
 
 def handler_executor(job: Any, ctx: Any) -> dict[str, Any]:
-    ctx.log("executor (mock, non-destructive - Fase 5.2)")
-    ctx.progress(100, 100, "done")
-    return {"type": "executor", "target": job.target, "executed": False, "note": "mock non-destructive"}
+    from wth_ai.jobs.orchestrator_bridge import run_executor_job
+
+    ctx.log("executor start")
+    return run_executor_job(job, ctx)
 
 
 def handler_report(job: Any, ctx: Any) -> dict[str, Any]:
-    ctx.log("report (mock)")
-    ctx.progress(100, 100, "done")
-    return {"type": "report", "path": None, "summary": "mock report"}
+    from wth_ai.jobs.orchestrator_bridge import run_report_job
+
+    ctx.log("report start")
+    return run_report_job(job, ctx)
 
 
 def handler_provider_test(job: Any, ctx: Any) -> dict[str, Any]:
-    ctx.log(f"provider_test (mock) provider={job.target}")
+    from wth_ai.config import WTHConfig
+    from wth_ai.llm.router import LLMProviderRouter
+
+    provider = job.target or (getattr(job, "metadata", {}) or {}).get("provider", "openrouter")
+    ctx.log(f"provider_test start provider={provider}")
+    ctx.progress(10, 100, "testing provider")
+    router = LLMProviderRouter(WTHConfig.load())
+    result = router.test_provider(provider)
     ctx.progress(100, 100, "done")
-    return {"type": "provider_test", "provider": job.target, "ok": True, "note": "mock"}
+    return {"type": "provider_test", "provider": provider, **result}
 
 
 def handler_custom(job: Any, ctx: Any) -> dict[str, Any]:
-    ctx.log("custom job (mock)")
+    meta = getattr(job, "metadata", {}) or {}
+    action = meta.get("action", "")
+    if action == "echo":
+        ctx.progress(100, 100, "done")
+        return {"type": "custom", "status": "completed", "echo": meta}
     ctx.progress(100, 100, "done")
-    return {"type": "custom", "echo": job.metadata}
+    return {
+        "type": "custom",
+        "status": "skipped",
+        "note": "custom jobs require metadata.action",
+        "metadata": meta,
+    }
 
 
 def default_handlers() -> dict[str, Handler]:

@@ -19,11 +19,52 @@ def utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def tech_stack_blob(tech_stack: str | dict[str, Any] | None) -> str:
+    """Flatten tech stack metadata to a lowercase search blob."""
+    if isinstance(tech_stack, str):
+        return tech_stack.strip().lower()
+    if not isinstance(tech_stack, dict) or not tech_stack:
+        return ""
+    parts: list[str] = []
+    for key, value in tech_stack.items():
+        if isinstance(value, dict):
+            parts.extend(f"{sub_key}:{sub_val}" for sub_key, sub_val in value.items())
+        elif isinstance(value, (list, tuple, set)):
+            parts.extend(str(item) for item in value)
+        else:
+            parts.append(f"{key}:{value}")
+    return " ".join(parts).strip().lower()
+
+
+def tech_stack_key(
+    tech_stack: str | dict[str, Any] | None,
+    *,
+    fallback: str = "generic_web",
+) -> str:
+    """Normalize tech stack metadata to a hunt-memory lookup key."""
+    if isinstance(tech_stack, str):
+        key = tech_stack.strip().lower()
+        return key or fallback
+    blob = tech_stack_blob(tech_stack)
+    if not blob:
+        return fallback
+    for token in (
+        "laravel", "django", "rails", "wordpress", "graphql",
+        "spring", "php", "java", "node", "nginx", "apache",
+    ):
+        if token in blob:
+            return token
+    if "api" in blob:
+        return "api"
+    return blob.split()[0][:64] or fallback
+
+
 class PermissionMode(str, Enum):
     READ_ONLY_RECON = "read_only"
     STANDARD_TESTING = "standard"
     ELEVATED_APPROVAL = "elevated"
     FULL_LAB = "full_lab"
+    UNRESTRICTED = "unrestricted"
 
 
 class FindingState(str, Enum):

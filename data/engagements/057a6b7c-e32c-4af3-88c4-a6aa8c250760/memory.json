@@ -1,0 +1,14 @@
+{
+  "session_id": "057a6b7c-e32c-4af3-88c4-a6aa8c250760",
+  "updated_at": "2026-07-06T17:05:08.178557+00:00",
+  "assets": [],
+  "routes": [],
+  "controllers": [],
+  "middleware": [],
+  "input_surfaces": [],
+  "trust_boundaries": [],
+  "rejected_hypotheses": [],
+  "evidence_gaps": [],
+  "iteration": 1,
+  "tech_profile": "generic_web"
+}

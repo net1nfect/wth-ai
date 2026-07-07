@@ -27,6 +27,7 @@ ROLE_NAMES: tuple[str, ...] = (
 
 # Provider types the router can construct.
 PROVIDER_NAMES: tuple[str, ...] = (
+    "9router",
     "openrouter",
     "openai",
     "anthropic",
@@ -70,6 +71,7 @@ class ProviderRoleConfig:
 
 @dataclass
 class SecretsConfig:
+    router9_api_key: str | None = None
     openrouter_api_key: str | None = None
     openai_api_key: str | None = None
     anthropic_api_key: str | None = None
@@ -77,10 +79,27 @@ class SecretsConfig:
     groq_api_key: str | None = None
     custom_api_key: str | None = None
     ollama_base_url: str = "http://127.0.0.1:11434"
+    router9_base_url: str = "http://127.0.0.1:20128/v1"
     openai_base_url: str | None = None
     anthropic_base_url: str | None = None
     google_base_url: str | None = None
     custom_base_url: str | None = None
+
+
+@dataclass
+class ProviderPrefsConfig:
+    primary: str = "9router"
+    failover_order: list[str] = field(
+        default_factory=lambda: ["9router", "openrouter", "anthropic", "groq", "ollama"]
+    )
+    failover_enabled: bool = True
+
+
+@dataclass
+class SafetyConfig:
+    unrestricted: bool = False
+    default_permission: str = "full_lab"
+    require_authorized: bool = False
 
 
 @dataclass
@@ -162,7 +181,18 @@ class IntelConfig:
 @dataclass
 class MCPConfig:
     enabled: bool = False
-    servers: list[str] = field(default_factory=lambda: ["hexstrike"])
+    servers: dict[str, Any] = field(default_factory=dict)
+    policy: dict[str, Any] = field(default_factory=lambda: {
+        "allowed_tools": ["*"],
+        "max_calls_per_minute": 0,
+        "audit_log": True,
+    })
+
+
+@dataclass
+class NineRouterConfig:
+    base_url: str = "http://127.0.0.1:20128/v1"
+    api_key_env: str = "ROUTER9_API_KEY"
 
 
 @dataclass
@@ -205,6 +235,30 @@ class BrowserConfig:
 
 
 @dataclass
+class AgentConfig:
+    max_iters: int = 50
+    recon_profile: str = "recon-only"
+    stream_tools: bool = True
+    auto_approve_unrestricted: bool = True
+    mode: str = "hybrid"  # hybrid | chat | security
+
+
+@dataclass
+class UIConfig:
+    mode: str = "plain"  # plain | tui
+    compact: bool = True
+    verbose: bool = True
+    activity_mode: str = "live"  # live | stream | quiet
+    animations: bool = True
+    show_tool_trace: bool = True
+    show_progress_bar: bool = True
+    stream_tokens: bool = True
+    banner: bool = True
+    theme: str = "dark"
+    max_trace_lines: int = 20
+
+
+@dataclass
 class WTHConfig:
     models: ModelConfig = field(default_factory=ModelConfig)
     providers: dict[str, ProviderRoleConfig] = field(default_factory=dict)
@@ -219,6 +273,11 @@ class WTHConfig:
     recon: ReconConfig = field(default_factory=ReconConfig)
     intel: IntelConfig = field(default_factory=IntelConfig)
     mcp: MCPConfig = field(default_factory=MCPConfig)
+    nine_router: NineRouterConfig = field(default_factory=NineRouterConfig)
+    provider_prefs: ProviderPrefsConfig = field(default_factory=ProviderPrefsConfig)
+    safety: SafetyConfig = field(default_factory=SafetyConfig)
+    agent: AgentConfig = field(default_factory=AgentConfig)
+    ui: UIConfig = field(default_factory=UIConfig)
     prompts_dir: str = "prompts"
     results_dir: str = "wth-results"
     require_openrouter: bool = False
@@ -249,6 +308,16 @@ class WTHConfig:
         recon_raw = raw.get("recon", {})
         intel_raw = raw.get("intel", {})
         mcp_raw = raw.get("mcp", {})
+        mcp_servers = mcp_raw.get("servers", {})
+        if isinstance(mcp_servers, list):
+            mcp_servers = {name: {} for name in mcp_servers}
+        mcp_cfg = {k: v for k, v in mcp_raw.items() if k in MCPConfig.__dataclass_fields__ and k != "servers"}
+        mcp_cfg["servers"] = mcp_servers if isinstance(mcp_servers, dict) else {}
+        safety_raw = raw.get("safety", {})
+        agent_raw = raw.get("agent", {})
+        ui_raw = raw.get("ui", {})
+        prefs_raw = raw.get("provider_prefs", {})
+        nr_raw = raw.get("nine_router", {})
         secrets_raw = raw.get("secrets", {})
         bots_raw = raw.get("bots", {})
         providers_raw = raw.get("providers", {})
@@ -277,6 +346,7 @@ class WTHConfig:
             return resolve(secrets_raw.get(field), env_key)
 
         secrets = SecretsConfig(
+            router9_api_key=_sec("router9_api_key", "ROUTER9_API_KEY") or os.environ.get("9ROUTER_API_KEY"),
             openrouter_api_key=_sec("openrouter_api_key", "OPENROUTER_API_KEY"),
             openai_api_key=_sec("openai_api_key", "OPENAI_API_KEY"),
             anthropic_api_key=_sec("anthropic_api_key", "ANTHROPIC_API_KEY"),
@@ -284,6 +354,7 @@ class WTHConfig:
             groq_api_key=_sec("groq_api_key", "GROQ_API_KEY"),
             custom_api_key=_sec("custom_api_key", "CUSTOM_API_KEY"),
             ollama_base_url=secrets_raw.get("ollama_base_url", "http://127.0.0.1:11434"),
+            router9_base_url=secrets_raw.get("router9_base_url", nr_raw.get("base_url", "http://127.0.0.1:20128/v1")),
             openai_base_url=secrets_raw.get("openai_base_url"),
             anthropic_base_url=secrets_raw.get("anthropic_base_url"),
             google_base_url=secrets_raw.get("google_base_url"),
@@ -315,14 +386,19 @@ class WTHConfig:
             browser=BrowserConfig(**{k: v for k, v in browser_raw.items() if k in BrowserConfig.__dataclass_fields__}),
             recon=ReconConfig(**{k: v for k, v in recon_raw.items() if k in ReconConfig.__dataclass_fields__}),
             intel=IntelConfig(**{k: v for k, v in intel_raw.items() if k in IntelConfig.__dataclass_fields__}),
-            mcp=MCPConfig(**{k: v for k, v in mcp_raw.items() if k in MCPConfig.__dataclass_fields__}),
+            mcp=MCPConfig(**mcp_cfg),
+            nine_router=NineRouterConfig(**{k: v for k, v in nr_raw.items() if k in NineRouterConfig.__dataclass_fields__}),
+            provider_prefs=ProviderPrefsConfig(**{k: v for k, v in prefs_raw.items() if k in ProviderPrefsConfig.__dataclass_fields__}),
+            safety=SafetyConfig(**{k: v for k, v in safety_raw.items() if k in SafetyConfig.__dataclass_fields__}),
+            agent=AgentConfig(**{k: v for k, v in agent_raw.items() if k in AgentConfig.__dataclass_fields__}),
+            ui=UIConfig(**{k: v for k, v in ui_raw.items() if k in UIConfig.__dataclass_fields__}),
             prompts_dir=raw.get("prompts_dir", "prompts"),
             results_dir=raw.get("results_dir", "wth-results"),
             require_openrouter=raw.get("require_openrouter", False),
             realtime_only=raw.get("realtime_only", True),
             require_llm=raw.get("require_llm", user_raw.get("setup_complete", False)),
             setup_complete=raw.get("setup_complete", False),
-            default_permission=raw.get("default_permission", "read_only"),
+            default_permission=raw.get("default_permission", safety_raw.get("default_permission", "full_lab")),
         )
         return cfg
 
@@ -342,10 +418,14 @@ class WTHConfig:
         vault = SecretVault()
         present = set(vault.list_keys()) if vault.can_open() else set()
 
-        secrets_out: dict[str, Any] = {"ollama_base_url": self.secrets.ollama_base_url}
+        secrets_out: dict[str, Any] = {
+            "ollama_base_url": self.secrets.ollama_base_url,
+            "router9_base_url": self.secrets.router9_base_url,
+        }
         if self.secrets.custom_base_url:
             secrets_out["custom_base_url"] = self.secrets.custom_base_url
         for field, vname in (
+            ("router9_api_key", "router9_api_key"),
             ("openrouter_api_key", "openrouter_api_key"),
             ("openai_api_key", "openai_api_key"),
             ("anthropic_api_key", "anthropic_api_key"),
@@ -394,11 +474,22 @@ class WTHConfig:
             "realtime_only": self.realtime_only,
             "require_llm": self.require_llm,
             "default_permission": self.default_permission,
+            "safety": {
+                "unrestricted": self.safety.unrestricted,
+                "default_permission": self.safety.default_permission,
+                "require_authorized": self.safety.require_authorized,
+            },
+            "provider_prefs": {
+                "primary": self.provider_prefs.primary,
+                "failover_order": self.provider_prefs.failover_order,
+                "failover_enabled": self.provider_prefs.failover_enabled,
+            },
             "providers": {
                 role: {
                     "type": p.type,
                     "model": p.model,
                     "backup_model": p.backup_model,
+                    **({"base_url": p.base_url} if p.base_url else {}),
                 }
                 for role, p in self.providers.items()
             },
@@ -456,6 +547,8 @@ def _make_secret_resolver() -> Any:
 def _inject_secret_env(secrets: SecretsConfig, bots: BotConfig) -> None:
     """Expose resolved secrets to in-process env for subprocesses (no disk write)."""
     mapping = {
+        "ROUTER9_API_KEY": secrets.router9_api_key,
+        "9ROUTER_API_KEY": secrets.router9_api_key,
         "OPENROUTER_API_KEY": secrets.openrouter_api_key,
         "OPENAI_API_KEY": secrets.openai_api_key,
         "ANTHROPIC_API_KEY": secrets.anthropic_api_key,

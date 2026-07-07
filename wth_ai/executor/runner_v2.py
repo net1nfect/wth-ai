@@ -51,27 +51,16 @@ class ExecutorRunnerV2:
         return None
 
     def run_shell_live(self, cmd: str, *, timeout: int = 300) -> tuple[str, str, int]:
+        from wth_ai.shell_runner import run_command
+
         stdout_lines: list[str] = []
-        try:
-            proc = subprocess.Popen(
-                cmd,
-                shell=True,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                text=True,
-            )
-            assert proc.stdout is not None
-            for line in proc.stdout:
-                line = line.rstrip("\n")
-                stdout_lines.append(line)
-                self.on_line(line)
-            proc.wait(timeout=timeout)
-            return "\n".join(stdout_lines), "", proc.returncode or 0
-        except subprocess.TimeoutExpired:
-            proc.kill()
-            return "\n".join(stdout_lines), "timeout", 124
-        except OSError as exc:
-            return "", str(exc), 1
+
+        def _on_line(line: str) -> None:
+            stdout_lines.append(line)
+            self.on_line(line)
+
+        stdout, stderr, code = run_command(cmd, timeout=timeout, on_line=_on_line)
+        return stdout or "\n".join(stdout_lines), stderr, code
 
     def probe_with_diff_brain(self, task: ExecutorTask) -> ExecutorResult | None:
         schema = task.evidence_schema or {}

@@ -12,6 +12,7 @@ progress 0..100 through an optional callback (wired to the job worker).
 from __future__ import annotations
 
 import json
+import os
 import re
 import time
 from datetime import datetime, timezone
@@ -21,6 +22,11 @@ from typing import Any, Callable
 from wth_ai.recon import http as rhttp
 from wth_ai.recon import report as report_mod
 from wth_ai.recon import scoring
+from wth_ai.recon.adaptive import (
+    filter_specs_by_adaptive,
+    signals_from_normalizer,
+    sort_specs_by_adaptive,
+)
 from wth_ai.recon.diff import diff_results
 from wth_ai.recon.model import ToolRun, ToolSpec
 from wth_ai.recon.normalizer import ReconNormalizer
@@ -89,23 +95,28 @@ class ReconEngine:
         progress(5, 100, "scope/policy")
         ttype = detect_target_type(target)
         if not authorized:
-            log("recon blocked: target not authorized")
-            result = {
-                "type": "recon", "target": target, "status": "blocked",
-                "reason": "authorized=no (recon-only requires authorization)",
-                "output_dir": str(out_dir),
-            }
-            (out_dir / "recon_summary.json").write_text(json.dumps(result, indent=2), encoding="utf-8")
-            return result
+            from wth_ai.engagement.mode import is_unrestricted
+            if not (is_unrestricted() and os.environ.get("WTH_UNRESTRICTED") == "1"):
+                log("recon blocked: target not authorized")
+                result = {
+                    "type": "recon", "target": target, "status": "blocked",
+                    "reason": "authorized=no (recon-only requires authorization)",
+                    "output_dir": str(out_dir),
+                }
+                (out_dir / "recon_summary.json").write_text(json.dumps(result, indent=2), encoding="utf-8")
+                return result
         if ttype == "local" and profile != "local":
             log(f"note: local target '{target}' — forcing profile=local")
             profile = "local"
 
         # 2) plan ----------------------------------------------------------
         progress(10, 100, "tool plan")
-        plan = self.planner.plan(target, profile=profile, realtime=realtime)
+        plan_signals = baseline if baseline else None
+        plan = self.planner.plan(target, profile=profile, realtime=realtime, signals=plan_signals)
         (out_dir / "recon_plan.json").write_text(json.dumps(plan.to_dict(), indent=2), encoding="utf-8")
         log(f"plan: {len(plan.selected)} tools selected, {len(plan.skipped)} skipped (profile={profile})")
+        if plan.adaptive_profile:
+            log(f"adaptive profile: {plan.adaptive_profile} rules={plan.matched_rules}")
 
         runner = SafeToolRunner(
             self.registry, raw_dir=raw_dir, timeout=self.tool_timeout, runlog_path=runlog_path
@@ -148,14 +159,17 @@ class ReconEngine:
         # 4) external/api tools (availability-gated; builtins already covered
         #    the 20..85 milestones, so externals run within the 88..90 band) ---
         progress(88, 100, "external/enrichment tools")
-        # category priority preserves coverage order even though progress is flat
-        cat_rank = {
-            "subdomain": 0, "dns": 1, "intel": 2, "http_probe": 3, "port": 4,
-            "tls": 5, "archive": 6, "crawl": 7, "js": 8, "param": 9,
-            "api_schema": 10, "code_intel": 11, "cloud": 12, "screenshot": 13,
-            "container": 14, "mobile": 15, "core": 16,
-        }
-        for spec in sorted(external_specs, key=lambda s: cat_rank.get(s.category, 99)):
+        post_match = self.planner.refine_match(signals_from_normalizer(normalizer))
+        if post_match.matched_rules:
+            plan.adaptive_profile = post_match.profile
+            plan.matched_rules = post_match.matched_rules
+            plan.boost_categories = list(post_match.boost_categories)
+            plan.skip_categories = list(post_match.skip_categories)
+            (out_dir / "recon_plan.json").write_text(json.dumps(plan.to_dict(), indent=2), encoding="utf-8")
+            log(f"adaptive refine: profile={post_match.profile} rules={post_match.matched_rules}")
+        external_specs = filter_specs_by_adaptive(external_specs, post_match)
+        external_specs = sort_specs_by_adaptive(external_specs, post_match)
+        for spec in external_specs:
             run = runner.run(spec, target=target, ctx=ctx)
             _record(run)
             if run.status not in ("skipped",):

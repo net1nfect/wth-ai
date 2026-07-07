@@ -23,7 +23,9 @@ dependencies = [
 
 [project.optional-dependencies]
 browser = ["nodriver>=0.38"]
-full = ["nodriver>=0.38", "aiohttp>=3.9", "dnspython>=2.4", "beautifulsoup4>=4.12"]
+tui = ["textual>=0.80"]
+full = ["nodriver>=0.38", "aiohttp>=3.9", "dnspython>=2.4", "beautifulsoup4>=4.12", "lxml>=5.0", "textual>=0.80"]
+mcp = ["mcp>=1.0.0"]
 
 [project.scripts]
 wth = "wth_ai.cli.entry:main"

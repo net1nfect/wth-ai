@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from typing import Any, TYPE_CHECKING
 
+from wth_ai.ctf.packs import ctf_wordlists, suggest_challenge_type
+from wth_ai.engagement.mode import EngagementMode, get_engagement_mode
 from wth_ai.brain.chain_planner import ChainPlanner
 from wth_ai.brain.hypothesis_engine import HypothesisEngine
 from wth_ai.executor.evidence import EvidencePipeline
@@ -29,19 +31,32 @@ class EngagementLoop:
         memory = orch.memory
         lines: list[str] = [f"# Hunt v2 — {orch.state.scope.target or 'no target'}", ""]
 
+        if get_engagement_mode() == EngagementMode.CTF:
+            fp = orch.state.metadata.get("fingerprint", {})
+            ctype = suggest_challenge_type(fp if isinstance(fp, dict) else {})
+            lines.append(f"## CTF mode — suggested type: {ctype}")
+            lines.append(f"- Wordlist packs: {len(ctf_wordlists(ctype))}")
+
         if not orch.state.scope.target:
-            return "Set scope first: `/scope set target=domain.com authorized=yes`"
+            return "Set scope first: `/target domain.com` atau `/scope set target=domain.com authorized=yes`"
 
         self.sm.state = LoopState.RECON
-        if not orch.state.metadata.get("last_recon"):
+        force_recon = "force" in goal.lower() or not orch.asset_graph.coverage().get("nodes")
+        if force_recon or not orch.state.metadata.get("last_recon"):
+            orch.state.metadata.pop("last_recon", None)
             recon_result = orch._run_recon([])
             lines.append("## Phase: Recon")
             lines.append(recon_result[:2000])
+            memory.sync_from_graph(orch.asset_graph)
         else:
             lines.append("## Phase: Recon (cached)")
             lines.append(f"- Graph nodes: {orch.asset_graph.coverage().get('nodes', 0)}")
 
         tech_stack = (orch.state.metadata.get("attack_surface_obj") or {}).get("tech_stack", {})
+        tech_profile = orch.state.metadata.get("tech_profile", "generic_web")
+        recon_meta = orch.state.metadata.get("last_recon", {})
+        if recon_meta.get("adaptive_profile"):
+            tech_profile = recon_meta["adaptive_profile"]
         pre_hypotheses = self.hypothesis_engine.generate(orch.asset_graph, tech_stack)
         chains = self.chain_planner.plan_from_hypotheses(pre_hypotheses, orch.state.scope.target or "")
         orch.state.metadata["pre_hypotheses"] = pre_hypotheses
@@ -58,6 +73,9 @@ class EngagementLoop:
                 f"{goal}\n\nITERATION {iteration}\n"
                 f"Graph coverage: {cov_before}%\n{memory.context_block()}"
             )
+            nudge = orch.learning.engagement_nudge(tech_profile)
+            if nudge:
+                plan_input += f"\n{nudge}\n"
             plan_result = orch.planner.plan(
                 plan_input, orch.state,
                 resume_context=memory.context_block(),

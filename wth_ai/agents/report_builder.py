@@ -41,13 +41,15 @@ class ReportBuilderAgent(BaseLLMAgent):
         if poc_blocks:
             prompt += f"\n\nInclude these PoC blocks in the report:\n{poc_blocks}"
         if self.client.available():
+            _, backup = self.client.model_for_role("reporter")
+            primary, _ = self.client.model_for_role("reporter")
             raw, _ = self._call(
-                self.config.models.report,
-                self.config.models.executor_backup,
+                primary,
+                backup,
                 self.system_prompt,
                 [],
                 prompt,
-                role="report",
+                role="reporter",
             )
             return raw
         import os

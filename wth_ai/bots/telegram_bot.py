@@ -73,9 +73,9 @@ class WTHTelegramBot:
 
     async def cmd_start(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await update.message.reply_text(  # type: ignore[union-attr]
-            "WTH-AI v1.0 — Bug Hunter Bot\n\n"
+            "WTH-AI — Agentic Security Bot\n\n"
             "Commands: /doctor /recon /plan /graph /hunt\n"
-            "Atau kirim pesan bebas untuk chat dengan AI."
+            "Or send natural language — the supervisor agent handles everything."
         )
 
     async def cmd_doctor(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -83,18 +83,18 @@ class WTHTelegramBot:
 
     async def cmd_recon(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         target = " ".join(context.args) if context.args else ""
-        await self._run_cmd(update, f"/recon {target}".strip())
+        await self._run_cmd(update, f"recon {target}".strip())
 
     async def cmd_plan(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         goal = " ".join(context.args) if context.args else "Audit target"
-        await self._run_cmd(update, f"/plan {goal}")
+        await self._run_cmd(update, f"plan hunt: {goal}")
 
     async def cmd_graph(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-        await self._run_cmd(update, "/graph")
+        await self._run_cmd(update, "show asset graph summary")
 
     async def cmd_hunt(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         goal = " ".join(context.args) if context.args else ""
-        await self._run_cmd(update, f"/hunt {goal}".strip())
+        await self._run_cmd(update, f"hunt {goal}".strip())
 
     async def on_message(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         if not update.message or not update.message.text:

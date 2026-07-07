@@ -96,10 +96,9 @@ class PlannerAgent(BaseLLMAgent):
         if self.client.available() and not on_token:
             try:
                 messages = build_messages(self.system_prompt, state.conversation, prompt)
-                parsed_json, model_used = self.client.chat_json(
-                    self.config.models.planner,
+                parsed_json, model_used = self.client.chat_json_for_role(
+                    "planner",
                     messages,
-                    backup=self.config.models.planner_backup,
                     timeout=self.config.models.planner_timeout_seconds,
                 )
                 raw = json.dumps(parsed_json, ensure_ascii=False, indent=2)

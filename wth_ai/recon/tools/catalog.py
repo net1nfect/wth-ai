@@ -55,8 +55,19 @@ BUILTIN_TOOLS: dict[str, str] = {
 
 # A curated set of external tools we have real adapters for (argv + parser).
 SUPPORTED_EXTERNAL: frozenset[str] = frozenset(
-    {"subfinder", "assetfinder", "findomain", "dnsx", "httpx", "httprobe",
-     "waybackurls", "gau", "katana", "hakrawler", "naabu"}
+    {
+        "subfinder", "assetfinder", "findomain", "dnsx", "httpx", "httprobe",
+        "waybackurls", "gau", "katana", "hakrawler", "naabu",
+        "amass", "theHarvester", "whatweb", "wafw00f", "tlsx", "testssl",
+        "securityheaders-cli", "feroxbuster", "gobuster", "dirsearch",
+        "nmap", "massdns", "puredns", "shuffledns", "dnsrecon",
+        "webanalyze", "paramspider", "arjun",
+        "rustscan", "sx", "ffuf", "dirb", "wfuzz", "dig", "host", "whois",
+        "chaos-client", "github-subdomains", "sublist3r", "knockpy", "fierce",
+        "dnsenum", "dnsvalidator", "zdns", "gauplus", "waymore", "gospider",
+        "cariddi", "photon", "sslyze", "sslscan", "jarm", "retire", "retirejs",
+        "nrich", "linkfinder",
+    }
 )
 
 # High-risk tools: cataloged but disabled by default and never auto-run safely.

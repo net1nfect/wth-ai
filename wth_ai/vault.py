@@ -25,6 +25,8 @@ VAULT_REF_PREFIX = "vault:"
 
 # Canonical vault secret names <-> environment variables.
 ENV_TO_VAULT: dict[str, str] = {
+    "ROUTER9_API_KEY": "router9_api_key",
+    "9ROUTER_API_KEY": "router9_api_key",
     "OPENROUTER_API_KEY": "openrouter_api_key",
     "OPENAI_API_KEY": "openai_api_key",
     "ANTHROPIC_API_KEY": "anthropic_api_key",

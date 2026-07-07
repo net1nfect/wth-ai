@@ -1,4 +1,3 @@
-cursor/fase5-recon-platform-93fe
 """Recon tool planner: profile-aware, safe-by-default tool selection.
 
 The planner never selects all 200+ tools. It picks a profile-sized, safe subset
@@ -9,10 +8,14 @@ disabled tools are excluded with explicit reasons. Unavailable tools are still
 
 from __future__ import annotations
 
-import ipa<<<<<<< ddress
+import os
+import ipaddress
 import re
+from pathlib import Path
+from typing import Any
 from urllib.parse import urlparse
 
+from wth_ai.recon.adaptive import AdaptiveMatch, AdaptiveReconRules, ReconSignals
 from wth_ai.recon.model import PlannedTool, ReconPlan, SkippedTool
 from wth_ai.recon.registry import ReconToolRegistry
 
@@ -54,50 +57,49 @@ def detect_target_type(target: str) -> str:
 
 
 class ReconPlanner:
-    def __init__(self, registry: ReconToolRegistry | None = None) -> None:
+    def __init__(
+        self,
+        registry: ReconToolRegistry | None = None,
+        *,
+        rules_path: str | Path | None = None,
+    ) -> None:
         self.registry = registry or ReconToolRegistry()
-=======
-# wth_ai/recon/planner.py
-"""
-Recon Planner (Fase 5.1)
-
-Simple but effective planner that selects tools based on:
-- Profile (budget, default, recon-only, high-quality)
-- Risk level
-- Permission requirements
-- Enabled status
-
-This is the foundation. Will be expanded in later sub-phases.
-"""
-
-from typing import List, Dict
-
-from .registry import ToolRegistry
-from .models import ToolSpec, ReconPlan
-
-
-class ReconPlanner:
-    """Selects appropriate tools for a recon job."""
-
-    def __init__(self, registry: ToolRegistry):
-        self.registry = registry
- main
+        self.adaptive = AdaptiveReconRules(rules_path)
 
     def plan(
         self,
         target: str,
- cursor/fase5-recon-platform-93fe
         *,
         profile: str = "recon-only",
         realtime: bool = False,
         allowlist: set[str] | None = None,
+        signals: ReconSignals | dict[str, Any] | None = None,
     ) -> ReconPlan:
         if profile not in PROFILE_CAP:
             profile = "recon-only"
         cap = PROFILE_CAP[profile]
         ttype = detect_target_type(target)
 
-        plan = ReconPlan(target=target, target_type=ttype, profile=profile, realtime=realtime)
+        if isinstance(signals, dict):
+            sig = ReconSignals.from_normalized(signals)
+        elif signals is not None:
+            sig = signals
+        else:
+            sig = ReconSignals.from_target(target)
+        adaptive_match = self.adaptive.evaluate(sig)
+
+        plan = ReconPlan(
+            target=target,
+            target_type=ttype,
+            profile=profile,
+            realtime=realtime,
+            adaptive_profile=adaptive_match.profile if adaptive_match.matched_rules else None,
+            matched_rules=adaptive_match.matched_rules,
+            boost_categories=list(adaptive_match.boost_categories),
+            skip_categories=list(adaptive_match.skip_categories),
+        )
+
+        category_order = self._category_order(adaptive_match)
 
         # local targets only allowed under the local profile (policy guard)
         if ttype == "local" and profile != "local":
@@ -118,8 +120,10 @@ class ReconPlanner:
                     PlannedTool(spec.name, spec.category, spec.execution_mode, "builtin core")
                 )
 
-        # 2) other tools by category priority until cap reached
-        for category in _CATEGORY_PRIORITY:
+        # 2) other tools by adaptive category priority until cap reached
+        for category in category_order:
+            if category in adaptive_match.skip_categories:
+                continue
             for spec in sorted(self.registry.by_category(category), key=lambda s: s.name):
                 if spec.execution_mode == "builtin" or spec.name in selected_names:
                     continue
@@ -130,26 +134,49 @@ class ReconPlanner:
                 if len(plan.selected) >= cap:
                     plan.skipped.append(SkippedTool(spec.name, "profile cap reached"))
                     continue
-                avail = "available" if self.registry.is_available(spec.name) else "planned (install to run)"
+                reason_bits = ["available" if self.registry.is_available(spec.name) else "planned (install to run)"]
+                if category in adaptive_match.boost_categories:
+                    reason_bits.append("adaptive boost")
                 selected_names.append(spec.name)
                 plan.selected.append(
-                    PlannedTool(spec.name, spec.category, spec.execution_mode, avail)
+                    PlannedTool(
+                        spec.name, spec.category, spec.execution_mode, "; ".join(reason_bits),
+                    )
                 )
 
         return plan
 
+    def refine_match(self, signals: ReconSignals | dict[str, Any]) -> AdaptiveMatch:
+        if isinstance(signals, dict):
+            signals = ReconSignals.from_normalized(signals)
+        return self.adaptive.evaluate(signals)
+
+    def _category_order(self, match: AdaptiveMatch) -> tuple[str, ...]:
+        if not match.matched_rules:
+            return _CATEGORY_PRIORITY
+        boosted = [c for c in match.boost_categories if c in _CATEGORY_PRIORITY]
+        rest = [c for c in _CATEGORY_PRIORITY if c not in boosted and c not in match.skip_categories]
+        return tuple(boosted + rest)
+
     def _eligible(
         self, name: str, profile: str, allowlist: set[str] | None
     ) -> tuple[bool, str]:
+        from wth_ai.engagement.mode import is_unrestricted
+
         spec = self.registry.get(name)
         if spec is None:
             return False, "unknown tool"
+        if is_unrestricted() and os.environ.get("WTH_UNRESTRICTED") == "1":
+            if spec.execution_mode in ("manual", "stub"):
+                return False, f"{spec.execution_mode}: not auto-runnable"
+            return True, "ok"
         if allowlist is not None and name not in allowlist:
             return False, "not in policy allowlist"
         if not self.registry.is_enabled(name):
             return False, "disabled_by_default" if not spec.enabled_by_default else "disabled by operator"
         if spec.risk_level != "safe" and not self.registry._overrides.get(name, False):
-            return False, f"risk={spec.risk_level} (enable explicitly)"
+            if not is_unrestricted():
+                return False, f"risk={spec.risk_level} (enable explicitly)"
         if profile not in spec.allowed_profiles:
             return False, f"not allowed in profile '{profile}'"
         if spec.execution_mode in ("manual", "stub"):
@@ -157,49 +184,3 @@ class ReconPlanner:
         if spec.execution_mode == "api" and not self.registry.is_available(name):
             return False, "api key missing"
         return True, "ok"
-
-        profile: str = "default",
-        max_risk: str = "safe",
-        max_tools: int = 40,
-    ) -> ReconPlan:
-        """
-        Generate a recon plan.
-
-        Args:
-            target: The target domain/IP/URL
-            profile: budget | default | recon-only | high-quality | local
-            max_risk: safe | medium | high
-            max_tools: hard limit on number of tools
-        """
-        all_tools = self.registry.list_tools(enabled_only=True)
-
-        # Filter by risk
-        filtered = self.registry.get_tools_by_risk(max_risk)
-
-        # Profile-based selection (simple rules for Fase 5.1)
-        if profile == "budget":
-            filtered = [t for t in filtered if t.risk_level == "safe"][:15]
-        elif profile == "recon-only":
-            filtered = filtered[:35]
-        elif profile == "high-quality":
-            filtered = filtered[:60]
-        else:  # default
-            filtered = filtered[:30]
-
-        # Apply hard limit
-        selected = filtered[:max_tools]
-
-        skipped = []
-        for tool in all_tools:
-            if tool not in selected:
-                reason = "risk_too_high" if tool.risk_level == "high" else "profile_limit"
-                skipped.append({"name": tool.name, "reason": reason})
-
-        return ReconPlan(
-            target=target,
-            profile=profile,
-            selected_tools=selected,
-            skipped_tools=skipped,
-            total_tools=len(all_tools),
-        )
- main

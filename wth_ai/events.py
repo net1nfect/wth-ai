@@ -21,6 +21,7 @@ EVENT_TYPES: tuple[str, ...] = (
     "job.created",
     "job.started",
     "job.progress",
+    "job.log",
     "job.approval_required",
     "job.approved",
     "job.denied",
@@ -35,6 +36,7 @@ EVENT_TYPES: tuple[str, ...] = (
     "recon.new_endpoint",
     "recon.change_detected",
     "recon.report_ready",
+    "recon.completed",
 )
 
 # Default severity per event type (info unless noted).

@@ -37,27 +37,38 @@ def _orch(config_path: str, *, fresh: bool = False) -> WTHOrchestrator:
 @click.option("--config", "config_path", default="config/wth_config.yaml", show_default=True)
 @click.option("--version", is_flag=True, help="Show version.")
 @click.option("--skip-setup", is_flag=True, help="Skip first-run setup check.")
+@click.option("--local", is_flag=True, help="Embedded mode (skip gateway client).")
+@click.option("--plain", is_flag=True, help="Plain unicode terminal REPL (default).")
+@click.option("--tui", is_flag=True, help="Fullscreen Textual TUI (requires wth-ai[tui]).")
 @click.pass_context
-def cli(ctx: click.Context, config_path: str, version: bool, skip_setup: bool) -> None:
+def cli(ctx: click.Context, config_path: str, version: bool, skip_setup: bool, local: bool, plain: bool, tui: bool) -> None:
     """WTH-AI v1.0 — realtime bug hunter with dual-agent AI."""
     if version:
         click.echo(f"WTH-AI v{__version__}")
         return
     if skip_setup:
         os.environ["WTH_SKIP_SETUP"] = "1"
+    if local:
+        os.environ["WTH_LOCAL"] = "1"
+    if tui:
+        os.environ["WTH_TUI"] = "1"
+        os.environ.pop("WTH_PLAIN", None)
+    elif plain:
+        os.environ["WTH_PLAIN"] = "1"
     if ctx.invoked_subcommand is None:
         from wth_ai.cli.setup_wizard import ensure_setup
         ensure_setup()
-        _orch(config_path).run_interactive()
+        _orch(config_path).run_interactive(local=local)
 
 
 @cli.command()
 @click.option("--reset", is_flag=True, help="Reset existing configuration.")
+@click.option("--reconfigure", is_flag=True, help="Re-run wizard without deleting config/vault.")
 @click.option("--config", "config_path", default="config/wth_config.yaml", show_default=True)
-def setup(config_path: str, reset: bool) -> None:
+def setup(config_path: str, reset: bool, reconfigure: bool) -> None:
     """Run first-time setup wizard (API keys, models, bots)."""
     from wth_ai.cli.setup_wizard import run_setup_wizard
-    run_setup_wizard(reset=reset)
+    run_setup_wizard(reset=reset and not reconfigure)
 
 
 @cli.command()
@@ -135,6 +146,7 @@ def vault_migrate() -> None:
 
 # Provider name -> vault secret key (ollama is local, no key).
 _PROVIDER_VAULT_KEY = {
+    "9router": "router9_api_key",
     "openrouter": "openrouter_api_key",
     "openai": "openai_api_key",
     "anthropic": "anthropic_api_key",
@@ -184,6 +196,13 @@ def provider_add(name: str, config_path: str) -> None:
     if name == "ollama":
         url = click.prompt("Ollama base URL", default=config.secrets.ollama_base_url)
         config.secrets.ollama_base_url = url
+    elif name == "9router":
+        key = click.prompt("9router API key", hide_input=True, default="")
+        if key:
+            SecretVault().set(_PROVIDER_VAULT_KEY[name], key)
+        url = click.prompt("9router base URL", default=config.secrets.router9_base_url)
+        config.secrets.router9_base_url = url
+        config.secrets.router9_api_key = key or config.secrets.router9_api_key
     else:
         key = click.prompt(f"{name} API key", hide_input=True)
         SecretVault().set(_PROVIDER_VAULT_KEY[name], key)
@@ -218,6 +237,176 @@ def provider_test(name: str, model: str | None, config_path: str) -> None:
     from wth_ai.llm.router import LLMProviderRouter
     result = LLMProviderRouter(_load_config(config_path)).test_provider(name, model)
     click.echo(json.dumps(result, indent=2, default=str))
+
+
+@provider.group("keys")
+def provider_keys() -> None:
+    """Manage provider API keys."""
+
+
+@provider_keys.command("list")
+@click.option("--config", "config_path", default="config/wth_config.yaml", show_default=True)
+def provider_keys_list(config_path: str) -> None:
+    from wth_ai.config import PROVIDER_NAMES
+    from wth_ai.llm.router import LLMProviderRouter
+    from wth_ai.vault import mask_secret
+    router = LLMProviderRouter(_load_config(config_path))
+    for name in PROVIDER_NAMES:
+        key = router.provider_key(name)
+        status = "local" if name == "ollama" else ("configured" if key else "missing")
+        if key and name != "ollama":
+            status = mask_secret(key)
+        click.echo(f"- {name}: {status}")
+
+
+@provider_keys.command("set")
+@click.argument("name")
+@click.option("--config", "config_path", default="config/wth_config.yaml", show_default=True)
+def provider_keys_set(name: str, config_path: str) -> None:
+    provider_add(name, config_path)
+
+
+@provider_keys.command("test")
+@click.argument("name", required=False, default="--all")
+@click.option("--model", default=None)
+@click.option("--config", "config_path", default="config/wth_config.yaml", show_default=True)
+def provider_keys_test(name: str, model: str | None, config_path: str) -> None:
+    from wth_ai.config import PROVIDER_NAMES
+    from wth_ai.llm.router import LLMProviderRouter
+    router = LLMProviderRouter(_load_config(config_path))
+    targets = list(PROVIDER_NAMES) if name in ("--all", "all") else [name]
+    for p in targets:
+        result = router.test_provider(p, model)
+        click.echo(json.dumps(result, indent=2, default=str))
+
+
+@provider.command("failover")
+@click.argument("action", type=click.Choice(["enable", "disable", "status"]))
+@click.option("--config", "config_path", default="config/wth_config.yaml", show_default=True)
+def provider_failover(action: str, config_path: str) -> None:
+    config = _load_config(config_path)
+    if action == "enable":
+        config.provider_prefs.failover_enabled = True
+    elif action == "disable":
+        config.provider_prefs.failover_enabled = False
+    config.save_user_config()
+    click.echo(f"failover: {'enabled' if config.provider_prefs.failover_enabled else 'disabled'}")
+    click.echo(f"order: {config.provider_prefs.failover_order}")
+
+
+@cli.group()
+def safety() -> None:
+    """Safety / unrestricted exploration mode."""
+
+
+@safety.command("unrestricted")
+@click.argument("state", type=click.Choice(["on", "off", "status"]))
+@click.option("--config", "config_path", default="config/wth_config.yaml", show_default=True)
+def safety_unrestricted(state: str, config_path: str) -> None:
+    from wth_ai.engagement.mode import is_unrestricted, set_unrestricted
+    config = _load_config(config_path)
+    if state == "status":
+        click.echo(f"unrestricted: {is_unrestricted(config)}")
+        return
+    enabled = state == "on"
+    set_unrestricted(enabled)
+    config.safety.unrestricted = enabled
+    config.save_user_config()
+    click.echo(f"unrestricted mode: {'ON' if enabled else 'OFF'}")
+
+
+@cli.group()
+def engage() -> None:
+    """Start CTF or bug bounty engagement."""
+
+
+@engage.command("start")
+@click.option("--mode", type=click.Choice(["ctf", "bug-bounty"]), required=True)
+@click.option("--target", "-t", required=True)
+@click.option("--authorized/--no-authorized", default=True)
+@click.option("--config", "config_path", default="config/wth_config.yaml", show_default=True)
+def engage_start(mode: str, target: str, authorized: bool, config_path: str) -> None:
+    from wth_ai.engagement.mode import EngagementMode, set_engagement_mode, set_unrestricted
+    from wth_ai.profiles import apply_profile
+    profile = "ctf-aggressive" if mode == "ctf" else "bug-bounty"
+    apply_profile(profile)
+    set_engagement_mode(EngagementMode.CTF if mode == "ctf" else EngagementMode.BUG_BOUNTY)
+    set_unrestricted(True)
+    orch = _orch(config_path, fresh=True)
+    orch.run_once(
+        f"/scope set target={target} authorized={'yes' if authorized else 'no'} environment={mode}"
+    )
+    orch.run_once("/permission unrestricted")
+    click.echo(f"Engagement started: mode={mode} target={target} profile={profile}")
+
+
+@cli.group()
+def mcp() -> None:
+    """MCP server integration."""
+
+
+@mcp.command("list")
+@click.option("--config", "config_path", default="config/wth_config.yaml", show_default=True)
+def mcp_list(config_path: str) -> None:
+    from wth_ai.mcp.manager import MCPClientManager
+    mgr = MCPClientManager(_load_config(config_path))
+    click.echo(mgr.format_status())
+
+
+@mcp.command("status")
+@click.option("--config", "config_path", default="config/wth_config.yaml", show_default=True)
+def mcp_status(config_path: str) -> None:
+    mcp_list(config_path)
+
+
+@mcp.command("tools")
+@click.option("--server", default=None)
+@click.option("--config", "config_path", default="config/wth_config.yaml", show_default=True)
+def mcp_tools(server: str | None, config_path: str) -> None:
+    from wth_ai.mcp.manager import MCPClientManager
+    mgr = MCPClientManager(_load_config(config_path))
+    mgr.connect_all()
+    for sname, tools in mgr.list_tools(server).items():
+        click.echo(f"## {sname}")
+        for t in tools:
+            click.echo(f"  - {t.get('name', t)}")
+
+
+@mcp.command("test")
+@click.argument("server")
+@click.option("--config", "config_path", default="config/wth_config.yaml", show_default=True)
+def mcp_test(server: str, config_path: str) -> None:
+    from wth_ai.mcp.manager import MCPClientManager
+    mgr = MCPClientManager(_load_config(config_path))
+    status = mgr.connect_all()
+    click.echo(json.dumps(status, indent=2))
+
+
+@mcp.command("call")
+@click.argument("server")
+@click.argument("tool")
+@click.option("--args", "args_json", default="{}")
+@click.option("--config", "config_path", default="config/wth_config.yaml", show_default=True)
+def mcp_call(server: str, tool: str, args_json: str, config_path: str) -> None:
+    from wth_ai.mcp.manager import MCPClientManager
+    mgr = MCPClientManager(_load_config(config_path))
+    mgr.connect_all()
+    args = json.loads(args_json)
+    result = mgr.call_tool(server, tool, args)
+    click.echo(json.dumps({"success": result.success, "output": result.output, "error": result.error}, indent=2))
+
+
+@mcp.command("serve")
+@click.option("--stdio", is_flag=True, help="Serve read-only tools on stdio (JSON lines).")
+def mcp_serve(stdio: bool) -> None:
+    """Expose read-only WTH tools (graph_export, recon_plan, findings_list)."""
+    from wth_ai.mcp.serve import McpServeRegistry
+    reg = McpServeRegistry()
+    if stdio:
+        reg.serve_stdio()
+        return
+    for t in reg.list_tools():
+        click.echo(f"- {t['name']} (mutating={t['mutating']})")
 
 
 @provider.command("models")
@@ -528,10 +717,13 @@ def approval_deny(approval_id: str) -> None:
 
 
 def _job_manager(config_path: str):
+    from wth_ai.integrations.app import build_integration_runtime
     from wth_ai.jobs.manager import JobManager
     from wth_ai.workspace import init_workspace
     init_workspace()
-    return JobManager(_load_config(config_path))
+    config = _load_config(config_path)
+    build_integration_runtime(config)
+    return JobManager(config)
 
 
 @cli.group()
@@ -626,8 +818,146 @@ def job_delete(job_id: str, config_path: str) -> None:
 
 
 @cli.group()
+def cron() -> None:
+    """Manage scheduled recon/cron jobs."""
+    from wth_ai.workspace import init_workspace
+    init_workspace()
+
+
+@cron.command("list")
+def cron_list() -> None:
+    """List cron entries."""
+    from wth_ai.cron.store import CronStore
+
+    entries = CronStore().list()
+    if not entries:
+        click.echo("(no cron entries)")
+        return
+    for e in entries:
+        flag = "on" if e.enabled else "off"
+        click.echo(
+            f"- {e.cron_id} [{flag}] {e.job_type} {e.target} "
+            f"schedule={e.schedule} profile={e.profile} next={e.next_run_at or '-'}"
+        )
+
+
+@cron.command("add")
+@click.argument("target")
+@click.option("--schedule", default="every 6h", show_default=True)
+@click.option("--job-type", "job_type", default="recon", show_default=True)
+@click.option("--profile", default="recon-only", show_default=True)
+def cron_add(target: str, schedule: str, job_type: str, profile: str) -> None:
+    """Add a cron entry."""
+    from wth_ai.cron.store import CronStore
+
+    entry = CronStore().add(job_type, target, schedule, profile=profile)
+    click.echo(f"Added cron {entry.cron_id}: {job_type} {target} ({schedule})")
+
+
+@cron.command("remove")
+@click.argument("cron_id")
+def cron_remove(cron_id: str) -> None:
+    """Remove a cron entry."""
+    from wth_ai.cron.store import CronStore
+
+    click.echo(f"Removed {cron_id}" if CronStore().remove(cron_id) else f"{cron_id}: not found")
+
+
+@cron.command("enable")
+@click.argument("cron_id")
+def cron_enable(cron_id: str) -> None:
+    """Enable a cron entry."""
+    from wth_ai.cron.store import CronStore
+
+    click.echo(f"Enabled {cron_id}" if CronStore().set_enabled(cron_id, True) else f"{cron_id}: not found")
+
+
+@cron.command("disable")
+@click.argument("cron_id")
+def cron_disable(cron_id: str) -> None:
+    """Disable a cron entry."""
+    from wth_ai.cron.store import CronStore
+
+    click.echo(f"Disabled {cron_id}" if CronStore().set_enabled(cron_id, False) else f"{cron_id}: not found")
+
+
+@cron.command("migrate-watch")
+def cron_migrate_watch() -> None:
+    """Import legacy recon watch configs into cron store."""
+    from wth_ai.cron.store import CronStore
+
+    n = CronStore().migrate_from_watch()
+    click.echo(f"Migrated {n} watch config(s)")
+
+
+@cli.group()
+def gateway() -> None:
+    """Hermes-style gateway daemon (sessions, worker, RPC)."""
+
+
+@gateway.command("run")
+@click.option("--foreground/--background", default=True, help="Run in foreground (default) or daemonize.")
+@click.option("--config", "config_path", default="config/wth_config.yaml", show_default=True)
+def gateway_run(foreground: bool, config_path: str) -> None:
+    """Start the WTH gateway daemon."""
+    from wth_ai.gateway.background import is_gateway_running, read_gateway_pid, spawn_background
+    from wth_ai.gateway.daemon import GatewayDaemon
+    from wth_ai.workspace import init_workspace
+
+    init_workspace()
+    if not foreground:
+        if is_gateway_running():
+            pid = read_gateway_pid()
+            click.echo(f"gateway already running (pid {pid})")
+            return
+        try:
+            pid = spawn_background(config_path)
+        except RuntimeError as exc:
+            click.echo(f"error: {exc}", err=True)
+            raise SystemExit(1) from exc
+        click.echo(f"gateway started in background (pid {pid})")
+        click.echo(f"  socket: ~/.wth-ai/runtime/gateway.sock")
+        click.echo(f"  logs:   ~/.wth-ai/logs/gateway.log")
+        click.echo("  stop:   wth gateway stop")
+        return
+    if is_gateway_running():
+        pid = read_gateway_pid()
+        click.echo(f"gateway already running (pid {pid}) — use `wth gateway stop` first")
+        raise SystemExit(1)
+    GatewayDaemon(_load_config(config_path)).start(foreground=True)
+
+
+@gateway.command("stop")
+def gateway_stop_cmd() -> None:
+    """Stop the background gateway daemon."""
+    from wth_ai.gateway.background import is_gateway_running, stop_gateway
+
+    if not is_gateway_running():
+        click.echo("gateway: not running")
+        return
+    if stop_gateway():
+        click.echo("gateway stopped")
+    else:
+        click.echo("gateway: could not stop (no pid file)")
+        raise SystemExit(1)
+
+
+@gateway.command("status")
+def gateway_status_cmd() -> None:
+    """Show gateway health, pid, socket, and RPC summary."""
+    from wth_ai.gateway.background import gateway_status_info
+
+    info = gateway_status_info()
+    if not info.get("running"):
+        click.echo("gateway: not running")
+        click.echo(f"  start: wth gateway run --background")
+        return
+    click.echo(json.dumps(info, indent=2, default=str))
+
+
+@cli.group()
 def worker() -> None:
-    """Run and inspect the job worker."""
+    """Run and inspect the job worker (deprecated — prefer `wth gateway run`)."""
 
 
 @worker.command("run")
@@ -636,6 +966,7 @@ def worker() -> None:
 @click.option("--config", "config_path", default="config/wth_config.yaml", show_default=True)
 def worker_run(no_drain: bool, max_jobs, config_path: str) -> None:
     """Process queued jobs (drains by default; --no-drain loops as a daemon)."""
+    click.echo("Note: prefer `wth gateway run` — worker is embedded in the gateway.", err=True)
     from wth_ai.jobs.worker import WorkerEngine
     w = WorkerEngine(_job_manager(config_path))
     summary = w.run(drain=not no_drain, max_jobs=max_jobs)
@@ -676,45 +1007,55 @@ def _recon_registry():
     return ReconToolRegistry()
 
 
-def _run_recon_job(config_path: str, target: str, profile: str, *, realtime: bool = False) -> None:
+def _run_recon_job(
+    config_path: str,
+    target: str,
+    profile: str,
+    *,
+    realtime: bool = False,
+    sync_graph: bool = True,
+) -> None:
     """Create a recon job and drain the worker (never bypasses the job system)."""
-    from wth_ai.jobs.worker import WorkerEngine
+    from wth_ai.cli.recon_commands import format_job_summary, run_recon_job, sync_graph_after_recon
+
+    config = _load_config(config_path)
     mgr = _job_manager(config_path)
-    j = mgr.create_job(
-        "recon", target=target, profile=profile, created_by="cli",
-        metadata={"authorized": True, "realtime": realtime, "profile": profile},
+    session_id = None
+    try:
+        from wth_ai.session_store import SessionStore
+
+        latest = SessionStore(config).load_latest()
+        session_id = latest.session_id if latest else None
+    except Exception:
+        pass
+    click.echo(f"Created recon job for {target} (profile={profile}) — running...")
+    j, done = run_recon_job(
+        mgr, target, profile, realtime=realtime, session_id=session_id,
     )
     if j.status == "failed":
         click.echo(f"Rejected: {j.error} (job {j.job_id})")
         return
-    click.echo(f"Created {j.job_id} (recon {target}, profile={profile}) — running...")
-    WorkerEngine(mgr).run(drain=True)
-    done = mgr.get_job(j.job_id)
-    if not done:
-        click.echo(f"{j.job_id}: not found after run")
-        return
-    res = done.result or {}
-    click.echo(f"Job {j.job_id} -> {done.status}")
-    if res:
-        click.echo(f"  output: {res.get('output_dir', '-')}")
-        click.echo(f"  assets: {json.dumps(res.get('summary', {}).get('assets', {}))}")
-        click.echo(f"  priority targets: {res.get('priority_targets', 0)}")
+    graph_nodes = 0
+    if sync_graph and done and done.status == "completed":
+        output_dir = str((done.result or {}).get("output_dir", ""))
+        graph_nodes = sync_graph_after_recon(config, target, output_dir)
+    click.echo(format_job_summary(j, done, graph_nodes=graph_nodes))
 
 
-@cli.group()
-def recon() -> None:
-    """Real-time recon platform (Fase 5): plan, run, watch, diff, tools."""
-    from wth_ai.workspace import init_workspace
-    init_workspace()
+@cli.group(invoke_without_command=True)
+@click.pass_context
+def recon(ctx: click.Context) -> None:
+    """Recon platform — run, watch, diff, and inspect results."""
+    if ctx.invoked_subcommand is None:
+        click.echo("Use: wth recon run|quick|watch|diff|changes|plan|show|report|tools")
 
 
 @recon.command("run")
 @click.argument("target")
-@click.option("--profile", default="recon-only",
-              type=click.Choice(["budget", "recon-only", "default", "high-quality", "local"]))
+@click.option("--profile", default="recon-only", show_default=True)
 @click.option("--config", "config_path", default="config/wth_config.yaml", show_default=True)
 def recon_run(target: str, profile: str, config_path: str) -> None:
-    """Run authorized, non-destructive recon on TARGET (via the job system)."""
+    """Run a full recon job for TARGET."""
     _run_recon_job(config_path, target, profile)
 
 
@@ -722,60 +1063,22 @@ def recon_run(target: str, profile: str, config_path: str) -> None:
 @click.argument("target")
 @click.option("--config", "config_path", default="config/wth_config.yaml", show_default=True)
 def recon_quick(target: str, config_path: str) -> None:
-    """Fast recon (recon-only profile) on TARGET."""
-    _run_recon_job(config_path, target, "recon-only")
+    """Fast budget-profile recon for TARGET."""
+    _run_recon_job(config_path, target, "budget")
 
 
 @recon.command("watch")
 @click.argument("target")
-@click.option("--interval", default="6h", help="Polling interval (>=1h), e.g. 6h, 90m, 1d.")
-@click.option("--profile", default="recon-only")
+@click.option("--interval", default="6h", show_default=True, help="e.g. 6h, 90m, 1d")
+@click.option("--profile", default="recon-only", show_default=True)
 @click.option("--config", "config_path", default="config/wth_config.yaml", show_default=True)
 def recon_watch(target: str, interval: str, profile: str, config_path: str) -> None:
-    """Register a watch (interval >=1h, jittered) and run one recon pass now."""
-    from wth_ai.recon.realtime import WatchConfig, parse_interval, save_watch
-    seconds = parse_interval(interval)
-    save_watch(WatchConfig(target=target, interval_seconds=seconds, profile=profile))
-    click.echo(f"watch registered: {target} every {seconds}s (profile={profile})")
-    _run_recon_job(config_path, target, profile, realtime=True)
+    """Enable periodic recon watch for TARGET."""
+    from wth_ai.cli.recon_commands import recon_watch_text
+    from wth_ai.workspace import init_workspace
 
-
-@recon.command("plan")
-@click.argument("target")
-@click.option("--profile", default="recon-only",
-              type=click.Choice(["budget", "recon-only", "default", "high-quality", "local"]))
-@click.option("--config", "config_path", default="config/wth_config.yaml", show_default=True)
-def recon_plan(target: str, profile: str, config_path: str) -> None:
-    """Show the safe recon plan for TARGET (no execution)."""
-    from wth_ai.recon.planner import ReconPlanner
-    p = ReconPlanner(_recon_registry()).plan(target, profile=profile)
-    click.echo(f"# Recon plan — {target} (type={p.target_type}, profile={profile})")
-    click.echo(f"Selected: {len(p.selected)} tools | Skipped: {len(p.skipped)}")
-    for t in p.selected:
-        click.echo(f"  + {t.tool} [{t.category}/{t.execution_mode}] {t.reason}")
-    click.echo("  ...")
-    for t in p.skipped[:8]:
-        click.echo(f"  - {t.tool}: {t.reason}")
-
-
-@recon.command("show")
-@click.argument("job_id")
-@click.option("--config", "config_path", default="config/wth_config.yaml", show_default=True)
-def recon_show(job_id: str, config_path: str) -> None:
-    """Show a recon job's summary JSON."""
-    from wth_ai.workspace import wth_home
-    path = wth_home() / "wth-results" / job_id / "recon_summary.json"
-    click.echo(path.read_text(encoding="utf-8") if path.exists() else f"{job_id}: no summary")
-
-
-@recon.command("report")
-@click.argument("job_id")
-@click.option("--config", "config_path", default="config/wth_config.yaml", show_default=True)
-def recon_report(job_id: str, config_path: str) -> None:
-    """Print a recon job's markdown report."""
-    from wth_ai.workspace import wth_home
-    path = wth_home() / "wth-results" / job_id / "recon_report.md"
-    click.echo(path.read_text(encoding="utf-8") if path.exists() else f"{job_id}: no report")
+    init_workspace()
+    click.echo(recon_watch_text(target, profile, interval))
 
 
 @recon.command("diff")
@@ -783,61 +1086,79 @@ def recon_report(job_id: str, config_path: str) -> None:
 @click.argument("new_job_id")
 @click.option("--config", "config_path", default="config/wth_config.yaml", show_default=True)
 def recon_diff(old_job_id: str, new_job_id: str, config_path: str) -> None:
-    """Diff two recon jobs' normalized results."""
-    from wth_ai.recon.diff import diff_results
-    from wth_ai.workspace import wth_home
-    base = wth_home() / "wth-results"
+    """Compare normalized results between two recon jobs."""
+    from wth_ai.cli.recon_commands import recon_diff_text
 
-    def _load(jid: str):
-        p = base / jid / "normalized_result.json"
-        return json.loads(p.read_text(encoding="utf-8")) if p.exists() else {}
-
-    changes = diff_results(_load(old_job_id), _load(new_job_id))
-    click.echo(json.dumps(changes, indent=2))
+    click.echo(recon_diff_text(_job_manager(config_path), old_job_id, new_job_id))
 
 
 @recon.command("changes")
 @click.argument("target")
 @click.option("--config", "config_path", default="config/wth_config.yaml", show_default=True)
 def recon_changes(target: str, config_path: str) -> None:
-    """Show watch status + diff between the last two recon runs for TARGET."""
-    from wth_ai.recon.diff import diff_results
-    from wth_ai.recon.realtime import load_watch
-    from wth_ai.workspace import wth_home
-    mgr = _job_manager(config_path)
-    jobs = [j for j in mgr.list_jobs(type="recon", status="completed") if (j.target or "") == target]
-    cfg = load_watch(target)
-    if cfg:
-        click.echo(f"watch: interval={cfg.interval_seconds}s last_job={cfg.last_job_id}")
-    if len(jobs) < 2:
-        click.echo("need >=2 completed recon runs to show changes")
+    """Show changes between the two latest recon jobs for TARGET."""
+    from wth_ai.cli.recon_commands import recon_changes_text
+
+    click.echo(recon_changes_text(_job_manager(config_path), target))
+
+
+@recon.command("plan")
+@click.argument("target")
+@click.option("--profile", default="recon-only", show_default=True)
+@click.option("--config", "config_path", default="config/wth_config.yaml", show_default=True)
+def recon_plan(target: str, profile: str, config_path: str) -> None:
+    """Preview which tools would run for TARGET."""
+    from wth_ai.cli.recon_commands import recon_plan_text
+    from wth_ai.workspace import init_workspace
+
+    init_workspace()
+    click.echo(recon_plan_text(target, profile))
+
+
+@recon.command("show")
+@click.argument("job_id")
+@click.option("--config", "config_path", default="config/wth_config.yaml", show_default=True)
+def recon_show(job_id: str, config_path: str) -> None:
+    """Show job status and result summary."""
+    job = _job_manager(config_path).get_job(job_id)
+    if not job:
+        click.echo(f"{job_id}: not found")
         return
-    base = wth_home() / "wth-results"
-
-    def _load(jid: str):
-        p = base / jid / "normalized_result.json"
-        return json.loads(p.read_text(encoding="utf-8")) if p.exists() else {}
-
-    new, old = jobs[0], jobs[1]
-    click.echo(json.dumps(diff_results(_load(old.job_id), _load(new.job_id)), indent=2))
+    click.echo(json.dumps({
+        "job_id": job.job_id,
+        "status": job.status,
+        "target": job.target,
+        "result": job.result,
+    }, indent=2, default=str))
 
 
-@recon.group("tools")
-def recon_tools() -> None:
-    """Inspect the 200+ recon tool registry."""
+@recon.command("report")
+@click.argument("job_id")
+@click.option("--config", "config_path", default="config/wth_config.yaml", show_default=True)
+def recon_report(job_id: str, config_path: str) -> None:
+    """Print recon_report.md for a completed job."""
+    from wth_ai.cli.recon_commands import recon_report_text
+
+    click.echo(recon_report_text(_job_manager(config_path), job_id))
+
+
+@recon.group("tools", invoke_without_command=True)
+@click.pass_context
+def recon_tools(ctx: click.Context) -> None:
+    """Recon tool registry (list, available, doctor, enable/disable)."""
+    if ctx.invoked_subcommand is None:
+        click.echo("Use: wth recon tools list|available|missing|doctor|show|enable|disable")
 
 
 @recon_tools.command("list")
 @click.option("--config", "config_path", default="config/wth_config.yaml", show_default=True)
-def recon_tools_list(config_path: str) -> None:
-    """List all recon tools grouped by category."""
+def recon_nested_tools_list(config_path: str) -> None:
     click.echo(_recon_registry().format_list())
 
 
 @recon_tools.command("available")
 @click.option("--config", "config_path", default="config/wth_config.yaml", show_default=True)
-def recon_tools_available(config_path: str) -> None:
-    """List tools available in this environment (builtin/installed/api-keyed)."""
+def recon_nested_tools_available(config_path: str) -> None:
     reg = _recon_registry()
     for s in sorted(reg.available(), key=lambda x: x.name):
         click.echo(f"- {s.name} [{s.execution_mode}] category={s.category}")
@@ -845,8 +1166,7 @@ def recon_tools_available(config_path: str) -> None:
 
 @recon_tools.command("missing")
 @click.option("--config", "config_path", default="config/wth_config.yaml", show_default=True)
-def recon_tools_missing(config_path: str) -> None:
-    """List external/api tools that are not available (with install hints)."""
+def recon_nested_tools_missing(config_path: str) -> None:
     reg = _recon_registry()
     for s in sorted(reg.missing(), key=lambda x: x.name):
         click.echo(f"- {s.name} [{s.execution_mode}] {reg.install_hint(s.name)}")
@@ -854,12 +1174,80 @@ def recon_tools_missing(config_path: str) -> None:
 
 @recon_tools.command("doctor")
 @click.option("--config", "config_path", default="config/wth_config.yaml", show_default=True)
+def recon_nested_tools_doctor(config_path: str) -> None:
+    click.echo(json.dumps(_recon_registry().summary(), indent=2))
+
+
+@recon_tools.command("show")
+@click.argument("name")
+@click.option("--config", "config_path", default="config/wth_config.yaml", show_default=True)
+def recon_nested_tools_show(name: str, config_path: str) -> None:
+    reg = _recon_registry()
+    spec = reg.get(name)
+    if not spec:
+        click.echo(f"{name}: not in catalog")
+        return
+    d = spec.to_dict()
+    d["available"] = reg.is_available(name)
+    d["enabled"] = reg.is_enabled(name)
+    click.echo(json.dumps(d, indent=2))
+
+
+@recon_tools.command("enable")
+@click.argument("name")
+@click.option("--config", "config_path", default="config/wth_config.yaml", show_default=True)
+def recon_nested_tools_enable(name: str, config_path: str) -> None:
+    click.echo(f"enabled {name}" if _recon_registry().enable(name) else f"{name}: not in catalog")
+
+
+@recon_tools.command("disable")
+@click.argument("name")
+@click.option("--config", "config_path", default="config/wth_config.yaml", show_default=True)
+def recon_nested_tools_disable(name: str, config_path: str) -> None:
+    click.echo(f"disabled {name}" if _recon_registry().disable(name) else f"{name}: not in catalog")
+
+
+@cli.group("recon-tools", invoke_without_command=True)
+@click.pass_context
+def recon_tools_cli(ctx: click.Context) -> None:
+    """Recon tool registry introspection (admin). Use agent chat for recon runs."""
+    if ctx.invoked_subcommand is None:
+        click.echo("Use: wth recon-tools list|available|doctor")
+
+
+@recon_tools_cli.command("list")
+@click.option("--config", "config_path", default="config/wth_config.yaml", show_default=True)
+def recon_tools_list(config_path: str) -> None:
+    """List all recon tools grouped by category."""
+    click.echo(_recon_registry().format_list())
+
+
+@recon_tools_cli.command("available")
+@click.option("--config", "config_path", default="config/wth_config.yaml", show_default=True)
+def recon_tools_available(config_path: str) -> None:
+    """List tools available in this environment."""
+    reg = _recon_registry()
+    for s in sorted(reg.available(), key=lambda x: x.name):
+        click.echo(f"- {s.name} [{s.execution_mode}] category={s.category}")
+
+
+@recon_tools_cli.command("missing")
+@click.option("--config", "config_path", default="config/wth_config.yaml", show_default=True)
+def recon_tools_missing(config_path: str) -> None:
+    """List external tools not available."""
+    reg = _recon_registry()
+    for s in sorted(reg.missing(), key=lambda x: x.name):
+        click.echo(f"- {s.name} [{s.execution_mode}] {reg.install_hint(s.name)}")
+
+
+@recon_tools_cli.command("doctor")
+@click.option("--config", "config_path", default="config/wth_config.yaml", show_default=True)
 def recon_tools_doctor(config_path: str) -> None:
     """Recon registry health summary."""
     click.echo(json.dumps(_recon_registry().summary(), indent=2))
 
 
-@recon_tools.command("show")
+@recon_tools_cli.command("show")
 @click.argument("name")
 @click.option("--config", "config_path", default="config/wth_config.yaml", show_default=True)
 def recon_tools_show(name: str, config_path: str) -> None:
@@ -875,7 +1263,7 @@ def recon_tools_show(name: str, config_path: str) -> None:
     click.echo(json.dumps(d, indent=2))
 
 
-@recon_tools.command("enable")
+@recon_tools_cli.command("enable")
 @click.argument("name")
 @click.option("--config", "config_path", default="config/wth_config.yaml", show_default=True)
 def recon_tools_enable(name: str, config_path: str) -> None:
@@ -883,7 +1271,7 @@ def recon_tools_enable(name: str, config_path: str) -> None:
     click.echo(f"enabled {name}" if _recon_registry().enable(name) else f"{name}: not in catalog")
 
 
-@recon_tools.command("disable")
+@recon_tools_cli.command("disable")
 @click.argument("name")
 @click.option("--config", "config_path", default="config/wth_config.yaml", show_default=True)
 def recon_tools_disable(name: str, config_path: str) -> None:
@@ -929,11 +1317,14 @@ def bot_status(config_path: str) -> None:
 
 @cli.command()
 @click.option("--config", "config_path", default="config/wth_config.yaml", show_default=True)
-def interactive(config_path: str) -> None:
+@click.option("--local", is_flag=True, help="Embedded mode (skip gateway client).")
+def interactive(config_path: str, local: bool) -> None:
     """Start interactive REPL."""
     from wth_ai.cli.setup_wizard import ensure_setup
     ensure_setup()
-    _orch(config_path).run_interactive()
+    if local:
+        os.environ["WTH_LOCAL"] = "1"
+    _orch(config_path).run_interactive(local=local)
 
 
 @cli.command("run")
@@ -942,7 +1333,7 @@ def interactive(config_path: str) -> None:
 @click.option("--fresh", is_flag=True, help="Start new session instead of resuming latest.")
 @click.option("--json", "as_json", is_flag=True, help="Output as JSON wrapper.")
 def run_command(command: str, config_path: str, fresh: bool, as_json: bool) -> None:
-    """Run a single slash command or chat message."""
+    """Run a natural-language agent command (recon, hunt, scope, report, ...)."""
     orch = _orch(config_path, fresh=fresh)
     result = orch.run_once(command)
     if as_json:
@@ -996,17 +1387,14 @@ def assess(
     ensure_setup()
     orch = _orch(config_path, fresh=True)
     in_scope = list(scope) or [target]
-    orch.run_once(
-        f"/scope set target={target} environment={env} authorized={'yes' if authorized else 'no'} "
-        f"in_scope={','.join(in_scope)}"
-    )
-    orch.run_once(f"/permission {permission}")
+    orch.run_once(f"scope set target={target} environment={env} authorized={'yes' if authorized else 'no'}")
+    orch.run_once(f"set permission to {permission}")
     console = Console()
     console.print(orch.startup_message())
     if plan:
-        console.print(orch.run_once(f"/plan Audit {target} — environment {env}"))
+        console.print(orch.run_once(f"hunt {target} — environment {env}"))
     else:
-        console.print("Scope set. Lanjut: wth-ai interactive atau wth-ai run '/recon'")
+        console.print("Scope set. Lanjut: wth-ai interactive atau wth run 'recon example.com'")
 
 
 if __name__ == "__main__":
