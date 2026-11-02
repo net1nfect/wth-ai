@@ -82,8 +82,37 @@ def doctor(config_path: str) -> None:
 @cli.command("usage")
 def usage_cmd() -> None:
     """Show recorded token/cost usage for this machine."""
+    from wth_ai.cli.ui.tables import plain_output, render_table
     from wth_ai.llm.usage import get_ledger
-    click.echo(get_ledger().format_summary())
+
+    ledger = get_ledger()
+    data = ledger.summary()
+    if not data["calls"] or plain_output():
+        click.echo(ledger.format_summary())
+        return
+
+    cost_note = f"${data['cost_usd']}" if data["cost_usd"] else "tidak dilaporkan provider"
+    # Totals live in the CAPTION, not the title: rich wraps a title to the TABLE
+    # width (not the console width), so a long title broke into two lines on a
+    # narrow table and the output read as damaged.
+    caption = (
+        f"{data['calls']} call · {data['total_tokens']} token · biaya: {cost_note}"
+    )
+    tail = ledger.budget_line()
+    if tail:
+        caption += "\n" + tail
+
+    by_model = [[model, slot["calls"], slot["tokens"],
+                 f"${slot['cost_usd']}" if slot["cost_usd"] else "—"]
+                for model, slot in sorted(data["by_model"].items(), key=lambda kv: -kv[1]["tokens"])]
+    click.echo(render_table(
+        "Pemakaian per model", ["model", "call", "token", "biaya"], by_model, caption=caption))
+
+    if data["by_role"]:
+        by_role = [[role, slot["calls"], slot["tokens"]]
+                   for role, slot in sorted(data["by_role"].items(), key=lambda kv: -kv[1]["tokens"])]
+        click.echo()
+        click.echo(render_table("Per role", ["role", "call", "token"], by_role))
 
 
 @cli.group(name="eval")
@@ -112,8 +141,16 @@ def eval_history() -> None:
     if not files:
         click.echo("Belum ada laporan eval.")
         return
+    from wth_ai.cli.ui.tables import render_table
+
+    rows = []
     for path in files[-10:]:
-        click.echo(f"  {path.name} ({path.stat().st_size} byte)")
+        stat = path.stat()
+        from datetime import datetime
+
+        stamp = datetime.fromtimestamp(stat.st_mtime).strftime("%Y-%m-%d %H:%M")
+        rows.append([path.name, stat.st_size, stamp])
+    click.echo(render_table("Laporan eval (10 terbaru)", ["file", "byte", "waktu"], rows))
 
 
 @cli.group()
@@ -468,9 +505,13 @@ def model_list(config_path: str) -> None:
     from wth_ai.config import ROLE_NAMES
     from wth_ai.llm.router import LLMProviderRouter
     router = LLMProviderRouter(_load_config(config_path))
+    from wth_ai.cli.ui.tables import render_table
+
+    rows = []
     for role in ROLE_NAMES:
         rc = router.role_config(role)
-        click.echo(f"- {role:9s} {rc.type}/{rc.model}")
+        rows.append([role, rc.type, rc.model, getattr(rc, "backup_model", "") or "—"])
+    click.echo(render_table("Model per role", ["role", "provider", "model", "backup"], rows))
 
 
 @model.command("set")
@@ -1045,6 +1086,32 @@ def worker_stop(config_path: str) -> None:
     click.echo("worker stopped")
 
 
+def _registry_table(reg, specs, *, title: str, include_hint: bool = False) -> str:
+    """Shared table for the tool-registry commands.
+
+    Columns answer the operator's actual questions: is it usable here, where does
+    it sit in the catalog, does it run or merely get listed, and is it risky.
+    """
+    from wth_ai.cli.ui.tables import render_table
+
+    rows = []
+    for s in sorted(specs, key=lambda x: (x.category, x.name)):
+        status = "available" if reg.is_available(s.name) else "missing"
+        enabled = "on" if reg.is_enabled(s.name) else "off"
+        row = [s.name, status, s.category, s.execution_mode, enabled, s.risk_level]
+        if include_hint:
+            row.append(reg.install_hint(s.name) if status == "missing" else "")
+        rows.append(row)
+    columns = ["tool", "status", "category", "mode", "enabled", "risk"]
+    if include_hint:
+        columns.append("install_hint")
+    available = sum(1 for s in specs if reg.is_available(s.name))
+    caption = (
+        f"{len(rows)} tools · {available} available · {len(rows) - available} missing"
+    )
+    return render_table(title, columns, rows, caption=caption)
+
+
 def _recon_registry():
     from wth_ai.recon.registry import ReconToolRegistry
     from wth_ai.workspace import init_workspace
@@ -1198,23 +1265,24 @@ def recon_tools(ctx: click.Context) -> None:
 @recon_tools.command("list")
 @click.option("--config", "config_path", default="config/wth_config.yaml", show_default=True)
 def recon_nested_tools_list(config_path: str) -> None:
-    click.echo(_recon_registry().format_list())
+    reg = _recon_registry()
+    click.echo(_registry_table(reg, reg.tools.values(),
+                               title=f"Recon tools ({len(reg.tools)} total)"))
 
 
 @recon_tools.command("available")
 @click.option("--config", "config_path", default="config/wth_config.yaml", show_default=True)
 def recon_nested_tools_available(config_path: str) -> None:
     reg = _recon_registry()
-    for s in sorted(reg.available(), key=lambda x: x.name):
-        click.echo(f"- {s.name} [{s.execution_mode}] category={s.category}")
+    click.echo(_registry_table(reg, reg.available(), title="Recon tools tersedia"))
 
 
 @recon_tools.command("missing")
 @click.option("--config", "config_path", default="config/wth_config.yaml", show_default=True)
 def recon_nested_tools_missing(config_path: str) -> None:
     reg = _recon_registry()
-    for s in sorted(reg.missing(), key=lambda x: x.name):
-        click.echo(f"- {s.name} [{s.execution_mode}] {reg.install_hint(s.name)}")
+    click.echo(_registry_table(reg, reg.missing(), title="Recon tools belum terpasang",
+                               include_hint=True))
 
 
 @recon_tools.command("doctor")
@@ -1264,7 +1332,9 @@ def recon_tools_cli(ctx: click.Context) -> None:
 @click.option("--config", "config_path", default="config/wth_config.yaml", show_default=True)
 def recon_tools_list(config_path: str) -> None:
     """List all recon tools grouped by category."""
-    click.echo(_recon_registry().format_list())
+    reg = _recon_registry()
+    click.echo(_registry_table(reg, reg.tools.values(),
+                               title=f"Recon tools ({len(reg.tools)} total)"))
 
 
 @recon_tools_cli.command("available")
@@ -1272,8 +1342,7 @@ def recon_tools_list(config_path: str) -> None:
 def recon_tools_available(config_path: str) -> None:
     """List tools available in this environment."""
     reg = _recon_registry()
-    for s in sorted(reg.available(), key=lambda x: x.name):
-        click.echo(f"- {s.name} [{s.execution_mode}] category={s.category}")
+    click.echo(_registry_table(reg, reg.available(), title="Recon tools tersedia"))
 
 
 @recon_tools_cli.command("missing")
@@ -1281,8 +1350,8 @@ def recon_tools_available(config_path: str) -> None:
 def recon_tools_missing(config_path: str) -> None:
     """List external tools not available."""
     reg = _recon_registry()
-    for s in sorted(reg.missing(), key=lambda x: x.name):
-        click.echo(f"- {s.name} [{s.execution_mode}] {reg.install_hint(s.name)}")
+    click.echo(_registry_table(reg, reg.missing(), title="Recon tools belum terpasang",
+                               include_hint=True))
 
 
 @recon_tools_cli.command("doctor")
