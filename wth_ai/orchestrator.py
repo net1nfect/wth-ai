@@ -287,6 +287,88 @@ class WTHOrchestrator:
 
         return recall_block(limit=5, target=target)
 
+    def _learn_from_autopilot_step(self, step: Any) -> None:
+        """Catat teknik dari langkah autopilot yang BERBUKTI (punya TX)."""
+        if not getattr(step, "evidence_ref", ""):
+            return
+        try:
+            from wth_ai.skills.autowrite import SkillNote, record_skill
+
+            payload_class = ""
+            payload_id = str(step.probe.get("payload_id") or "")
+            if payload_id:
+                from wth_ai.hunt.payloads import get_payload
+
+                payload = get_payload(payload_id)
+                payload_class = getattr(payload, "vuln_class", "") if payload else ""
+            record_skill(SkillNote(
+                technique=str(step.title)[:80],
+                vuln_class=payload_class or "adaptive",
+                tech_stack=str(self.state.metadata.get("tech_profile", "")),
+                evidence=[f"[TX:{step.evidence_ref}]"],
+                pitfalls=[str(step.note)] if step.note else [],
+            ))
+        except Exception:  # noqa: BLE001
+            pass
+
+    def _handle_autopilot(self, args: list[str]) -> str:
+        """`/autopilot [langkah]` — jalankan langkah uji berbatas secara otonom."""
+        from wth_ai.hunt.autopilot import format_report, run_autopilot
+
+        target = self.state.scope.target
+        if not target:
+            return "Set target dulu: `/target <host>` (autopilot tidak menebak target)."
+        steps = int(args[0]) if args and args[0].isdigit() else 6
+        bridge = getattr(self, "terminal", None)
+        if bridge is None:
+            return "Bridge terminal tidak tersedia; jalankan lewat sesi interaktif."
+
+        def _probe(probe: dict[str, Any]) -> Any:
+            # Scope + denylist + rate limit + audit tetap berlaku; `approved=False`
+            # supaya gate destruktif yang memutuskan, bukan autopilot.
+            return bridge.dispatch_tool("http_probe", probe, actor="supervisor", approved=False)
+
+        report = run_autopilot(
+            target=target, run_probe=_probe, state=self.state,
+            max_cycles=2, max_steps_per_cycle=steps,
+            destructive_allowed=bool(getattr(self.state.scope, "destructive_allowed", False)),
+            learn=self._learn_from_autopilot_step,
+        )
+        self._persist()
+        return format_report(report)
+
+    def _handle_payloads(self, args: list[str]) -> str:
+        """`/payloads [kelas] [--destructive]` — katalog payload berbatas."""
+        from wth_ai.hunt.payloads import filter_payloads, format_payloads, get_payload
+
+        if args and args[0] not in {"list", "semua"}:
+            payload = get_payload(args[0])
+            if payload is None:
+                return f"`{args[0]}` tidak ada di katalog. Pakai `/payloads` untuk melihat daftar."
+            lines = [
+                f"## `{payload.id}` — {payload.title}",
+                f"kelas: {payload.vuln_class} · blast: {payload.blast_radius} · "
+                f"reversibel: {'ya' if payload.reversible else 'tidak'}",
+                f"membuktikan: {payload.proves}",
+                f"probe: {payload.probe.get('method', 'GET')} {payload.probe.get('url', '')}",
+                f"pemulihan: {payload.cleanup or '(tidak ada perubahan data)'}",
+            ]
+            if payload.bounded_alternative:
+                lines.append(f"padanan berbatas: {payload.bounded_alternative}")
+            return "\n".join(lines)
+
+        destructive_allowed = bool(getattr(self.state.scope, "destructive_allowed", False))
+        items = filter_payloads(
+            None,
+            max_blast="single-object" if not destructive_allowed else "single-object",
+            include_destructive=destructive_allowed,
+        )
+        header = (
+            f"mode destruktif: {'AKTIF (opt-in)' if destructive_allowed else 'TERTUTUP'}"
+            " — `/scope set destructive=yes` untuk membukanya"
+        )
+        return header + "\n\n" + format_payloads(items)
+
     def _handle_next(self, args: list[str]) -> str:
         """`/next` — langkah uji berikutnya yang disusun dari temuan + sinyal respons."""
         from wth_ai.hunt.proactive import format_next_tests, propose_next_tests

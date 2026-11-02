@@ -115,6 +115,82 @@ def usage_cmd() -> None:
         click.echo(render_table("Per role", ["role", "call", "token"], by_role))
 
 
+@cli.group("autopilot", invoke_without_command=True)
+@click.option("--target", default=None, help="Target (default: dari scope tersimpan).")
+@click.option("--steps", default=6, show_default=True, help="Langkah per cycle.")
+@click.option("--cycles", default=2, show_default=True, help="Jumlah pass adaptif.")
+@click.option("--dry-run", is_flag=True, help="Susun rencana tanpa menjalankan apa pun.")
+def autopilot_group(target: str | None, steps: int, cycles: int, dry_run: bool) -> None:
+    """Operasi otonom: susun langkah berbatas dari temuan, jalankan, lalu belajar."""
+    from wth_ai.workspace import init_workspace
+
+    init_workspace()
+    from wth_ai.config import WTHConfig
+    from wth_ai.orchestrator import WTHOrchestrator
+
+    orch = WTHOrchestrator(WTHConfig.load(), fresh=True)
+    chosen = target or orch.state.scope.target
+    if not chosen:
+        click.echo("Tidak ada target. Pakai --target atau set scope dulu (/target).")
+        return
+    if dry_run:
+        from wth_ai.hunt.autopilot import run_autopilot
+
+        report = run_autopilot(target=chosen, run_probe=lambda probe: None,
+                               state=orch.state, max_cycles=cycles,
+                               max_steps_per_cycle=steps, dry_run=True)
+        click.echo(f"DRY-RUN: {len(report.steps)} langkah disusun, tidak ada yang dijalankan")
+        return
+    click.echo(orch.handle_input(f"/autopilot {steps}"))
+
+
+@cli.group("payloads")
+def payloads_group() -> None:
+    """Pustaka payload (berbatas) untuk uji destruktif yang terkendali."""
+
+
+@payloads_group.command("list")
+@click.option("--class", "vuln_class", default=None, help="Filter kelas kerentanan.")
+@click.option("--max-blast", default="single-object", show_default=True,
+              help="self | single-object | mass")
+@click.option("--include-destructive", is_flag=True, help="Ikut sertakan yang butuh opt-in destruktif.")
+def payloads_list(vuln_class: str | None, max_blast: str, include_destructive: bool) -> None:
+    """Daftar payload yang boleh dipakai menurut batas yang diberikan."""
+    from wth_ai.hunt.payloads import filter_payloads, format_payloads
+
+    items = filter_payloads(vuln_class, max_blast=max_blast, include_destructive=include_destructive)
+    click.echo(format_payloads(items) + f"\n\n({len(items)} payload ditampilkan)")
+
+
+@payloads_group.command("show")
+@click.argument("payload_id")
+def payloads_show(payload_id: str) -> None:
+    """Detail satu payload, termasuk pemulihan dan catatannya."""
+    import json
+
+    from wth_ai.hunt.payloads import get_payload
+
+    payload = get_payload(payload_id)
+    if payload is None:
+        click.echo(f"{payload_id}: tidak ada di katalog")
+        return
+    click.echo(json.dumps(payload.to_dict(), indent=2, ensure_ascii=False))
+
+
+@payloads_group.command("doc")
+@click.option("--out", default="docs/attack/destructive-library.md", show_default=True)
+def payloads_doc(out: str) -> None:
+    """Tulis ulang dokumentasi .md dari katalog (sumber tunggal: kode)."""
+    from pathlib import Path as _Path
+
+    from wth_ai.hunt.payloads import PAYLOADS, to_markdown
+
+    path = _Path(out)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(to_markdown(), encoding="utf-8")
+    click.echo(f"ditulis: {path} ({len(PAYLOADS)} payload)")
+
+
 @cli.group(name="eval")
 def eval_group() -> None:
     """Measure the self-improvement loop (offline: no LLM, no network)."""
