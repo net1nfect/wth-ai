@@ -266,6 +266,10 @@ class UIConfig:
     banner: bool = True
     theme: str = "dark"
     max_trace_lines: int = 20
+    #: How often the live panel may repaint for the elapsed-seconds ticker. Every
+    #: repaint pins the terminal viewport to the bottom, so this is a tradeoff
+    #: between "shows it is still waiting" and "the operator can scroll".
+    live_refresh_seconds: int = 15
 
 
 @dataclass
