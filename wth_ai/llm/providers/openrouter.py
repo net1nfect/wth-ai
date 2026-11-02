@@ -115,6 +115,7 @@ class OpenRouterProvider(BaseLLMProvider):
         r = requests.post(url, headers=self._headers(), json=payload, timeout=req_timeout)
         raise_for_status(self.name, model, url, r)
         data = r.json()
+        self._record_usage(data)
         return data["choices"][0]["message"]["content"]
 
     def _chat_stream(

@@ -189,6 +189,28 @@ def collect(*, learning: Any = None, findings_db: Any = None) -> EvalReport:
     report.per_tech = rows
     report.warnings = learn_warnings + findings_warnings
 
+    # LLM spend, so a report answers "what did this cost?" next to "did it work?".
+    # A provider that reports no usage still shows up as calls -- "not measured"
+    # is the honest signal, and omitting it would understate spend.
+    try:
+        from wth_ai.llm.usage import get_ledger
+
+        usage = get_ledger().summary()
+        report.metrics["llm_calls"] = float(usage["calls"])
+        report.metrics["llm_tokens"] = float(usage["total_tokens"])
+        if usage["calls"] and not usage["total_tokens"]:
+            report.warnings.append(
+                f"{int(usage['calls'])} call tercatat TAPI 0 token: providernya tidak "
+                "melaporkan usage, jadi biaya engagement ini belum terukur."
+            )
+        if usage.get("over_budget"):
+            report.warnings.append(
+                f"pemakaian token melewati budget: {int(usage['total_tokens'])} > "
+                f"{int(usage['budget_tokens'])} (WTH_TOKEN_BUDGET)."
+            )
+    except Exception:  # noqa: BLE001
+        pass
+
     # Asymmetry diagnosis, cross-checked between the two stores. A learning store
     # with zero failures is either (a) genuinely FP-free, or (b) written before
     # both verdicts were recorded -- and (b) is far more likely when FindingsDB is

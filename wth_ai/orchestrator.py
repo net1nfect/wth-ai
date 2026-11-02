@@ -287,6 +287,12 @@ class WTHOrchestrator:
 
         return recall_block(limit=5, target=target)
 
+    def _handle_usage(self, args: list[str]) -> str:
+        """`/usage` — token & biaya yang tercatat di mesin ini."""
+        from wth_ai.llm.usage import get_ledger
+
+        return get_ledger().format_summary()
+
     def _handle_eval(self, args: list[str]) -> str:
         """`/eval` — jalankan harness pengukuran self-improvement (offline).
 

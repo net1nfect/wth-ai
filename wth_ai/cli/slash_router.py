@@ -182,6 +182,7 @@ def build_slash_router(orch: Any) -> SlashRouter:
         "/research": orch._handle_research,
         "/jobs": orch._handle_jobs,
         "/eval": orch._handle_eval,
+        "/usage": orch._handle_usage,
         "/yolo": lambda args: orch._handle_permission(["yolo"]),
         "/model": lambda a: handle_model(orch, a),
         "/provider": lambda a: handle_provider(orch, a),

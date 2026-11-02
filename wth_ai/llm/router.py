@@ -94,6 +94,26 @@ class LLMProviderRouter:
         self._providers[ptype] = p
         return p
 
+    def _record_usage(self, role: str, provider_type: str, model: str, provider: Any) -> None:
+        """One ledger entry per answered call. Never fatal.
+
+        Providers return plain text, so their usage rides back on
+        `provider.last_usage`. A provider that reports nothing still records a
+        CALL with zero tokens: "not measured" is a fact the operator needs, and
+        omitting the call would understate spend.
+        """
+        try:
+            from wth_ai.llm.usage import get_ledger
+
+            get_ledger().record(
+                role=role,
+                provider=provider_type,
+                model=model,
+                usage=getattr(provider, "last_usage", None),
+            )
+        except Exception:  # noqa: BLE001 - accounting must never break a call
+            pass
+
     def _role_config(self, role: str) -> ProviderRoleConfig:
         if role == "supervisor":
             role = "planner"
@@ -190,10 +210,14 @@ class LLMProviderRouter:
                     continue
                 primary = rc.model if ptype == rc.type else self._role_config(role).model
                 backup = rc.backup_model or primary
-                return provider.chat_with_fallback(
+                text, used_model = provider.chat_with_fallback(
                     primary, backup, messages,
                     timeout=timeout, stream=stream, on_token=on_token, response_format=response_format,
                 )
+                # Accounting runs on the SUCCESS path with the model that actually
+                # answered, so a failover is billed to the backup model.
+                self._record_usage(role, ptype, used_model, provider)
+                return text, used_model
             except Exception as exc:  # noqa: BLE001
                 last_err = exc
                 attempts.append(f"{ptype}: {type(exc).__name__}: {str(exc)[:160]}")

@@ -178,6 +178,7 @@ class OpenAICompatProvider(BaseLLMProvider):
         r = requests.post(url, headers=self._headers(), json=payload, timeout=timeout or self.default_timeout)
         raise_for_status(self.provider_name, model, url, r)
         data = _parse_response_json(r.text)
+        self._record_usage(data)
         return data["choices"][0]["message"]["content"]
 
     def chat_with_tools(
@@ -205,4 +206,5 @@ class OpenAICompatProvider(BaseLLMProvider):
         r = requests.post(url, headers=self._headers(), json=payload, timeout=timeout or self.default_timeout)
         raise_for_status(self.provider_name, model, url, r)
         data = _parse_response_json(r.text)
+        self._record_usage(data)
         return {"message": data["choices"][0]["message"], "model": model, "raw": data}

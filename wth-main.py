@@ -79,6 +79,13 @@ def doctor(config_path: str) -> None:
     click.echo(ToolDoctor(_load_config(config_path)).full_report())
 
 
+@cli.command("usage")
+def usage_cmd() -> None:
+    """Show recorded token/cost usage for this machine."""
+    from wth_ai.llm.usage import get_ledger
+    click.echo(get_ledger().format_summary())
+
+
 @cli.group(name="eval")
 def eval_group() -> None:
     """Measure the self-improvement loop (offline: no LLM, no network)."""
