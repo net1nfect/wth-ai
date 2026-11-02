@@ -287,6 +287,39 @@ class WTHOrchestrator:
 
         return recall_block(limit=5, target=target)
 
+    def _handle_next(self, args: list[str]) -> str:
+        """`/next` — langkah uji berikutnya yang disusun dari temuan + sinyal respons."""
+        from wth_ai.hunt.proactive import format_next_tests, propose_next_tests
+
+        stored = self.state.metadata.get("next_tests") or []
+        if stored and not args:
+            class _Stored:
+                def __init__(self, data: dict) -> None:
+                    self.__dict__.update(data)
+                    self.priority = float(data.get("priority", 1.0))
+                    self.risk = str(data.get("risk", "low"))
+                    self.title = str(data.get("title", ""))
+                    self.rationale = str(data.get("rationale", ""))
+                    self.probe = data.get("probe", {})
+
+            return format_next_tests([_Stored(item) for item in stored])
+        pairs = self.state.metadata.get("request_pairs", [])
+        findings = []
+        try:
+            findings = [f.to_dict() if hasattr(f, "to_dict") else dict(f) for f in self.findings_db.list_findings()]
+        except Exception:  # noqa: BLE001
+            pass
+        return format_next_tests(propose_next_tests(findings=findings, request_pairs=pairs))
+
+    def _handle_eval_act(self, args: list[str]) -> str:
+        """`/eval act` — jalankan aksi self-improvement atas hasil pengukuran."""
+        from wth_ai.eval.act import act_on_report, format_actions
+
+        learning = getattr(self, "learning", None)
+        findings_db = getattr(self, "findings_db", None)
+        actions = act_on_report(None, learning=learning, findings_db=findings_db)
+        return format_actions(actions)
+
     def _handle_usage(self, args: list[str]) -> str:
         """`/usage` — token & biaya yang tercatat di mesin ini."""
         from wth_ai.llm.usage import get_ledger
@@ -857,6 +890,37 @@ class WTHOrchestrator:
         self._persist()
         return self.scope_mgr.display()
 
+    def _propose_next_after_finding(self, finding: Any) -> str:
+        """Proaktif: setelah ada temuan, susun langkah uji berikutnya.
+
+        Hasilnya disimpan di state.metadata supaya bisa dibaca `/next`, dipakai agent,
+        dan diprioritaskan oleh bobot hasil pengukuran (eval/act.py).
+        """
+        from wth_ai.hunt.proactive import format_next_tests, propose_next_tests
+
+        pairs = self.state.metadata.get("request_pairs", []) if hasattr(self, "state") else []
+        findings = []
+        try:
+            findings = [
+                f.to_dict() if hasattr(f, "to_dict") else dict(f)
+                for f in self.findings_db.list_findings()
+            ]
+        except Exception:  # noqa: BLE001
+            findings = []
+        if not findings:
+            findings = [finding if isinstance(finding, dict) else getattr(finding, "__dict__", {})]
+        proposals = propose_next_tests(findings=findings, request_pairs=pairs)
+        self.state.metadata["next_tests"] = [p.to_dict() for p in proposals]
+        return format_next_tests(proposals)
+
+    def _write_skill_from_finding(self, finding: Any) -> str:
+        """Tulis/perbarui skill otomatis dari temuan yang BERBUKTI. Tanpa bukti: tidak ada file."""
+        from wth_ai.skills.autowrite import note_from_finding, record_skill
+
+        note = note_from_finding(finding)
+        path = record_skill(note)
+        return str(path) if path else ""
+
     def _record_learning_outcome(self, finding: Any, *, verified: bool) -> None:
         """Record BOTH outcomes into the learning store.
 
@@ -880,6 +944,24 @@ class WTHOrchestrator:
             verified=verified,
             session_id=self.state.session_id,
         )
+        if not verified:
+            # Temuan gugur tidak menghasilkan langkah lanjutan (tidak ada yang perlu
+            # dikejar) dan TIDAK menulis skill -- pelajaran dari false positive masuk
+            # lewat store learning, tempat backfill eval/act.py juga menulis.
+            return
+        # Proaktif: begitu ada temuan terverifikasi, susun langkah uji berikutnya dan
+        # simpan skill yang lahir dari buktinya. Keduanya dibungkus supaya kegagalan di
+        # sini tidak pernah menggagalkan pelaporan temuan itu sendiri.
+        try:
+            self._propose_next_after_finding(finding)
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            path = self._write_skill_from_finding(finding)
+            if path:
+                self.state.metadata.setdefault("auto_skills", []).append(path)
+        except Exception:  # noqa: BLE001
+            pass
 
     def _handle_permission(self, args: list[str]) -> str:
         """`/permission [mode]` — one word sets the whole safety policy.

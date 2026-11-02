@@ -40,7 +40,16 @@ class SkillRegistry:
     def discover(self) -> int:
         self.skills.clear()
         count = 0
-        for source, base in [("openclaw", self.openclaw_path), ("local", self.local_path)]:
+        sources = [("openclaw", self.openclaw_path), ("local", self.local_path)]
+        # Skill otomatis hidup di $WTH_HOME/skills (ditulis `skills/autowrite.py`).
+        # Tanpa dimasukkan ke sini, skill hasil self-improvement tidak pernah terbaca.
+        try:
+            from wth_ai.workspace import wth_home
+
+            sources.append(("wth", wth_home() / "skills"))
+        except Exception:  # noqa: BLE001
+            pass
+        for source, base in sources:
             if not base.exists():
                 continue
             for entry in sorted(base.iterdir()):
@@ -52,6 +61,18 @@ class SkillRegistry:
                 if skill:
                     self.skills[skill.id] = skill
                     count += 1
+                    continue
+                # Satu level namespace (mis. `skills/auto/<slug>/SKILL.md`). Tanpa ini,
+                # skill yang ditulis otomatis TIDAK PERNAH terbaca -- terukur di uji
+                # end-to-end: file tertulis di disk, registry melaporkan 117 skill lama
+                # dan nol skill auto.
+                for nested in sorted(entry.iterdir()):
+                    if not nested.is_dir() or (nested.is_symlink() and not nested.exists()):
+                        continue
+                    nested_skill = self._parse_skill(nested, f"{source}/{entry.name}")
+                    if nested_skill:
+                        self.skills[nested_skill.id] = nested_skill
+                        count += 1
         return count
 
     def _parse_skill(self, path: Path, source: str) -> Skill | None:
