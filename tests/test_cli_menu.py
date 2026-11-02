@@ -314,24 +314,21 @@ def test_click_selects_then_activates(monkeypatch):
     assert app.exited is True
 
 
-def test_click_on_the_title_row_goes_back(monkeypatch):
+def test_click_on_the_title_row_does_nothing(monkeypatch):
+    """Klik judul TIDAK menutup/ kembali.
+
+    Aturan "klik breadcrumb = kembali" dibuang setelah terukur: prompt_toolkit
+    men-clamp klik yang jatuh di luar area konten ke baris terakhir yang terlihat,
+    sehingga di sebagian layout SEMUA klik tiba sebagai baris 0 - artinya aturan itu
+    membuat klik apa pun menutup menu. Kembali adalah tugas Esc/backspace/panah kiri.
+    """
     state = MenuState(TREE)
     result: dict = {"value": None}
     app = _FakeApp()
     control = _control(monkeypatch, state, result, app)
 
     control.mouse_handler(_click(0))
-    assert state.depth == 1, "klik judul di root seharusnya menutup menu"
-    assert app.exited is True and result["value"] is None
-
-    # dari submenu, klik judul = kembali satu level (bukan menutup)
-    state2 = MenuState(TREE)
-    state2.enter()
-    app2 = _FakeApp()
-    result2: dict = {"value": None}
-    control2 = _control(monkeypatch, state2, result2, app2)
-    control2.mouse_handler(_click(0))
-    assert state2.depth == 1 and app2.exited is False
+    assert state.depth == 1 and app.exited is False and result["value"] is None
 
 
 def test_wheel_scrolls_without_activating(monkeypatch):

@@ -403,6 +403,9 @@ class WTHRepl:
         """
         return selected.endswith(" ") and not original.endswith(" ")
 
+    #: Commands whose bare form already opens an interactive view of its own.
+    SELF_INTERACTIVE = frozenset({"/model", "/permission"})
+
     def _maybe_open_menu(self, text: str) -> str | None:
         """Open the interactive menu when the input asks for one.
 
@@ -420,6 +423,11 @@ class WTHRepl:
 
         stripped = (text or "").strip()
         if not stripped.startswith("/") or not interactive_available():
+            return text
+        # Commands that open their OWN interactive view must not be hijacked by the
+        # generic subcommand menu. Measured complaint: `/model` showed a menu of
+        # list/use/set/fix/show instead of the model list the operator asked for.
+        if stripped in self.SELF_INTERACTIVE:
             return text
         if stripped.endswith("?"):          # `/config?` = tanya, bukan buka menu
             return text

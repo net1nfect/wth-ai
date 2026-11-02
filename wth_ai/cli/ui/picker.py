@@ -18,6 +18,12 @@ import sys
 from dataclasses import dataclass, field
 from typing import Any, Callable, Iterable, Sequence
 
+try:  # logic below stays importable without prompt_toolkit
+    from prompt_toolkit.application.current import get_app
+except ImportError:  # pragma: no cover - prompt_toolkit is a declared dependency
+    def get_app():  # type: ignore[misc]
+        raise RuntimeError("prompt_toolkit tidak terpasang")
+
 
 def interactive_available() -> bool:
     """True when a real terminal can host an interactive picker.
@@ -124,7 +130,8 @@ def describe_model(model: str, *, current: str = "", tested: dict[str, bool] | N
 def format_rows(
     state: ListPickerState,
     describe: Callable[[str], str] | None = None,
-) -> list[tuple[str, str]]:
+    handler_for: Callable[[int], Any] | None = None,
+) -> list[tuple]:
     """Rows for the picker body. Pure, so the highlight/description logic is testable.
 
     Two lines per entry, like the model picker operators already know: the name on
@@ -138,51 +145,104 @@ def format_rows(
         real = offset + i
         selected = real == state.index
         marker = "▶" if selected else " "
-        rows.append(("class:sel" if selected else "class:item", f" {marker} {item}"))
+        style = "class:sel" if selected else "class:item"
+        handler = handler_for(real) if handler_for is not None else None
+        label = f" {marker} {item}"
+        rows.append((style, label, handler) if handler is not None else (style, label))
         if describe is not None:
             note = describe(item)
             if note:
-                rows.append(("class:desc", f"      {note}"))
+                text = f"      {note}"
+                rows.append(("class:desc", text, handler) if handler is not None else ("class:desc", text))
     return rows
 
 
-def pick_from_list(
-    title: str,
-    items: Sequence[str],
-    *,
-    subtitle: str = "",
-    window: int = 12,
-    on_render: Callable[[ListPickerState], Any] | None = None,
-    describe: Callable[[str], str] | None = None,
-) -> str | None:
-    """Run the picker. Returns the chosen item, or None when cancelled/unavailable."""
-    if not items or not interactive_available():
+def item_click_handler(state: "ListPickerState", result: dict, index: int):
+    """Closure bound to ONE row: select it, or activate it when already selected.
+
+    Attached to each item row's own fragments (prompt_toolkit resolves a click
+    through the fragment's handler), so the click does not depend on the
+    screen->line coordinate translation. Measured: that translation clamps a click
+    that lands outside the rendered content to the last visible line, which is how
+    "click the title to cancel" turned into "any click cancels".
+    """
+    from prompt_toolkit.mouse_events import MouseEventType
+
+    def _handler(mouse_event) -> None:
+        if mouse_event.event_type != MouseEventType.MOUSE_UP:
+            return None
+        if index == state.index:
+            result["value"] = state.selected()
+            get_app().exit()
+        else:
+            state.index = index
+            get_app().invalidate()
         return None
 
-    from prompt_toolkit import Application
-    from prompt_toolkit.formatted_text import FormattedText
-    from prompt_toolkit.key_binding import KeyBindings
-    from prompt_toolkit.layout import Layout, Window
+    return _handler
+
+
+def build_picker_control(state: "ListPickerState", result: dict, *, per_item: int = 1):
+    """Control with wheel + click support, module level so a test can drive it.
+
+    `mouse_handler` is a METHOD on UIControl in this prompt_toolkit version (not a
+    constructor argument), and `MouseEvent` carries no `.app`, so the running
+    application comes from `get_app()`.
+    """
     from prompt_toolkit.layout.controls import FormattedTextControl
-    from prompt_toolkit.styles import Style
+    from prompt_toolkit.mouse_events import MouseEventType
 
-    from wth_ai.cli.ui.theme import THEME
+    class PickerControl(FormattedTextControl):
+        def mouse_handler(self, mouse_event):  # noqa: ANN001
+            app = get_app()
+            event_type = mouse_event.event_type
 
-    state = ListPickerState(items=list(items), window=window)
+            # Wheel / two-finger touchpad scroll arrives here as SCROLL_* (the
+            # terminal's scroll KEYS arrive as key bindings).
+            if event_type in (MouseEventType.SCROLL_UP, MouseEventType.SCROLL_DOWN):
+                state.move(-3 if event_type == MouseEventType.SCROLL_UP else 3)
+                app.invalidate()
+                return None
+            if event_type != MouseEventType.MOUSE_UP:
+                return None
 
-    def _render() -> FormattedText:
-        rows = FormattedText()
-        rows.append(("class:title", f" {title}  "))
-        rows.append(("class:dim", f"{state.status()}\n"))
-        rows.append(("class:query", " ❯ "))
-        rows.append(("class:query", state.query + ("▏" if state.query else "ketik untuk menyaring")))
-        rows.append(("class:dim", "\n"))
-        for style, text in format_rows(state, describe):
-            rows.append((style, text + "\n"))
-        rows.append(("class:dim", " enter select · esc back · ↑/↓ pilih · ketik cari"))
-        if subtitle:
-            rows.append(("class:dim", f" · {subtitle}"))
-        return rows
+            row = mouse_event.position.y
+            if row < PICKER_HEADER_ROWS:
+                # A click on the title/query row does NOTHING. It used to cancel
+                # "like Esc", and that turned out to be dangerous: prompt_toolkit
+                # clamps a click outside the rendered content to the last visible
+                # line, so in some layouts every click arrived as row 0 -- i.e.
+                # every click closed the picker. Cancelling is Esc's job.
+                return None
+
+            row_in_list = row - PICKER_HEADER_ROWS
+            if row_in_list % per_item:
+                return None                      # description row: not a target
+            visible, offset = state.window_slice()
+            position = row_in_list // per_item
+            if position >= len(visible):
+                return None                      # footer/empty space
+            real = offset + position
+            if real == state.index:
+                result["value"] = state.selected()
+                app.exit()
+            else:
+                state.index = real
+            app.invalidate()
+            return None
+
+    return PickerControl
+
+
+#: title + status, then the filter line: rows before the first item.
+PICKER_HEADER_ROWS = 2
+
+
+def build_picker_bindings(state: "ListPickerState", result: dict) -> Any:
+    """Key bindings for the picker, built outside the app so tests drive the SAME
+    bindings the REPL uses (a test with an empty KeyBindings() proved nothing about
+    arrow keys)."""
+    from prompt_toolkit.key_binding import KeyBindings
 
     bindings = KeyBindings()
 
@@ -210,12 +270,14 @@ def pick_from_list(
 
     @bindings.add("enter")
     def _accept(event):
-        event.app.exit(result=state.selected())
+        result["value"] = state.selected()
+        event.app.exit()
 
     @bindings.add("escape")
     @bindings.add("c-c")
     def _cancel(event):
-        event.app.exit(result=None)
+        result["value"] = None
+        event.app.exit()
 
     # Everything else types into the filter (including backspace).
     @bindings.add("<any>")
@@ -229,6 +291,84 @@ def pick_from_list(
             on_render(state)
         event.app.invalidate()
 
+    return bindings
+
+
+def build_picker_app(state: "ListPickerState", result: dict, *, bindings, style, per_item=1,
+                     render=None, **kwargs):
+    """The picker Application, built here so a test can drive it with a pipe input.
+
+    Extracted after a wheel/touchpad report: `pick_from_list` hid the app, so there
+    was no way to feed it real mouse sequences and see whether the handler ran.
+    """
+    from prompt_toolkit import Application
+    from prompt_toolkit.layout import Layout, Window
+
+    control = build_picker_control(state, result, per_item=per_item)(render, focusable=True)
+    return Application(
+        layout=Layout(Window(control)),
+        key_bindings=bindings,
+        style=style,
+        full_screen=False,
+        # Wheel/touchpad scrolling and clicking, same as the command menu.
+        mouse_support=True,
+        **kwargs,
+    )
+
+
+def pick_from_list(
+    title: str,
+    items: Sequence[str],
+    *,
+    subtitle: str = "",
+    window: int = 12,
+    on_render: Callable[[ListPickerState], Any] | None = None,
+    describe: Callable[[str], str] | None = None,
+) -> str | None:
+    """Run the picker. Returns the chosen item, or None when cancelled/unavailable."""
+    if not items or not interactive_available():
+        return None
+
+    from prompt_toolkit import Application
+    from prompt_toolkit.formatted_text import FormattedText
+    from prompt_toolkit.key_binding import KeyBindings
+    from prompt_toolkit.layout import Layout, Window
+    from prompt_toolkit.layout.controls import FormattedTextControl
+    from prompt_toolkit.styles import Style
+
+    from wth_ai.cli.ui.theme import THEME
+
+    state = ListPickerState(items=list(items), window=window)
+    # Rows per entry: a label plus (when descriptions are on) a description line.
+    per_item = 2 if describe is not None else 1
+    result: dict[str, Any] = {"value": None}
+
+    def _render() -> FormattedText:
+        rows = FormattedText()
+        rows.append(("class:title", f" {title}  "))
+        rows.append(("class:dim", f"{state.status()}\n"))
+        rows.append(("class:query", " ❯ "))
+        rows.append(("class:query", state.query + ("▏" if state.query else "ketik untuk menyaring")))
+        rows.append(("class:dim", "\n"))
+        for fragment in format_rows(state, describe,
+                                    handler_for=lambda real: item_click_handler(state, result, real)):
+            style, text = fragment[0], fragment[1]
+            handler = fragment[2] if len(fragment) > 2 else None
+            rows.append((style, text + "\n", handler) if handler is not None else (style, text + "\n"))
+        visible_now, offset_now = state.window_slice()
+        hidden_above = offset_now
+        hidden_below = max(0, len(state.matches) - offset_now - len(visible_now))
+        scroll = ""
+        if hidden_above:
+            scroll += f"▲ {hidden_above} di atas · "
+        if hidden_below:
+            scroll += f"▼ {hidden_below} di bawah · "
+        rows.append(("class:dim", f" {scroll}enter select · esc back · ↑/↓ pilih · ketik cari"))
+        if subtitle:
+            rows.append(("class:dim", f" · {subtitle}"))
+        return rows
+
+    bindings = build_picker_bindings(state, result)
     style = Style.from_dict({
         "title": f"bold {THEME['brand']}",
         "dim": THEME["muted"],
@@ -240,16 +380,13 @@ def pick_from_list(
         "desc": THEME["muted"],
     })
 
-    app: Application = Application(
-        layout=Layout(Window(FormattedTextControl(_render))),
-        key_bindings=bindings,
-        style=style,
-        full_screen=False,
-    )
+    app = build_picker_app(state, result, bindings=bindings, style=style, per_item=per_item,
+                           render=_render)
     try:
-        return app.run()
+        app.run()
     except (EOFError, KeyboardInterrupt):
         return None
+    return result["value"]
 
 
 def show_panel(title: str, lines: Iterable[str]) -> None:
