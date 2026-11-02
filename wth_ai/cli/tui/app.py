@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-from pathlib import Path
 from typing import Any
 
 from textual.app import App, ComposeResult
@@ -26,6 +25,7 @@ from wth_ai.cli.tui.widgets.input_bar import InputBar, Submitted
 from wth_ai.cli.tui.widgets.sidebar import SidebarPanel
 from wth_ai.cli.tui.widgets.transcript import TranscriptPanel
 from wth_ai.cli.ui.tool_trace import ToolTracePanel
+from wth_ai.cli.tui.theme_css import TUI_CSS
 from wth_ai.platform.registry import get_platform_registry
 
 _QUIT_COMMANDS = frozenset({"/quit", "/exit", "quit", "exit"})
@@ -38,7 +38,10 @@ def _is_quit_command(text: str) -> bool:
 class WthTuiApp(App[None]):
     """Full interactive terminal UI — non-blocking command execution."""
 
-    CSS_PATH = Path(__file__).parent / "theme.tcss"
+    # Generated from `cli/ui/theme.py` (single source of truth) instead of a
+    # separate .tcss with its own hardcoded palette: the REPL and the TUI now
+    # share one identity.
+    CSS = TUI_CSS
     TITLE = "WTH-AI"
     BINDINGS = [
         Binding("ctrl+1", "focus_tab_chat", "Chat", show=False),
