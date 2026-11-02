@@ -21,6 +21,17 @@ def _activity_mode(config: Any) -> str:
     return getattr(ui, "activity_mode", "live") if ui else "live"
 
 
+def _short_job_id(event: Event) -> str:
+    """Short display id for a job event.
+
+    ``Event.job_id`` is optional (events.py) -- every production emitter in
+    jobs/worker.py passes one, but the bus API allows omitting it, so indexing
+    it blindly turned a job event without an id into a TypeError inside the UI
+    subscriber.
+    """
+    return (event.job_id or "?")[:8]
+
+
 def wire_job_activity(orch: Any) -> Callable[[Event], None]:
     """Subscribe job lifecycle logs to trace panel and stream output."""
 
@@ -38,7 +49,7 @@ def wire_job_activity(orch: Any) -> Callable[[Event], None]:
             total = int(data.get("total", 100))
             message = str(data.get("message", ""))
             pct = int(100 * current / max(total, 1))
-            label = message or f"job {event.job_id[:8]}"
+            label = message or f"job {_short_job_id(event)}"
             if trace and mode == "live":
                 trace.set_phase(label, pct)
             if stream and mode == "stream":
@@ -55,15 +66,15 @@ def wire_job_activity(orch: Any) -> Callable[[Event], None]:
             job_type = str(data.get("type", ""))
             if trace and mode == "live":
                 trace.set_phase(job_type or "job", 0)
-                trace.add_log_line(f"job {event.job_id[:8]} started")
+                trace.add_log_line(f"job {_short_job_id(event)} started")
             if stream and mode == "stream":
-                stream.on_log(f"job {event.job_id[:8]} {job_type} started")
+                stream.on_log(f"job {_short_job_id(event)} {job_type} started")
         elif event.type == "job.completed":
             if trace and mode == "live":
                 trace.set_phase("idle", 100)
-                trace.add_log_line(f"job {event.job_id[:8]} completed")
+                trace.add_log_line(f"job {_short_job_id(event)} completed")
             if stream and mode == "stream":
-                stream.on_log(f"job {event.job_id[:8]} completed")
+                stream.on_log(f"job {_short_job_id(event)} completed")
         elif event.type == "job.failed":
             reason = str(data.get("reason", ""))
             if trace and mode == "live":

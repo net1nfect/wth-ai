@@ -741,9 +741,17 @@ def job() -> None:
 def job_create(job_type: str, target, profile, priority: str, requires_approval: bool, config_path: str) -> None:
     """Create a JOB_TYPE job (recon|executor|report|provider_test|custom)."""
     mgr = _job_manager(config_path)
+    # `wth job create` is the operator naming the target directly, so the
+    # authorization assertion belongs here at the CLI boundary: the recon
+    # handler is now fail-closed (`metadata.authorized`, default False). Left
+    # unset for every other job type so their own fail-closed defaults stay in
+    # force -- notably `run_executor_job()`, which must not be handed a
+    # pre-authorized flag it never asked for.
+    meta = {"authorized": True, "profile": profile} if job_type == "recon" else None
     j = mgr.create_job(
         job_type, target=target, profile=profile, priority=priority,
         requires_approval=requires_approval, created_by="cli",
+        metadata=meta,
     )
     if j.status == "failed":
         click.echo(f"Rejected: {j.error} (job {j.job_id})")

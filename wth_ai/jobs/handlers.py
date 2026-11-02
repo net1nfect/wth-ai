@@ -35,6 +35,32 @@ def _load_baseline(store: Any, target: str, current_job_id: str) -> dict[str, An
     return None
 
 
+def _load_fingerprint_tech_stack(output_dir: Any) -> dict[str, str]:
+    """Technology -> version map for a recon job, from its normalized artifacts.
+
+    The job summary only carries COUNTS, so the previous
+    ``summary.get("fingerprints", {})`` was wrong twice over: the real records
+    live under ``summary["assets"]`` (built by ``ReconNormalizer.summary()``),
+    and even there ``fingerprints`` is an int, not a map of technologies. The
+    actual records are written to ``normalized/fingerprint.json``.
+    """
+    try:
+        path = Path(str(output_dir)) / "normalized" / "fingerprint.json"
+        if not path.exists():
+            return {}
+        rows = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    out: dict[str, str] = {}
+    for row in rows if isinstance(rows, list) else []:
+        if not isinstance(row, dict):
+            continue
+        tech = str(row.get("technology") or "").strip()
+        if tech:
+            out.setdefault(tech, str(row.get("version") or ""))
+    return out
+
+
 def _sync_graph_after_recon(
     result: dict[str, Any],
     job: Any,
@@ -66,11 +92,11 @@ def _sync_graph_after_recon(
                     "target": target,
                     "graph_nodes": graph_sync.get("nodes", 0) if graph_sync else 0,
                 }
-                attack = result.get("summary", {})
-                if isinstance(attack, dict):
+                tech_stack = _load_fingerprint_tech_stack(output_dir)
+                if tech_stack:
                     state.metadata["attack_surface_obj"] = {
                         "target": target,
-                        "tech_stack": attack.get("fingerprints", {}),
+                        "tech_stack": tech_stack,
                     }
                 store.save(state)
         manager = getattr(ctx, "_manager", None)
@@ -98,7 +124,15 @@ def handler_recon(job: Any, ctx: Any) -> dict[str, Any]:
 
     meta = getattr(job, "metadata", {}) or {}
     profile = job.profile or meta.get("profile") or "recon-only"
-    authorized = bool(meta.get("authorized", True))
+    # Fail-closed, matching `orchestrator_bridge.run_executor_job()`'s
+    # `metadata.get("authorized", False)`. This used to default to True, which
+    # meant ANY caller that forgot to pass the flag got a live scan against an
+    # unconfirmed target -- and the authorization gate in `ReconEngine.run()`
+    # could never fire, because nothing ever sent authorized=False. Callers that
+    # represent explicit operator intent (`wth recon run/quick`, the `/recon`
+    # slash handler, a `recon watch` cron entry, the supervisor's
+    # `job_create_recon`) set it explicitly at that boundary.
+    authorized = bool(meta.get("authorized", False))
     realtime = bool(meta.get("realtime", False))
 
     manager = getattr(ctx, "_manager", None)
@@ -118,6 +152,9 @@ def handler_recon(job: Any, ctx: Any) -> dict[str, Any]:
         log=ctx.log,
         bus=bus,
         baseline=baseline,
+        # `wth job stop` can now actually stop a running scan: the engine polls
+        # this between tools instead of the handler checking once at entry.
+        should_stop=ctx.should_stop,
     )
 
     if realtime:
@@ -135,6 +172,9 @@ def handler_recon(job: Any, ctx: Any) -> dict[str, Any]:
         "target": target,
         "status": result.get("status", "completed"),
         "profile": profile,
+        # Propagate the engine's refusal reason so a blocked scan surfaces as a
+        # readable job error instead of a bare "blocked".
+        "reason": result.get("reason"),
         "output_dir": result.get("output_dir"),
         "summary": result.get("summary", {}),
         "priority_targets": result.get("priority_targets", 0),

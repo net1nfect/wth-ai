@@ -9,7 +9,7 @@ from typing import Any, Callable
 import requests
 
 from wth_ai.llm.errors import LLMError
-from wth_ai.llm.providers.base import BaseLLMProvider
+from wth_ai.llm.providers.base import BaseLLMProvider, raise_for_status
 
 
 class OpenRouterProvider(BaseLLMProvider):
@@ -52,12 +52,37 @@ class OpenRouterProvider(BaseLLMProvider):
         if not self.api_key:
             return []
         try:
-            r = requests.get(f"{self.base_url}/models", headers=self._headers(), timeout=30)
-            r.raise_for_status()
+            url = f"{self.base_url}/models"
+            r = requests.get(url, headers=self._headers(), timeout=30)
+            raise_for_status(self.name, "list-models", url, r)
             data = r.json()
             return [m["id"] for m in data.get("data", []) if m.get("id")]
         except Exception:
             return []
+
+    def list_models_detailed(self) -> list[dict[str, Any]]:
+        """WU-110: full model objects (context_length/pricing/
+        supported_parameters included) -- OpenRouter's /models response
+        already carries this, `list_models()` above discards everything but
+        `id` (pre-existing behavior, unchanged -- this is a NEW, additive
+        method, not a replacement)."""
+        if not self.api_key:
+            return []
+        try:
+            url = f"{self.base_url}/models"
+            r = requests.get(url, headers=self._headers(), timeout=30)
+            raise_for_status(self.name, "list-models", url, r)
+            data = r.json()
+            return [m for m in data.get("data", []) if m.get("id")]
+        except Exception:
+            return []
+
+    def get_context_length(self, model: str | None = None) -> int | None:
+        if not model:
+            return None
+        from wth_ai.llm.model_catalog import get as catalog_get
+        cap = catalog_get(model)
+        return cap.context_length if cap else None
 
     def chat(
         self,
@@ -88,7 +113,7 @@ class OpenRouterProvider(BaseLLMProvider):
         if use_stream:
             return self._chat_stream(url, payload, req_timeout, on_token)  # type: ignore[arg-type]
         r = requests.post(url, headers=self._headers(), json=payload, timeout=req_timeout)
-        r.raise_for_status()
+        raise_for_status(self.name, model, url, r)
         data = r.json()
         return data["choices"][0]["message"]["content"]
 
@@ -101,7 +126,8 @@ class OpenRouterProvider(BaseLLMProvider):
     ) -> str:
         full: list[str] = []
         with requests.post(url, headers=self._headers(), json=payload, timeout=timeout, stream=True) as r:
-            r.raise_for_status()
+            # `payload` carries the model here: this helper takes no `model` arg.
+            raise_for_status(self.name, str(payload.get("model", "?")), url, r)
             for line in r.iter_lines(decode_unicode=True):
                 if not line or not line.startswith("data: "):
                     continue
@@ -167,16 +193,22 @@ class OpenRouterProvider(BaseLLMProvider):
         }
         req_timeout = timeout or self.default_timeout
         url = f"{self.base_url}/chat/completions"
+        last_err: Exception | None = None
         for attempt_model in (model, backup or model):
             try:
                 r = requests.post(
                     url, headers=self._headers(), json={**payload, "model": attempt_model},
                     timeout=req_timeout,
                 )
-                r.raise_for_status()
+                raise_for_status(self.name, attempt_model, url, r)
                 data = r.json()
                 return {"message": data["choices"][0]["message"], "model": attempt_model, "raw": data}
-            except Exception:
+            except Exception as exc:  # noqa: BLE001 -- re-raised below with context
+                # Keep the cause: the blanket `except Exception: raise
+                # LLMError("chat_with_tools failed")` threw away the provider's
+                # explanation (e.g. a 429 naming the upstream rate limit), so the
+                # operator got a bare "failed" with nothing to act on.
+                last_err = exc
                 if attempt_model == (backup or model):
-                    raise LLMError("chat_with_tools failed")
-        raise LLMError("chat_with_tools failed")
+                    raise LLMError(f"chat_with_tools failed — {last_err}") from last_err
+        raise LLMError(f"chat_with_tools failed — {last_err}")

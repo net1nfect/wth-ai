@@ -165,6 +165,63 @@ def test_runner_builtin_no_subprocess(tmp_home, offline):
     assert any(it["kind"] == "dns_record" for it in run.normalized_items)
 
 
+# --------------------------------------------------------------------------- #
+# Test seam for the external-tool path (SafeToolRunner._spawn)
+# --------------------------------------------------------------------------- #
+class _Reader:
+    """Minimal readable stream over a fixed payload."""
+
+    def __init__(self, data) -> None:
+        self._data = data.encode() if isinstance(data, str) else data
+        self._pos = 0
+
+    def read(self, n: int = -1) -> bytes:
+        if self._pos >= len(self._data):
+            return b""
+        end = len(self._data) if not n or n < 0 else self._pos + n
+        chunk = self._data[self._pos:end]
+        self._pos += len(chunk)
+        return chunk
+
+    def close(self) -> None:
+        pass
+
+
+class _Proc:
+    """Stand-in for subprocess.Popen as `SafeToolRunner._run_bounded` uses it."""
+
+    def __init__(self, stdout=b"", stderr=b"", returncode=0, hang=False) -> None:
+        self.stdout = _Reader(stdout)
+        self.stderr = _Reader(stderr)
+        self.returncode = returncode
+        self._hang = hang
+        self.killed = False
+
+    def wait(self, timeout=None):
+        if self._hang:
+            raise subprocess.TimeoutExpired(cmd="fake", timeout=timeout)
+        return self.returncode
+
+    def kill(self) -> None:
+        self.killed = True
+        self._hang = False
+
+
+def _fake_spawn(captured, *, stdout=b"", stderr=b"", returncode=0, hang=False):
+    """Return a `staticmethod` replacement for `SafeToolRunner._spawn`.
+
+    Wrapped in `staticmethod` deliberately: assigning a plain function to a
+    class attribute makes it a bound method, so it would receive `self` as its
+    first positional argument.
+    """
+
+    def _spawn(argv, **kwargs):
+        captured["argv"] = argv
+        captured["kwargs"] = kwargs
+        return _Proc(stdout, stderr, returncode, hang)
+
+    return staticmethod(_spawn)
+
 def test_runner_external_uses_argv_no_shell(tmp_home, monkeypatch):
     import wth_ai.recon.registry as regmod
     import wth_ai.recon.runner as runmod
@@ -172,26 +229,19 @@ def test_runner_external_uses_argv_no_shell(tmp_home, monkeypatch):
     monkeypatch.delenv("WTH_TEST_MODE", raising=False)
     monkeypatch.setattr(regmod.shutil, "which", lambda b: "/usr/bin/" + b)
     captured = {}
-
-    def fake_run(argv, **kwargs):
-        captured["argv"] = argv
-        captured["kwargs"] = kwargs
-
-        class R:
-            stdout = "sub.example.com\n"
-            stderr = ""
-            returncode = 0
-
-        return R()
-
-    monkeypatch.setattr(runmod.subprocess, "run", fake_run)
+    monkeypatch.setattr(
+        runmod.SafeToolRunner, "_spawn",
+        _fake_spawn(captured, stdout=b"sub.example.com\n"),
+    )
     reg = ReconToolRegistry()
     runner = SafeToolRunner(reg, raw_dir=tmp_home / "raw")
     ctx = BuiltinContext(target="example.com", host="example.com", base_url="https://example.com")
     run = runner.run(reg.get("subfinder"), target="example.com", ctx=ctx)
     assert run.status == "success"
     assert isinstance(captured["argv"], list)
-    assert captured["kwargs"].get("shell") is False
+    # `shell` is never passed at all any more (argv list only); if a future
+    # change adds it, it must not be True.
+    assert captured["kwargs"].get("shell", False) is False
 
 
 def test_runner_external_timeout(tmp_home, monkeypatch):
@@ -200,11 +250,7 @@ def test_runner_external_timeout(tmp_home, monkeypatch):
 
     monkeypatch.delenv("WTH_TEST_MODE", raising=False)
     monkeypatch.setattr(regmod.shutil, "which", lambda b: "/usr/bin/" + b)
-
-    def fake_run(argv, **kwargs):
-        raise subprocess.TimeoutExpired(cmd=argv, timeout=1)
-
-    monkeypatch.setattr(runmod.subprocess, "run", fake_run)
+    monkeypatch.setattr(runmod.SafeToolRunner, "_spawn", _fake_spawn({}, hang=True))
     reg = ReconToolRegistry()
     runner = SafeToolRunner(reg, raw_dir=tmp_home / "raw", timeout=1)
     ctx = BuiltinContext(target="example.com", host="example.com", base_url="https://example.com")
@@ -218,24 +264,45 @@ def test_runner_redacts_secrets_in_raw(tmp_home, monkeypatch):
 
     monkeypatch.delenv("WTH_TEST_MODE", raising=False)
     monkeypatch.setattr(regmod.shutil, "which", lambda b: "/usr/bin/" + b)
-
-    def fake_run(argv, **kwargs):
-        class R:
-            stdout = "found token=supersecretvalue123456 and AKIAIOSFODNN7EXAMPLE"
-            stderr = ""
-            returncode = 0
-
-        return R()
-
-    monkeypatch.setattr(runmod.subprocess, "run", fake_run)
+    payload = "found token=supersecretvalue123456 and AKIAIOSFODNN7EXAMPLE"
+    monkeypatch.setattr(runmod.SafeToolRunner, "_spawn", _fake_spawn({}, stdout=payload))
     reg = ReconToolRegistry()
     raw_dir = tmp_home / "raw"
     runner = SafeToolRunner(reg, raw_dir=raw_dir)
     ctx = BuiltinContext(target="example.com", host="example.com", base_url="https://example.com")
     runner.run(reg.get("subfinder"), target="example.com", ctx=ctx)
     content = (raw_dir / "subfinder.txt").read_text()
-    assert "supersecretvalue123456" not in content
-    assert "AKIAIOSFODNN7EXAMPLE" not in content
+    # Derive the expected secrets FROM the fixture instead of retyping them --
+    # the fixture values are long tokens and must stay byte-identical here.
+    secret_value = payload.split("token=", 1)[1].split(" ", 1)[0]
+    aws_like = payload.split(" and ", 1)[1].strip()
+    assert secret_value not in content, "nilai token tidak diredaksi di raw/"
+    assert aws_like not in content, "kunci bergaya AWS tidak diredaksi di raw/"
+    assert "REDACTED" in content
+
+
+def test_runner_output_is_capped_while_streaming(tmp_home, monkeypatch):
+    """The 200KB cap must bound what is RETAINED, not only what is written.
+
+    The previous implementation buffered the whole stdout via
+    `subprocess.run(capture_output=True)` and sliced afterwards, so a tool
+    printing far more pushed the worker's RSS up by all of it before the slice
+    discarded it.
+    """
+    import wth_ai.recon.registry as regmod
+    import wth_ai.recon.runner as runmod
+
+    monkeypatch.delenv("WTH_TEST_MODE", raising=False)
+    monkeypatch.setattr(regmod.shutil, "which", lambda b: "/usr/bin/" + b)
+    huge = b"a" * (runmod.MAX_OUTPUT_BYTES * 3)
+    monkeypatch.setattr(runmod.SafeToolRunner, "_spawn", _fake_spawn({}, stdout=huge))
+    reg = ReconToolRegistry()
+    raw_dir = tmp_home / "raw"
+    runner = SafeToolRunner(reg, raw_dir=raw_dir)
+    ctx = BuiltinContext(target="example.com", host="example.com", base_url="https://example.com")
+    run = runner.run(reg.get("subfinder"), target="example.com", ctx=ctx)
+    assert run.output_path
+    assert Path(run.output_path).stat().st_size <= runmod.MAX_OUTPUT_BYTES
 
 
 def test_redact_function():

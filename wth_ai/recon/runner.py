@@ -29,19 +29,13 @@ from wth_ai.recon.tools.catalog import BUILTIN_TOOLS
 MAX_OUTPUT_BYTES = 200_000
 DEFAULT_TIMEOUT = 60
 
-_REDACT_PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
-    (re.compile(r"(?i)(api[_-]?key|token|password|secret|authorization)\s*[:=]\s*\S+"), r"\1=***REDACTED***"),
-    (re.compile(r"Bearer\s+[A-Za-z0-9\-._~+/]+=*"), "Bearer ***REDACTED***"),
-    (re.compile(r"AKIA[0-9A-Z]{16}"), "AKIA***REDACTED***"),
-    (re.compile(r"eyJ[A-Za-z0-9_\-]{8,}\.[A-Za-z0-9_\-]{8,}\.[A-Za-z0-9_\-]{4,}"), "***JWT-REDACTED***"),
-)
-
-
 def redact(text: str) -> str:
-    out = text or ""
-    for pat, repl in _REDACT_PATTERNS:
-        out = pat.sub(repl, out)
-    return out
+    """WU-203: delegate to the canonical `wth_ai.redaction.redact_secrets`
+    (this module's pattern set was the most complete and became the seed for
+    it). Kept as a named re-export so existing callers/tests are unchanged."""
+    from wth_ai.redaction import redact_secrets
+
+    return redact_secrets(text)
 
 
 def _sanitized_env() -> dict[str, str]:
@@ -58,6 +52,35 @@ def _sanitized_env() -> dict[str, str]:
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def write_runlog_entry(runlog_path: Path | None, run: ToolRun) -> None:
+    """Append one `tool_runs.jsonl` entry. THE single writer for this file.
+
+    The engine's builtin-fingerprint step used to append its own reduced object
+    (`{tool, status, items}`), so exactly one line of tool_runs.jsonl had a
+    different shape from every other line and any consumer expecting the full
+    record broke on it. Routing every producer through here makes that
+    divergence impossible.
+    """
+    if runlog_path is None:
+        return
+    try:
+        runlog_path.parent.mkdir(parents=True, exist_ok=True)
+        entry = {
+            "tool": run.tool,
+            "status": run.status,
+            "started_at": run.started_at,
+            "finished_at": run.finished_at,
+            "duration_ms": run.duration_ms,
+            "output_path": run.output_path,
+            "error": run.error,
+            "items": len(run.normalized_items),
+        }
+        with runlog_path.open("a", encoding="utf-8") as fh:
+            fh.write(json.dumps(entry) + "\n")
+    except OSError:
+        pass
 
 
 class SafeToolRunner:
@@ -110,6 +133,89 @@ class SafeToolRunner:
         run.status = "success"
         run.output_path = self._write_raw(spec.name, json.dumps(items, indent=2))
 
+    # Test seam: the call that actually spawns the child process. Defaults to
+    # the real `subprocess.Popen`; tests replace it to exercise the external
+    # path without running a binary.
+    def _spawn(self, argv: list[str], **kwargs: Any) -> Any:
+        return subprocess.Popen(argv, **kwargs)
+
+    def _run_bounded(self, argv: list[str]) -> tuple[str, str, int]:
+        """Run `argv`, keeping at most MAX_OUTPUT_BYTES of each stream in memory.
+
+        `subprocess.run(capture_output=True)` buffers the ENTIRE stdout/stderr
+        before the 200KB cap is applied, so a tool printing 150MB pushed the
+        worker's RSS up by that much (measured: +429MB) before the slice threw
+        the rest away -- an OOM for a large wordlist run. Here the retained
+        buffer is bounded while the pipe is still fully drained (a child blocked
+        on a full pipe would otherwise hang until the timeout).
+
+        Also guarantees `cwd` exists: `raw_dir` may not have been created yet
+        when this runs outside the engine (the engine happens to create it via a
+        builtin first), and `Popen(cwd=<missing>)` raises FileNotFoundError,
+        which surfaced as a spurious tool failure.
+        """
+        import threading
+
+        cwd: str | None = None
+        if self.raw_dir is not None:
+            try:
+                self.raw_dir.mkdir(parents=True, exist_ok=True)
+                cwd = str(self.raw_dir)
+            except OSError:
+                cwd = None
+
+        proc = self._spawn(
+            argv,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            stdin=subprocess.DEVNULL,
+            env=_sanitized_env(),
+            cwd=cwd,
+        )
+
+        def _drain(stream: Any) -> bytes:
+            kept = bytearray()
+            try:
+                while True:
+                    chunk = stream.read(65536)
+                    if not chunk:
+                        break
+                    if len(kept) < MAX_OUTPUT_BYTES:
+                        kept.extend(chunk[: MAX_OUTPUT_BYTES - len(kept)])
+            except (OSError, ValueError):
+                pass
+            finally:
+                try:
+                    stream.close()
+                except OSError:
+                    pass
+            return bytes(kept)
+
+        out_box: list[bytes] = []
+        err_box: list[bytes] = []
+        readers = [
+            threading.Thread(target=lambda: out_box.append(_drain(proc.stdout)), daemon=True),
+            threading.Thread(target=lambda: err_box.append(_drain(proc.stderr)), daemon=True),
+        ]
+        for t in readers:
+            t.start()
+        try:
+            code = proc.wait(timeout=self.timeout)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            try:
+                proc.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                pass
+            for t in readers:
+                t.join(timeout=5)
+            raise
+        for t in readers:
+            t.join(timeout=5)
+        out = out_box[0].decode("utf-8", errors="replace") if out_box else ""
+        err = err_box[0].decode("utf-8", errors="replace") if err_box else ""
+        return out, err, code
+
     # --- external path ---
     def _run_external(self, spec: ToolSpec, target: str, run: ToolRun) -> None:
         if os.environ.get("WTH_TEST_MODE"):
@@ -127,15 +233,7 @@ class SafeToolRunner:
             return
         argv = adapter.build_args(target)
         try:
-            proc = subprocess.run(  # noqa: S603 — argv list, shell=False, sanitized env
-                argv,
-                shell=False,
-                capture_output=True,
-                text=True,
-                timeout=self.timeout,
-                env=_sanitized_env(),
-                cwd=str(self.raw_dir) if self.raw_dir else None,
-            )
+            stdout_raw, stderr_raw, code = self._run_bounded(argv)
         except subprocess.TimeoutExpired:
             run.status = "timeout"
             run.error = f"timeout after {self.timeout}s"
@@ -145,12 +243,18 @@ class SafeToolRunner:
             run.error = redact(str(exc))
             return
 
-        stdout = redact((proc.stdout or "")[:MAX_OUTPUT_BYTES])
-        run.output_path = self._write_raw(spec.name, stdout)
-        run.normalized_items = adapter.parse(stdout)
-        run.status = "success" if proc.returncode == 0 else "failed"
-        if proc.returncode != 0:
-            run.error = redact((proc.stderr or "")[:2000]) or f"exit {proc.returncode}"
+        # Parse the RAW stdout; redact only what lands on disk. Redacting first
+        # fed mangled text to the parser -- the generic `key=value` pattern
+        # consumes the rest of a whitespace-delimited token, including a closing
+        # quote or comma -- which corrupted JSON artifacts and could collapse
+        # two distinct URLs into one (a false dedupe). `_write_raw()` redacts,
+        # so nothing unmasked is persisted on this path.
+        raw = stdout_raw[:MAX_OUTPUT_BYTES]
+        run.output_path = self._write_raw(spec.name, raw)
+        run.normalized_items = adapter.parse(raw)
+        run.status = "success" if code == 0 else "failed"
+        if code != 0:
+            run.error = redact(stderr_raw[:2000]) or f"exit {code}"
 
     def _run_api(self, spec: ToolSpec, target: str, run: ToolRun) -> None:
         from wth_ai.recon.tools.api_adapters import run_api_adapter
@@ -180,21 +284,4 @@ class SafeToolRunner:
             return None
 
     def _write_runlog(self, run: ToolRun) -> None:
-        if self.runlog_path is None:
-            return
-        try:
-            self.runlog_path.parent.mkdir(parents=True, exist_ok=True)
-            entry = {
-                "tool": run.tool,
-                "status": run.status,
-                "started_at": run.started_at,
-                "finished_at": run.finished_at,
-                "duration_ms": run.duration_ms,
-                "output_path": run.output_path,
-                "error": run.error,
-                "items": len(run.normalized_items),
-            }
-            with self.runlog_path.open("a", encoding="utf-8") as fh:
-                fh.write(json.dumps(entry) + "\n")
-        except OSError:
-            pass
+        write_runlog_entry(self.runlog_path, run)

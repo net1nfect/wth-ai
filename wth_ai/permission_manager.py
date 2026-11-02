@@ -19,11 +19,19 @@ READ_ONLY_TOOLS = {
     "cat", "grep", "rg", "find", "git", "semgrep", "composer", "npm", "pip-audit",
     "cargo", "trivy", "curl", "httpx", "whatweb", "head", "tail", "less", "wc",
     "ls", "file", "strings", "read", "python", "jq",
+    # Passive name/registry lookups. These send no traffic to the target itself
+    # (resolver + registry queries only), so they belong to the read-only tier
+    # -- they were previously granted in NO mode except UNRESTRICTED's wildcard,
+    # which forced operators out of read-only recon just to resolve a hostname.
+    "dig", "host", "nslookup", "getent", "whois", "openssl",
 }
 
 STANDARD_TOOLS = READ_ONLY_TOOLS | {
     "ffuf", "gobuster", "nuclei", "nmap", "arjun", "katana", "subfinder",
     "dnsx", "waybackurls", "gau", "paramspider",
+    # Active-but-light scanners, same tier as nmap/nuclei above. Previously
+    # absent from every set, so they were unreachable outside UNRESTRICTED.
+    "nikto", "naabu", "wpscan", "whatweb-aggressive",
 }
 
 ELEVATED_TOOLS = STANDARD_TOOLS | {
@@ -41,7 +49,7 @@ DENYLIST_PATTERNS = [
     "mkfs.",
     "dd if=/dev/zero",
     "> /dev/sda",
-    "chmod -R 777 /",
+    "chmod -r 777 /",  # lowercase -- dibandingkan terhadap cmd_lower yang selalu lowercase (P0 exit-review finding)
 ]
 
 HIGH_RISK_PATTERNS = [
@@ -71,6 +79,15 @@ PERMISSION_ALIASES = {
     "active_test": PermissionMode.ELEVATED_APPROVAL.value,
     "elevated": PermissionMode.ELEVATED_APPROVAL.value,
     "unrestricted": PermissionMode.UNRESTRICTED.value,
+    # Legacy spellings. These were the values advertised by the LLM-facing
+    # `permission_set` tool schema ("read_only_recon" / "standard_testing" /
+    # "elevated_testing"), none of which are real PermissionMode values -- so
+    # `PermissionMode(mode)` raised ValueError for every mode except full_lab.
+    # Kept as accepted aliases so a stored session or a model echoing the old
+    # spelling still resolves instead of erroring.
+    "read_only_recon": PermissionMode.READ_ONLY_RECON.value,
+    "standard_testing": PermissionMode.STANDARD_TESTING.value,
+    "elevated_testing": PermissionMode.ELEVATED_APPROVAL.value,
 }
 
 MODE_DESCRIPTIONS = {
@@ -116,56 +133,42 @@ class PermissionManager:
             required = PermissionMode(required) if required in {p.value for p in PermissionMode} else PermissionMode.READ_ONLY_RECON
         return PERMISSION_LEVEL[self.mode] >= PERMISSION_LEVEL[required]
 
-    def check_command(self, command: str, *, required_mode: PermissionMode | None = None) -> dict[str, Any]:
-        """Validate a shell command against permission rules."""
-        cmd_lower = command.lower().strip()
-        result = {
+    def check_command(
+        self, command: str, *, required_mode: PermissionMode | None = None, approved: bool = False,
+    ) -> dict[str, Any]:
+        """Validate a shell command against permission rules.
+
+        Thin adapter over `wth_ai.policy.engine.evaluate_intent()` (WU-005,
+        ADR-009/ADR-010) — return-shape kept identical to the pre-WU-005
+        implementation so existing callers/tests need no change. Lazy import
+        to avoid a circular dependency (`policy.profiles_builtin` imports the
+        tool sets defined in this module).
+
+        `approved`: P0 exit-review fix (HIGH) — threads through to
+        `evaluate_intent()` so a caller-supplied approval can actually
+        unblock a REQUIRE_HUMAN/high-risk-pattern decision. Previously this
+        method had no `approved` parameter at all, making callers' own
+        `approval_needed and not approved` checks dead code.
+        """
+        from wth_ai.policy.engine import evaluate_intent
+        from wth_ai.policy.profiles_builtin import PROFILES
+
+        profile = PROFILES[self.mode]
+        decision = evaluate_intent(command=command, profile=profile, approved=approved)
+        result: dict[str, Any] = {
             "command": command,
             "current_mode": self.mode.value,
-            "allowed": True,
-            "reason": "",
-            "risk": "low",
-            "approval_needed": False,
+            "allowed": decision.allowed,
+            "reason": decision.reason,
+            "risk": decision.risk,
+            "approval_needed": decision.approval_needed,
         }
-
-        if self.mode == PermissionMode.UNRESTRICTED:
-            result["reason"] = "unrestricted mode"
+        if not decision.allowed:
             return result
-
-        for pattern in DENYLIST_PATTERNS:
-            if pattern in cmd_lower:
-                result["allowed"] = False
-                result["reason"] = f"Denied by global denylist: {pattern}"
-                result["risk"] = "critical"
-                return result
-
-        for pattern in HIGH_RISK_PATTERNS:
-            if pattern in cmd_lower:
-                result["risk"] = "high"
-                result["approval_needed"] = True
-                if self.mode != PermissionMode.FULL_LAB:
-                    result["allowed"] = False
-                    result["reason"] = f"High-risk command requires FULL_LAB + explicit approval: matched '{pattern}'"
-                    return result
 
         if required_mode and not self.mode_sufficient(required_mode):
             result["allowed"] = False
             result["reason"] = f"Insufficient permission: need {required_mode.value}, have {self.mode.value}"
-            return result
-
-        tool = cmd_lower.split()[0].split("/")[-1] if cmd_lower else ""
-        allowed_tools = MODE_TOOLS.get(self.mode, READ_ONLY_TOOLS)
-        if tool and tool not in allowed_tools and not any(t in cmd_lower for t in allowed_tools):
-            if tool in {"bash", "sh", "zsh"}:
-                pass
-            elif tool not in READ_ONLY_TOOLS:
-                result["allowed"] = False
-                result["reason"] = f"Tool '{tool}' not in allowlist for mode {self.mode.value}"
-                return result
-
-        if result["approval_needed"] and self.mode == PermissionMode.FULL_LAB:
-            result["allowed"] = False
-            result["reason"] = "High-risk command needs explicit user approval (/approve)"
 
         return result
 

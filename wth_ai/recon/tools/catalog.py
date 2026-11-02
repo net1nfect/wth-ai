@@ -170,7 +170,7 @@ _RAW: dict[str, list[str]] = {
         "robots-parser", "sitemap-parser", "common-safe-paths",
     ],
     "js": [
-        "LinkFinder", "xnLinkFinder", "getJS", "subjs", "jsluice", "jsfinder",
+        "linkfinder", "xnLinkFinder", "getJS", "subjs", "jsluice", "jsfinder",
         "jsbeautifier", "sourcemapper", "sourcemap", "webpack-analyzer",
         "js-endpoint-extractor", "js-secret-patterns", "SecretFinder", "trufflehog",
         "gitleaks", "detect-secrets", "git-secrets", "semgrep-secrets", "shhgit",

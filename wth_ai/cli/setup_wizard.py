@@ -88,30 +88,72 @@ def _collect_api_key(provider_type: str, existing: WTHConfig) -> WTHConfig:
             existing.secrets.groq_api_key = key
             _store_secret("groq_api_key", key)
     elif provider_type == "custom":
-        key = Prompt.ask("Custom API key", password=True, default=existing.secrets.custom_api_key or "")
+        # URL first: for a self-hosted OpenAI-compatible endpoint this is the
+        # part that identifies where to talk to, and many such endpoints need
+        # no API key at all.
+        url = Prompt.ask(
+            "Custom base URL (OpenAI-compatible, mis. http://host:20128/v1)",
+            default=existing.secrets.custom_base_url or "",
+        ).strip()
+        if url:
+            existing.secrets.custom_base_url = url
+        key = Prompt.ask(
+            "Custom API key (kosongkan kalau endpoint tidak butuh key)",
+            password=True,
+            default=existing.secrets.custom_api_key or "",
+        )
         if key:
             existing.secrets.custom_api_key = key
             _store_secret("custom_api_key", key)
-        url = Prompt.ask("Custom base URL", default=existing.secrets.custom_base_url or "")
-        existing.secrets.custom_base_url = url
     return existing
 
 
+def _print_models(models: list[str], *, limit: int = 15) -> None:
+    for i, m in enumerate(models[:limit], 1):
+        console.print(f"  {i}. {m}")
+
+
 def _pick_model(router: LLMProviderRouter, provider_type: str, role: str, default: str) -> str:
+    """Pick a model from what the provider actually reports.
+
+    A local gateway can expose hundreds of models (the 9router endpoint used
+    here reports 268), so the old "print the first 15, accept an index" prompt
+    left most of them unreachable. Any non-numeric input is now a SEARCH over
+    the full listing, and the loop is bounded so a scripted run can't spin.
+    """
     from wth_ai.llm.model_pick import resolve_model_choice
 
     models = router.list_models(provider_type)
-    if models:
-        console.print(f"\nModel tersedia untuk {role} ({len(models)} total, menampilkan 15 pertama):")
-        for i, m in enumerate(models[:15], 1):
-            console.print(f"  {i}. {m}")
-        console.print("  [dim]Ketik nomor (1-15) atau paste model id lengkap[/]")
-        custom = Prompt.ask(f"Model {role}", default=default)
-        resolved = resolve_model_choice(custom, models[:15] if custom.isdigit() else models)
-        if resolved != custom:
-            console.print(f"  → menggunakan [cyan]{resolved}[/]")
-        return resolved
-    return Prompt.ask(f"Model {role} (ketik manual)", default=default)
+    if not models:
+        console.print(f"  [yellow]Provider {provider_type} tidak mengembalikan daftar model.[/]")
+        return Prompt.ask(f"Model {role} (ketik manual)", default=default)
+
+    console.print(f"\nModel tersedia untuk {role}: [cyan]{len(models)}[/] total")
+    console.print("  [dim]Ketik nomor, id lengkap, atau sebagian id untuk mencari[/]")
+    showing = models[:15]
+    _print_models(showing)
+
+    for _ in range(6):
+        answer = (Prompt.ask(f"Model {role}", default=default) or "").strip()
+        if not answer:
+            return default
+        if answer.isdigit() and 1 <= int(answer) <= len(models):
+            return showing[int(answer) - 1] if int(answer) <= len(showing) else models[int(answer) - 1]
+        if answer in models:
+            return answer
+        resolved = resolve_model_choice(answer, models)
+        if resolved in models:
+            return resolved
+        matches = [m for m in models if answer.lower() in m.lower()]
+        if matches:
+            console.print(f"  {len(matches)} model cocok dengan [cyan]{answer}[/]:")
+            showing = matches[:15]
+            _print_models(showing)
+            continue
+        if Confirm.ask(f"{answer!r} tidak ada di daftar model. Pakai tetap?", default=False):
+            return answer
+        console.print("  [dim]Coba lagi: nomor, id lengkap, atau kata kunci.[/]")
+    return default
 
 
 def run_setup_wizard(*, reset: bool = False, non_interactive: dict[str, Any] | None = None) -> WTHConfig:
@@ -219,9 +261,21 @@ def _apply_non_interactive(config: WTHConfig, data: dict[str, Any]) -> WTHConfig
     config.agent.mode = data.get("agent_mode", getattr(config.agent, "mode", "hybrid"))
     config.ui.activity_mode = data.get("activity_mode", getattr(config.ui, "activity_mode", "live"))
     config.ui.verbose = config.ui.activity_mode != "quiet"
-    if data.get("openrouter_api_key"):
-        config.secrets.openrouter_api_key = data["openrouter_api_key"]
-        _store_secret("openrouter_api_key", data["openrouter_api_key"])
+    # Credentials for whatever provider was named, so a scripted/CI setup can
+    # configure a custom or proxied endpoint too. The previous version only
+    # understood openrouter_api_key, so provider_type="custom" produced a
+    # config with no base URL and no key -- the endpoint could never be reached.
+    for name in ("openrouter", "openai", "anthropic", "google", "groq", "custom", "router9"):
+        key = data.get(f"{name}_api_key")
+        if key:
+            setattr(config.secrets, f"{name}_api_key", key)
+            _store_secret(f"{name}_api_key", key)
+    for name in ("openai", "anthropic", "google", "custom"):
+        url = data.get(f"{name}_base_url")
+        if url:
+            setattr(config.secrets, f"{name}_base_url", url)
+    if data.get("ollama_base_url"):
+        config.secrets.ollama_base_url = data["ollama_base_url"]
     config.setup_complete = True
     config.require_llm = data.get("require_llm", False)
     config.save_user_config()

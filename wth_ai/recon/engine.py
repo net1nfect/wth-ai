@@ -32,7 +32,7 @@ from wth_ai.recon.model import ToolRun, ToolSpec
 from wth_ai.recon.normalizer import ReconNormalizer
 from wth_ai.recon.planner import ReconPlanner, detect_target_type
 from wth_ai.recon.registry import ReconToolRegistry
-from wth_ai.recon.runner import SafeToolRunner
+from wth_ai.recon.runner import SafeToolRunner, write_runlog_entry
 from wth_ai.recon.tools.builtin import BuiltinContext, run_builtin
 from wth_ai.recon.tools.catalog import BUILTIN_TOOLS
 from wth_ai.workspace import wth_home
@@ -79,6 +79,7 @@ class ReconEngine:
         log: Callable[[str], None] | None = None,
         bus: Any = None,
         baseline: dict[str, Any] | None = None,
+        should_stop: Callable[[], bool] | None = None,
     ) -> dict[str, Any]:
         progress = progress or NoOp
         log = log or NoOp
@@ -95,8 +96,8 @@ class ReconEngine:
         progress(5, 100, "scope/policy")
         ttype = detect_target_type(target)
         if not authorized:
-            from wth_ai.engagement.mode import is_unrestricted
-            if not (is_unrestricted() and os.environ.get("WTH_UNRESTRICTED") == "1"):
+            from wth_ai.engagement.mode import scope_authorization_required
+            if scope_authorization_required():
                 log("recon blocked: target not authorized")
                 result = {
                     "type": "recon", "target": target, "status": "blocked",
@@ -144,7 +145,23 @@ class ReconEngine:
             if BUILTIN_TOOLS.get(s.name) in _BUILTIN_ORDER else 99,
         )
         stage_marks = {"http": 35, "dns": 20, "tls": 50, "crawler": 65, "params": 75, "cloud": 85}
+        # Cooperative cancellation. Without this the engine ran every planned
+        # tool to completion regardless of `wth job stop`: the handler checked
+        # ctx.should_stop() once at entry and never again, so a stop only
+        # changed the DB row while the scan kept hitting the target (and kept
+        # writing artifacts) until it finished on its own. Checked between
+        # tools -- never mid-tool -- and partial results are kept rather than
+        # discarded.
+        stopped_early = False
+
+        def _halt() -> bool:
+            return bool(should_stop is not None and should_stop())
+
         for spec in ordered_builtins:
+            if _halt():
+                stopped_early = True
+                log("recon: stop requested -- halting builtin tools (partial results kept)")
+                break
             key = BUILTIN_TOOLS.get(spec.name, "")
             run = runner.run(spec, target=target, ctx=ctx)
             _record(run)
@@ -153,8 +170,9 @@ class ReconEngine:
             log(f"builtin {spec.name}: {run.status} ({len(run.normalized_items)} items)")
 
         # builtin fingerprint (no catalog name; always runs, cheap)
-        fp_run = self._run_fingerprint(ctx, raw_dir, runlog_path)
-        _record(fp_run)
+        if not stopped_early:
+            fp_run = self._run_fingerprint(ctx, raw_dir, runlog_path)
+            _record(fp_run)
 
         # 4) external/api tools (availability-gated; builtins already covered
         #    the 20..85 milestones, so externals run within the 88..90 band) ---
@@ -170,6 +188,10 @@ class ReconEngine:
         external_specs = filter_specs_by_adaptive(external_specs, post_match)
         external_specs = sort_specs_by_adaptive(external_specs, post_match)
         for spec in external_specs:
+            if _halt():
+                stopped_early = True
+                log("recon: stop requested -- halting external tools (partial results kept)")
+                break
             run = runner.run(spec, target=target, ctx=ctx)
             _record(run)
             if run.status not in ("skipped",):
@@ -207,7 +229,7 @@ class ReconEngine:
         return {
             "type": "recon",
             "target": target,
-            "status": "completed",
+            "status": "stopped" if stopped_early else "completed",
             "profile": profile,
             "job_id": job_id,
             "output_dir": str(out_dir),
@@ -236,11 +258,7 @@ class ReconEngine:
             run.error = str(exc)
         run.finished_at = _now()
         run.duration_ms = int((time.time() - start) * 1000)
-        try:
-            with runlog.open("a", encoding="utf-8") as fh:
-                fh.write(json.dumps({"tool": run.tool, "status": run.status, "items": len(run.normalized_items)}) + "\n")
-        except OSError:
-            pass
+        write_runlog_entry(runlog, run)
         return run
 
     def _write_asset_graph(self, normalized_dir: Path, normalizer: ReconNormalizer) -> None:

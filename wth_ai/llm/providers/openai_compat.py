@@ -8,7 +8,7 @@ from typing import Any, Callable
 import requests
 
 from wth_ai.llm.errors import LLMError
-from wth_ai.llm.providers.base import BaseLLMProvider
+from wth_ai.llm.providers.base import BaseLLMProvider, http_error_message, raise_for_status
 
 DEFAULT_BASE_URLS = {
     "openai": "https://api.openai.com/v1",
@@ -18,46 +18,17 @@ DEFAULT_BASE_URLS = {
     "9router": "http://127.0.0.1:20128/v1",
 }
 
+# Providers that may legitimately run without an API key: a self-hosted
+# OpenAI-compatible endpoint (custom base URL) or the local 9router gateway.
+# The hosted providers (openai/anthropic/google/groq) always require one.
+_KEYLESS_PROVIDERS = frozenset({"custom", "9router"})
+
 
 def _normalize_base_url(provider_name: str, base_url: str | None) -> str:
     raw = (base_url or DEFAULT_BASE_URLS.get(provider_name, DEFAULT_BASE_URLS["openai"])).rstrip("/")
     if provider_name == "9router" and not raw.endswith("/v1"):
         raw = f"{raw}/v1"
     return raw
-
-
-def _http_error_message(provider_name: str, model: str, url: str, status: int, body: str) -> str:
-    snippet = (body or "").strip()[:240]
-    if status == 401:
-        return (
-            f"{provider_name}: API key ditolak (HTTP 401). "
-            f"Cek vault/env (`ROUTER9_API_KEY` atau `wth doctor`)."
-        )
-    if status == 404:
-        if provider_name == "9router" and "qwen/" in model:
-            return (
-                f"9router: model {model!r} tidak ada di gateway (HTTP 404). "
-                f"Set reporter/planner ke model 9router, mis. `ag/gemini-pro-agent` via `/model set all ag/gemini-pro-agent`."
-            )
-        return (
-            f"{provider_name}: model atau endpoint tidak ditemukan (HTTP 404) — model={model!r}, url={url}. "
-            f"Jalankan `wth model list`."
-        )
-    if status == 429:
-        return f"{provider_name}: rate limit (HTTP 429). Tunggu sebentar atau ganti model."
-    if snippet:
-        return f"{provider_name}: HTTP {status} — {snippet}"
-    return f"{provider_name}: HTTP {status} for {url}"
-
-
-def _raise_for_status(provider_name: str, model: str, url: str, response: requests.Response) -> None:
-    if response.ok:
-        return
-    try:
-        body = response.text
-    except Exception:
-        body = ""
-    raise LLMError(_http_error_message(provider_name, model, url, response.status_code, body))
 
 
 def _parse_response_json(text: str) -> dict[str, Any]:
@@ -143,10 +114,21 @@ class OpenAICompatProvider(BaseLLMProvider):
         return self.provider_name
 
     def available(self) -> bool:
-        return bool(self.api_key)
+        if self.api_key:
+            return True
+        # Self-hosted OpenAI-compatible endpoints (a local gateway, a custom
+        # base URL) commonly run WITHOUT auth. Demanding a key made such an
+        # endpoint report as unavailable, so the setup smoke test and every
+        # chat refused to touch it even though it was reachable.
+        return self.provider_name in _KEYLESS_PROVIDERS and bool(self.base_url)
 
     def _headers(self) -> dict[str, str]:
-        h = {"Authorization": f"Bearer {self.api_key}", "Content-Type": "application/json"}
+        # No key -> no Authorization header. Sending a literal
+        # "Authorization: Bearer None" to a keyless local endpoint is at best
+        # noise and at worst a 401.
+        h: dict[str, str] = {"Content-Type": "application/json"}
+        if self.api_key:
+            h["Authorization"] = f"Bearer {self.api_key}"
         if self.provider_name == "anthropic":
             h["anthropic-version"] = "2023-06-01"
         return h
@@ -194,7 +176,7 @@ class OpenAICompatProvider(BaseLLMProvider):
             payload["response_format"] = response_format
         url = f"{self.base_url}/chat/completions"
         r = requests.post(url, headers=self._headers(), json=payload, timeout=timeout or self.default_timeout)
-        _raise_for_status(self.provider_name, model, url, r)
+        raise_for_status(self.provider_name, model, url, r)
         data = _parse_response_json(r.text)
         return data["choices"][0]["message"]["content"]
 
@@ -221,6 +203,6 @@ class OpenAICompatProvider(BaseLLMProvider):
         }
         url = f"{self.base_url}/chat/completions"
         r = requests.post(url, headers=self._headers(), json=payload, timeout=timeout or self.default_timeout)
-        _raise_for_status(self.provider_name, model, url, r)
+        raise_for_status(self.provider_name, model, url, r)
         data = _parse_response_json(r.text)
         return {"message": data["choices"][0]["message"], "model": model, "raw": data}

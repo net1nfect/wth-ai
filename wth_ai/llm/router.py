@@ -7,6 +7,7 @@ from typing import Any, Callable
 
 from wth_ai.config import ProviderRoleConfig, WTHConfig
 from wth_ai.llm.errors import LLMError, LLMUnavailableError
+from wth_ai.llm.model_io import ModelRequest, ModelResponse
 from wth_ai.llm.providers.base import BaseLLMProvider
 from wth_ai.llm.providers.ollama import OllamaProvider
 from wth_ai.llm.providers.openai_compat import OpenAICompatProvider
@@ -20,6 +21,10 @@ class LLMProviderRouter:
         self.config = config
         self._providers: dict[str, BaseLLMProvider] = {}
         self._role_providers: dict[str, BaseLLMProvider] = {}
+        # Per-provider outcome of the most recent failover sweep; surfaced so a
+        # caller (or an operator reading the error) can see WHY each provider
+        # was skipped or failed instead of only the last one's error.
+        self.last_failures: list[str] = []
 
     def _get_or_create_provider(self, ptype: str) -> BaseLLMProvider:
         if ptype in self._providers:
@@ -176,10 +181,12 @@ class LLMProviderRouter:
                 if p not in providers_to_try:
                     providers_to_try.append(p)
         last_err: Exception | None = None
+        attempts: list[str] = []
         for ptype in providers_to_try:
             try:
                 provider = self._get_or_create_provider(ptype)
                 if not provider.available():
+                    attempts.append(f"{ptype}: tidak tersedia")
                     continue
                 primary = rc.model if ptype == rc.type else self._role_config(role).model
                 backup = rc.backup_model or primary
@@ -189,9 +196,19 @@ class LLMProviderRouter:
                 )
             except Exception as exc:  # noqa: BLE001
                 last_err = exc
+                attempts.append(f"{ptype}: {type(exc).__name__}: {str(exc)[:160]}")
                 continue
         if last_err:
-            raise last_err
+            # Report EVERY attempt, not only the last one. The tail of
+            # failover_order is usually the least informative (a local ollama
+            # returning 404 on /api/chat), and raising it alone hid the real
+            # cause -- an OpenRouter 400 "model not valid" -- behind a confusing
+            # connection error. Verified live: the operator saw only the ollama
+            # 404 while the actionable failure was the invalid model id.
+            self.last_failures = attempts
+            raise LLMError(
+                f"semua provider gagal untuk role '{role}' — " + " | ".join(attempts)
+            ) from last_err
         provider = self.provider_for_role(role)
         primary, backup = self.model_for_role(role)
         return provider.chat_with_fallback(
@@ -251,6 +268,59 @@ class LLMProviderRouter:
         provider = self.provider_for_role(role)
         primary, backup = self.model_for_role(role)
         return provider.chat_with_tools(primary, messages, tools=tools, backup=backup, timeout=timeout)
+
+    def generate(self, request: ModelRequest) -> ModelResponse:
+        """Canonical entry point (WU-109, PRD-013, strangler-fig).
+
+        Facade over `chat_for_role()`/`chat_with_tools_for_role()` --
+        reuses their WTH_TEST_MODE stub behavior, failover ordering, and
+        provider resolution UNCHANGED, rather than reimplementing that logic
+        here. `chat_for_role`/`chat_with_tools_for_role`/`complete`
+        themselves do NOT become adapters over `generate()` in this WU (that
+        would invert the dependency and touch code paths exercised by
+        virtually every test in the suite -- deferred, see
+        docs/planning/WORK-UNITS.md WU-109 scope decision). Never raises --
+        errors are normalized into `ModelResponse.error` via
+        `provider.normalize_error()`.
+        """
+        provider = self.provider_for_role(request.role)
+        primary, _backup = self.model_for_role(request.role)
+        try:
+            if request.tools:
+                data = self.chat_with_tools_for_role(
+                    request.role, request.messages, tools=request.tools, timeout=request.timeout,
+                )
+                msg = data.get("message", {})
+                return ModelResponse(
+                    status="success",
+                    provider=provider.name,
+                    model=data.get("model", primary),
+                    role=request.role,
+                    content=msg.get("content") or "",
+                    tool_calls=msg.get("tool_calls") or [],
+                    raw=data,
+                )
+            content, used_model = self.chat_for_role(
+                request.role, request.messages,
+                timeout=request.timeout, stream=request.stream,
+                on_token=request.on_token, response_format=request.response_format,
+            )
+            return ModelResponse(
+                status="success",
+                provider=provider.name,
+                model=used_model,
+                role=request.role,
+                content=content,
+                used_backup=used_model != primary,
+            )
+        except Exception as exc:  # noqa: BLE001 -- normalized into response
+            return ModelResponse(
+                status="error",
+                provider=provider.name,
+                model=primary,
+                role=request.role,
+                error=provider.normalize_error(exc),
+            )
 
     def list_models(self, provider_type: str) -> list[str]:
         return self._get_or_create_provider(provider_type).list_models()

@@ -16,6 +16,23 @@ from wth_ai.jobs.model import Job
 from wth_ai.workspace import wth_home
 
 
+# Wall-clock budget per job type, in seconds. Overridable via the `timeouts`
+# constructor argument; unknown types fall back to `timeout`.
+#
+# The single flat default of 120s could not accommodate the work these handlers
+# actually do: a `recon` job with the default profile plans up to 40 tools and
+# `ReconEngine.tool_timeout` allows 60s *per tool*, so a legitimate scan could
+# run for many minutes. It was marked `failed (timeout)` while its handler
+# thread kept running and writing artifacts into wth-results/<job_id>/ for a
+# job already recorded as failed.
+DEFAULT_JOB_TIMEOUTS: dict[str, int] = {
+    "recon": 3600,
+    "executor": 1800,
+    "report": 900,
+}
+DEFAULT_TIMEOUT = 120
+
+
 class JobContext:
     """Handler-facing context: progress, logging, cooperative stop."""
 
@@ -48,7 +65,8 @@ class WorkerEngine:
         manager: JobManager,
         *,
         handlers: dict[str, Handler] | None = None,
-        timeout: int = 120,
+        timeout: int = DEFAULT_TIMEOUT,
+        timeouts: dict[str, int] | None = None,
     ) -> None:
         self.manager = manager
         self.store = manager.store
@@ -57,6 +75,11 @@ class WorkerEngine:
         self.approvals = manager.approvals
         self.handlers = handlers or default_handlers()
         self.timeout = timeout
+        # Per-job-type budget; `timeout` remains the fallback for unknown types
+        # and the value tests override to exercise the timeout path quickly.
+        self.timeouts = dict(DEFAULT_JOB_TIMEOUTS)
+        if timeouts:
+            self.timeouts.update(timeouts)
         self._running = False
         self.status_path = wth_home() / "runtime" / "worker.status"
 
@@ -107,32 +130,67 @@ class WorkerEngine:
                 self.store.append_log(job.job_id, f"approval {approval_id} {status} -> failed")
                 self.bus.emit("job.denied", job_id=job.job_id, data={"approval_id": approval_id})
                 self.bus.emit("job.failed", job_id=job.job_id, data={"reason": f"approval {status}"})
+            elif status is None:
+                # The record is gone (approvals.json deleted/corrupted/reset).
+                # Previously this fell through with no action at all, leaving the
+                # job parked forever: it is not `queued` so run_once() never
+                # picks it up again, and retry_job() refuses any status outside
+                # failed/stopped/cancelled. Failing it closed makes the job
+                # recoverable -- a subsequent retry goes back through the
+                # approval gate and requests a fresh approval.
+                self.store.fail_job(job.job_id, f"approval {approval_id} record missing")
+                self.store.append_log(
+                    job.job_id, f"approval {approval_id} record missing -> failed (retry to re-request)"
+                )
+                self.bus.emit("job.failed", job_id=job.job_id, data={"reason": "approval record missing"})
 
     # --- single job ---
 
     def run_once(self) -> dict[str, Any]:
         self._resume_waiting()
-        job = self.queue.peek()
+
+        # Claim BEFORE inspecting: the claim is what makes this race-free.
+        # Previously the worker peeked (SELECT) and only later dequeued, so two
+        # workers could both act on the same queued job.
+        job = self.queue.dequeue()
         if job is None:
             return {"status": "idle"}
 
-        # Approval gate: first encounter creates the request and parks the job.
-        if job.metadata.get("requires_approval") and not job.metadata.get("approval_id"):
-            ap = self.approvals.create(
-                job_id=job.job_id, action=f"{job.type} {job.target or ''}".strip(), risk="medium",
-                reason="job requires approval",
-            )
-            meta = {**job.metadata, "approval_id": ap["approval_id"]}
-            self.store.set_metadata(job.job_id, meta)
-            self.store.update_status(job.job_id, "waiting_approval")
-            self.store.append_log(job.job_id, f"waiting approval {ap['approval_id']}")
-            self.bus.emit("job.approval_required", job_id=job.job_id, data={"approval_id": ap["approval_id"]})
-            return {"status": "waiting_approval", "job_id": job.job_id, "approval_id": ap["approval_id"]}
+        # Approval gate on the CLAIMED job. STATUS-based, not presence-based:
+        # the old check was `requires_approval and not metadata.get("approval_id")`
+        # -- presence of an id, not whether it was approved. `_resume_waiting()`
+        # fails a job on DENY but never clears `approval_id`, so `wth job retry`
+        # on a denied job (retry accepts status failed/stopped/cancelled) put it
+        # back in the queue with the id still present, the gate was skipped and
+        # the job executed with NO approval at all. Now the stored record itself
+        # must be APPROVED; a resolved non-approved record fails closed, and a
+        # missing record (e.g. approvals.json lost) gets a fresh request instead
+        # of leaving the job parked forever.
+        if job.metadata.get("requires_approval"):
+            approval_id = job.metadata.get("approval_id")
+            rec = self.approvals.get(approval_id) if approval_id else None
+            status = rec.get("status") if rec else None
 
-        running = self.queue.dequeue()
-        if running is None:
-            return {"status": "idle"}
-        return self._run_job(running)
+            if status in (STATUS_DENIED, STATUS_EXPIRED):
+                self.store.fail_job(job.job_id, f"approval {status}")
+                self.store.append_log(job.job_id, f"approval {approval_id} {status} -> failed")
+                self.bus.emit("job.denied", job_id=job.job_id, data={"approval_id": approval_id})
+                self.bus.emit("job.failed", job_id=job.job_id, data={"reason": f"approval {status}"})
+                return {"status": "failed", "job_id": job.job_id, "error": f"approval {status}"}
+
+            if status != STATUS_APPROVED:
+                ap = rec or self.approvals.create(
+                    job_id=job.job_id, action=f"{job.type} {job.target or ''}".strip(), risk="medium",
+                    reason="job requires approval",
+                )
+                meta = {**job.metadata, "approval_id": ap["approval_id"]}
+                self.store.set_metadata(job.job_id, meta)
+                self.store.update_status(job.job_id, "waiting_approval")
+                self.store.append_log(job.job_id, f"waiting approval {ap['approval_id']}")
+                self.bus.emit("job.approval_required", job_id=job.job_id, data={"approval_id": ap["approval_id"]})
+                return {"status": "waiting_approval", "job_id": job.job_id, "approval_id": ap["approval_id"]}
+
+        return self._run_job(job)
 
     def _run_job(self, job: Job) -> dict[str, Any]:
         self.store.append_log(job.job_id, "started")
@@ -144,19 +202,34 @@ class WorkerEngine:
             return {"status": "failed", "job_id": job.job_id, "error": "no_handler"}
 
         ctx = JobContext(self.manager, job)
+        # WU-108: TIDAK pakai `with ThreadPoolExecutor(...) as ex:` -- __exit__
+        # memanggil shutdown(wait=True) TANPA SYARAT, jadi saat .result()
+        # timeout, keluar dari blok `with` tetap BLOK sampai thread handler
+        # yang sudah dianggap timeout benar-benar selesai sendiri (berapa
+        # lama pun) -- "timeout kosmetik": job di-mark failed, tapi
+        # WorkerEngine tidak benar-benar bisa lanjut ke job berikutnya.
+        # shutdown(wait=False) di jalur except membiarkan pemanggil lanjut
+        # segera; thread yang sudah telanjur berjalan tetap orphan di
+        # background (Python tidak bisa kill thread paksa) -- membunuh
+        # PROSES nyata yang mungkin dijalankan handler butuh
+        # RunningActionRegistry (WU-106), di luar scope WU ini.
+        ex = ThreadPoolExecutor(max_workers=1)
+        budget = self.timeouts.get(job.type, self.timeout)
         try:
-            with ThreadPoolExecutor(max_workers=1) as ex:
-                result = ex.submit(handler, job, ctx).result(timeout=self.timeout)
+            result = ex.submit(handler, job, ctx).result(timeout=budget)
         except FutureTimeout:
+            ex.shutdown(wait=False)
             self.store.fail_job(job.job_id, "timeout")
-            self.store.append_log(job.job_id, "timeout")
+            self.store.append_log(job.job_id, f"timeout after {budget}s")
             self.bus.emit("job.failed", job_id=job.job_id, data={"reason": "timeout"})
             return {"status": "failed", "job_id": job.job_id, "error": "timeout"}
         except Exception as exc:  # noqa: BLE001 - capture handler failure
+            ex.shutdown(wait=False)
             self.store.fail_job(job.job_id, str(exc))
             self.store.append_log(job.job_id, f"exception: {exc}")
             self.bus.emit("job.failed", job_id=job.job_id, data={"reason": str(exc)})
             return {"status": "failed", "job_id": job.job_id, "error": str(exc)}
+        ex.shutdown(wait=False)
 
         fresh = self.store.get_job(job.job_id)
         if fresh and fresh.status in ("stopped", "cancelled"):
@@ -165,6 +238,29 @@ class WorkerEngine:
 
         result = result if isinstance(result, dict) else {"value": result}
         self.store.save_result(job.job_id, result)
+
+        # The handler's OWN verdict decides the job's terminal status. Before
+        # this, every non-exception return was recorded as `completed`, so a
+        # handler returning {"status": "blocked"} (recon on an unauthorized
+        # target) or {"status": "failed"} looked like success in `wth job
+        # list/show`, in Telegram/Discord notifications, and for any query that
+        # filters on status -- a failure that reads as a success.
+        handler_status = str(result.get("status", "")).lower()
+        if handler_status in ("failed", "blocked"):
+            reason = str(result.get("error") or result.get("reason") or handler_status)
+            self.store.fail_job(job.job_id, reason)
+            self.store.append_log(job.job_id, f"failed ({handler_status}): {reason}")
+            self.bus.emit(
+                "job.failed", job_id=job.job_id,
+                data={"reason": reason, "handler_status": handler_status},
+            )
+            return {"status": "failed", "job_id": job.job_id, "error": reason, "result": result}
+        if handler_status == "stopped":
+            self.store.update_status(job.job_id, "stopped")
+            self.store.append_log(job.job_id, "stopped by handler")
+            self.bus.emit("job.stopped", job_id=job.job_id)
+            return {"status": "stopped", "job_id": job.job_id, "result": result}
+
         self.store.update_status(job.job_id, "completed")
         self.store.append_log(job.job_id, "completed")
         self.bus.emit("job.completed", job_id=job.job_id, data={"result_keys": list(result.keys())})

@@ -39,6 +39,22 @@ def _tls_fingerprint(items: list[dict[str, Any]]) -> dict[str, str]:
     return out
 
 
+def _finding_key(it: dict[str, Any]) -> str:
+    """Identity of one finding candidate: category + asset + title.
+
+    Mirrors ``recon.model.FindingCandidate.key()``. Diffing on title alone made
+    "Open port 8080" on host A and the same title on host B indistinguishable,
+    so a genuinely new service on a different host produced
+    ``total_changes=0`` / ``new_ports=[]`` and never raised
+    ``recon.change_detected``.
+    """
+    return f"{it.get('category', '')}|{it.get('asset', '')}|{it.get('title', '')}".lower()
+
+
+def _finding_keys(items: list[dict[str, Any]]) -> set[str]:
+    return {_finding_key(it) for it in items}
+
+
 def diff_results(old: dict[str, Any], new: dict[str, Any]) -> dict[str, Any]:
     """Compare two ``ReconNormalizer.to_dict()`` payloads."""
     old = old or {}
@@ -75,11 +91,11 @@ def diff_results(old: dict[str, Any], new: dict[str, Any]) -> dict[str, Any]:
         if host in old_tls and old_tls[host] != fp
     ]
 
-    old_findings = _keyset(old.get("findings", []), "title")
+    old_findings = _finding_keys(old.get("findings", []))
     new_priority = [
         it.get("title", it.get("asset", ""))
         for it in new.get("findings", [])
-        if (it.get("title") or "").lower() not in old_findings
+        if _finding_key(it) not in old_findings
         and it.get("severity_hint", "info") in ("medium", "high", "critical")
     ]
 
@@ -99,7 +115,7 @@ def diff_results(old: dict[str, Any], new: dict[str, Any]) -> dict[str, Any]:
             it.get("title", it.get("detail", ""))
             for it in new.get("findings", [])
             if it.get("category") == "service"
-            and (it.get("title") or "").lower() not in old_findings
+            and _finding_key(it) not in old_findings
         ],
         "header_posture_changed": header_changes,
         "tls_cert_changed": tls_cert_changed,

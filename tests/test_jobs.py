@@ -123,13 +123,43 @@ def test_enqueue_dequeue_priority():
 def test_worker_run_once_success():
     with temp_home():
         mgr = _manager()
-        job = mgr.create_job("recon", target="example.com")
+        # Explicit authorization: the recon handler is fail-closed now
+        # (`metadata.authorized`, default False), and this test is about the
+        # worker lifecycle, not about the authorization gate. The gate itself is
+        # covered by test_recon_job_without_authorization_fails_closed below.
+        job = mgr.create_job("recon", target="example.com", metadata={"authorized": True})
         res = WorkerEngine(mgr).run_once()
         assert res["status"] == "completed"
         done = mgr.get_job(job.job_id)
         assert done.status == "completed"
         assert done.result.get("summary")
         assert done.progress["current"] == 100
+
+
+def test_recon_job_without_authorization_fails_closed():
+    """Review pre-merge: `handler_recon` defaulted `authorized` to True, so any
+    caller that omitted the flag got a live scan against an unconfirmed target --
+    and the authorization gate in `ReconEngine.run()` could never fire, because
+    nothing ever sent authorized=False. It now matches
+    `run_executor_job()`'s fail-closed default."""
+    with temp_home():
+        mgr = _manager()
+        job = mgr.create_job("recon", target="example.com")  # no metadata
+        res = WorkerEngine(mgr).run_once()
+        assert res["status"] == "failed"
+        done = mgr.get_job(job.job_id)
+        assert done is not None
+        assert done.status == "failed"
+        assert "authoriz" in (done.error or "").lower()
+
+
+def test_recon_job_with_explicit_authorization_runs():
+    """The happy path for every real operator entry point."""
+    with temp_home():
+        mgr = _manager()
+        job = mgr.create_job("recon", target="example.com", metadata={"authorized": True})
+        res = WorkerEngine(mgr).run_once()
+        assert res["status"] == "completed"
 
 
 def test_worker_handles_exception_marks_failed():
@@ -149,7 +179,7 @@ def test_worker_emits_lifecycle_events():
         mgr = _manager(bus=bus)
         seen: list[str] = []
         bus.subscribe(lambda e: seen.append(e.type))
-        mgr.create_job("recon", target="x.com")
+        mgr.create_job("recon", target="x.com", metadata={"authorized": True})
         WorkerEngine(mgr).run_once()
         assert "job.created" in seen
         assert "job.started" in seen
@@ -185,7 +215,12 @@ def test_approval_gate_approved_continues():
         mgr = _manager(bus=bus)
         seen: list[str] = []
         bus.subscribe(lambda e: seen.append(e.type))
-        job = mgr.create_job("recon", target="x.com", requires_approval=True)
+        # `authorized` is set explicitly so these tests exercise the APPROVAL
+        # gate, not the (now fail-closed) authorization gate -- otherwise the
+        # denial test would pass for the wrong reason.
+        job = mgr.create_job(
+            "recon", target="x.com", requires_approval=True, metadata={"authorized": True},
+        )
         worker = WorkerEngine(mgr)
         first = worker.run_once()
         assert first["status"] == "waiting_approval"
@@ -205,7 +240,12 @@ def test_approval_gate_denied_fails():
         mgr = _manager(bus=bus)
         seen: list[str] = []
         bus.subscribe(lambda e: seen.append(e.type))
-        job = mgr.create_job("recon", target="x.com", requires_approval=True)
+        # `authorized` is set explicitly so these tests exercise the APPROVAL
+        # gate, not the (now fail-closed) authorization gate -- otherwise the
+        # denial test would pass for the wrong reason.
+        job = mgr.create_job(
+            "recon", target="x.com", requires_approval=True, metadata={"authorized": True},
+        )
         worker = WorkerEngine(mgr)
         first = worker.run_once()
         ApprovalRegistry().deny(first["approval_id"])
