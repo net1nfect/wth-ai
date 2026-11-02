@@ -86,11 +86,10 @@ if FormattedTextControl is not None:
 
             row = mouse_event.position.y
             if row < HEADER_ROWS:
-                # Clicking the title/breadcrumb row is the mouse's "back".
-                if not state.back():
-                    self._result["value"] = None
-                    app.exit()
-                app.invalidate()
+                # Not "click the breadcrumb to go back": prompt_toolkit clamps
+                # clicks that land outside the rendered content to the last visible
+                # line, so a title-row rule can fire on ANY click (measured: every
+                # click arrived as row 0). Back is Esc/backspace/left-arrow.
                 return None
 
             index = state.index_at_row(row)

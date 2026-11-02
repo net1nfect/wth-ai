@@ -385,3 +385,291 @@ def test_picker_footer_matches_the_reference_wording():
 
     source = inspect.getsource(mod)
     assert "enter select" in source and "esc back" in source
+
+
+# --------------------------------------------------------------------------- #
+# picker mouse: wheel (touchpad) + click
+# --------------------------------------------------------------------------- #
+def _mouse(row: int, *, kind=None):
+    from prompt_toolkit.data_structures import Point
+    from prompt_toolkit.mouse_events import MouseButton, MouseEvent, MouseEventType
+
+    return MouseEvent(position=Point(x=3, y=row), event_type=kind or MouseEventType.MOUSE_UP,
+                      button=MouseButton.LEFT, modifiers=frozenset())
+
+
+class _FakeApp:
+    def __init__(self):
+        self.exited = False
+
+    def invalidate(self):
+        pass
+
+    def exit(self):
+        self.exited = True
+
+
+def _picker_control(monkeypatch, state, result, *, per_item=1, app=None):
+    import wth_ai.cli.ui.picker as picker_mod
+
+    app = app or _FakeApp()
+    monkeypatch.setattr(picker_mod, "get_app", lambda: app, raising=False)
+    return picker_mod.build_picker_control(state, result, per_item=per_item)(lambda: [], focusable=True), app
+
+
+def test_picker_wheel_scrolls(monkeypatch):
+    """The complaint was scroll-by-touchpad doing nothing; the wheel arrives as
+    SCROLL_* mouse events, which had NO handler in the picker at all."""
+    from prompt_toolkit.mouse_events import MouseEventType
+
+    state = ListPickerState(items=[f"m{i}" for i in range(40)], window=8)
+    result: dict = {"value": None}
+    control, _app = _picker_control(monkeypatch, state, result)
+
+    control.mouse_handler(_mouse(0, kind=MouseEventType.SCROLL_DOWN))
+    assert state.selected() == "m3", f"roda mouse tidak menggulir (index={state.index})"
+    control.mouse_handler(_mouse(0, kind=MouseEventType.SCROLL_UP))
+    assert state.selected() == "m0"
+
+
+def test_picker_click_selects_then_accepts(monkeypatch):
+    import wth_ai.cli.ui.picker as picker_mod
+
+    state = ListPickerState(items=[f"m{i}" for i in range(10)], window=6)
+    result: dict = {"value": None}
+    control, app = _picker_control(monkeypatch, state, result)
+
+    control.mouse_handler(_mouse(picker_mod.PICKER_HEADER_ROWS + 2))
+    assert state.selected() == "m2", "klik tidak memindahkan sorotan"
+    assert result["value"] is None
+
+    control.mouse_handler(_mouse(picker_mod.PICKER_HEADER_ROWS + 2))
+    assert result["value"] == "m2" and app.exited
+
+
+def test_picker_click_on_a_description_row_is_ignored(monkeypatch):
+    import wth_ai.cli.ui.picker as picker_mod
+
+    state = ListPickerState(items=[f"m{i}" for i in range(6)], window=4)
+    result: dict = {"value": None}
+    control, _app = _picker_control(monkeypatch, state, result, per_item=2)
+
+    # header + 1 (baris deskripsi item pertama) -> bukan target
+    control.mouse_handler(_mouse(picker_mod.PICKER_HEADER_ROWS + 1))
+    assert state.index == 0 and result["value"] is None
+
+
+def test_picker_click_on_title_does_not_cancel(monkeypatch):
+    """A click at/above the header must not close the picker.
+
+    Measured: the Window mouse-wrapper clamps a click outside the rendered content
+    to the last visible line, so clicks can arrive as row 0. When row 0 meant
+    "cancel", every click closed the model list. Cancel is Esc's job.
+    """
+    import wth_ai.cli.ui.picker as picker_mod
+
+    state = ListPickerState(items=["a", "b"])
+    result: dict = {"value": None}
+    control, app = _picker_control(monkeypatch, state, result)
+    control.mouse_handler(_mouse(picker_mod.PICKER_HEADER_ROWS - 1))
+    assert result["value"] is None and app.exited is False
+
+
+def test_picker_click_below_the_list_is_ignored(monkeypatch):
+    import wth_ai.cli.ui.picker as picker_mod
+
+    state = ListPickerState(items=["a", "b"], window=4)
+    result: dict = {"value": None}
+    control, app = _picker_control(monkeypatch, state, result)
+    control.mouse_handler(_mouse(picker_mod.PICKER_HEADER_ROWS + 40))
+    assert result["value"] is None and app.exited is False
+
+
+def test_picker_app_enables_mouse():
+    """Without mouse_support the terminal never sends the events at all.
+
+    Asserts the built Application's flag rather than a string in some function body:
+    the construction moved into `build_picker_app`, and a source-text assertion
+    silently stopped meaning anything.
+    """
+    from prompt_toolkit.key_binding import KeyBindings
+    from prompt_toolkit.output import DummyOutput
+
+    from wth_ai.cli.ui.picker import ListPickerState, build_picker_app
+
+    app = build_picker_app(ListPickerState(items=["a"]), {"value": None},
+                           bindings=KeyBindings(), style=None, output=DummyOutput())
+    assert bool(app.mouse_support()) is True
+
+
+# --------------------------------------------------------------------------- #
+# /model must reach its own picker, not the generic submenu
+# --------------------------------------------------------------------------- #
+def test_bare_model_command_is_not_hijacked_by_the_subcommand_menu(monkeypatch):
+    """Measured complaint: `/model` showed list/use/set/fix/show instead of models."""
+    monkeypatch.setattr("wth_ai.cli.ui.menu.interactive_available", lambda: True)
+    calls: list[str] = []
+    monkeypatch.setattr("wth_ai.cli.ui.menu.run_menu",
+                        lambda *a, **k: calls.append("menu") or "/model list")
+    from wth_ai.cli.repl import WTHRepl
+
+    repl = WTHRepl(lambda t: t)
+    assert repl._maybe_open_menu("/model") == "/model"
+    assert calls == [], "menu subcommand masih mengintersep /model"
+
+
+def test_model_with_explicit_subcommand_is_also_left_alone(monkeypatch):
+    monkeypatch.setattr("wth_ai.cli.ui.menu.interactive_available", lambda: True)
+    monkeypatch.setattr("wth_ai.cli.ui.menu.run_menu", lambda *a, **k: "SHOULD-NOT-BE-USED")
+    from wth_ai.cli.repl import WTHRepl
+
+    repl = WTHRepl(lambda t: t)
+    assert repl._maybe_open_menu("/model show") == "/model show"
+
+
+# --------------------------------------------------------------------------- #
+# wheel + click driven through a REAL input pipe
+#
+# The synthetic-MouseEvent tests above exercise the handler; these feed actual
+# terminal escape sequences into the app, which is what a touchpad produces. They
+# exist because a pty run made the wheel look broken when the coordinates were
+# simply outside the list.
+# --------------------------------------------------------------------------- #
+def _drive_picker(items, *, window=8, per_item=1, keys_after=0.25):
+    """Run the picker against a pipe input; yields (state, result, send, done)."""
+    import threading
+    import time
+
+    from prompt_toolkit.input import create_pipe_input
+    from prompt_toolkit.output import DummyOutput
+
+    from wth_ai.cli.ui.picker import ListPickerState, build_picker_app, build_picker_bindings
+
+    state = ListPickerState(items=items, window=window)
+    result: dict = {"value": None}
+    ctx = {}
+    # `create_pipe_input()` is a context manager; the pipe is only usable once
+    # entered (otherwise: AttributeError ... has no attribute 'typeahead_hash').
+    pipe_cm = create_pipe_input()
+    pipe = pipe_cm.__enter__()
+    app = build_picker_app(state, result, bindings=build_picker_bindings(state, result),
+                           style=None, per_item=per_item, input=pipe, output=DummyOutput())
+    ctx["pipe"] = pipe
+    ctx["pipe_cm"] = pipe_cm
+
+    def _runner():
+        app.run()
+
+    thread = threading.Thread(target=_runner, daemon=True)
+    thread.start()
+    time.sleep(0.4)
+    ctx["state"] = state
+    ctx["result"] = result
+    ctx["app_running"] = lambda: thread.is_alive()
+    ctx["sleep"] = time.sleep
+    def _stop():
+        try:
+            pipe.send_text("\x1b")
+        except Exception:  # noqa: BLE001
+            pass
+        thread.join(timeout=3)
+        try:
+            ctx["pipe_cm"].__exit__(None, None, None)
+        except Exception:  # noqa: BLE001
+            pass
+
+    ctx["stop"] = _stop
+    return ctx
+
+
+def test_touchpad_wheel_actually_scrolls_the_model_list():
+    """Reported: "gabisa di scroll make touchpad". A two-finger scroll arrives as
+    real SGR mouse sequences; this feeds exactly those."""
+    ctx = _drive_picker([f"model-{i:03d}" for i in range(50)])
+    state, pipe = ctx["state"], ctx["pipe"]
+    try:
+        assert state.selected() == "model-000"
+        pipe.send_text("\x1b[<65;10;12M")          # wheel down
+        ctx["sleep"](0.35)
+        assert state.selected() == "model-003", f"roda tidak menggulir: {state.selected()}"
+        pipe.send_text("\x1b[<65;10;12M")
+        ctx["sleep"](0.35)
+        assert state.selected() == "model-006"
+        pipe.send_text("\x1b[<64;10;12M")          # wheel up
+        ctx["sleep"](0.35)
+        assert state.selected() == "model-003"
+    finally:
+        ctx["stop"]()
+
+
+def test_item_click_handler_selects_then_activates(monkeypatch):
+    """The click path, tested without screen coordinates.
+
+    Coordinate hit-testing cannot be exercised headless: in a DummyOutput render the
+    screen->line translation clamps every click to the last visible line, which is
+    exactly why the click is bound to the row's OWN fragment handler instead.
+    """
+    import wth_ai.cli.ui.picker as picker_mod
+
+    state = ListPickerState(items=[f"model-{i:03d}" for i in range(10)])
+    result: dict = {"value": None}
+    app = _FakeApp()
+    monkeypatch.setattr(picker_mod, "get_app", lambda: app, raising=False)
+
+    handler = picker_mod.item_click_handler(state, result, 2)
+    from prompt_toolkit.mouse_events import MouseEventType
+
+    handler(_mouse(5, kind=MouseEventType.MOUSE_DOWN))
+    assert state.index == 0, "klik-turun tidak boleh memilih"
+    assert result["value"] is None
+
+    handler(_mouse(5))
+    assert state.index == 2, "klik tidak memilih baris itu"
+    assert result["value"] is None
+
+    handler(_mouse(5))
+    assert result["value"] == "model-002", "klik kedua tidak mengaktifkan"
+    assert app.exited is True
+
+
+def test_item_rows_carry_their_own_handler():
+    from wth_ai.cli.ui.picker import format_rows
+
+    state = ListPickerState(items=["a", "b", "c"])
+    rows = format_rows(state, handler_for=lambda index: f"handler-{index}")
+    labels = [row for row in rows if len(row) > 2]
+    assert labels and all(row[2].startswith("handler-") for row in labels), rows
+
+
+def test_real_click_sequence_never_cancels_the_picker():
+    """A click must not close the model list.
+
+    Measured before the fix: every click arrived as row 0, and row 0 meant "cancel",
+    so clicking anywhere dismissed the picker.
+    """
+    ctx = _drive_picker([f"model-{i:03d}" for i in range(50)], per_item=1)
+    state, pipe, result = ctx["state"], ctx["pipe"], ctx["result"]
+    try:
+        for row in (1, 3, 6, 10):
+            pipe.send_text(f"\x1b[<0;5;{row}M\x1b[<0;5;{row}m")
+            ctx["sleep"](0.2)
+        assert result["value"] is None, "klik membatalkan/memilih padahal tidak boleh"
+        assert ctx["app_running"](), "picker tertutup oleh klik"
+    finally:
+        ctx["stop"]()
+
+
+def test_keyboard_navigation_still_works_alongside_the_mouse():
+    import time
+
+    ctx = _drive_picker([f"model-{i:03d}" for i in range(50)])
+    state, pipe = ctx["state"], ctx["pipe"]
+    try:
+        pipe.send_text("\x1b[B")                   # panah bawah
+        time.sleep(0.3)
+        assert state.selected() == "model-001"
+        pipe.send_text("\x1b[B")
+        time.sleep(0.3)
+        assert state.selected() == "model-002"
+    finally:
+        ctx["stop"]()
