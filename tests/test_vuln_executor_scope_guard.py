@@ -120,7 +120,14 @@ def test_in_scope_target_still_dispatches_to_vuln_executor():
     with patch("requests.get", return_value=fake_resp) as mock_get:
         result = executor.execute_module(task, state)
     assert result.status != "blocked"
-    mock_get.assert_called_once()
+    # Kontrak BERUBAH (disengaja): pembuktian SSRF kini berbasis ISI, jadi ia
+    # mengirim DUA permintaan -- probe seperti sebelumnya, lalu satu permintaan ke
+    # halaman target untuk mengambil penanda yang harus muncul di respons. Assertion
+    # lama (`called_once`) mengunci deteksi berbasis error yang memang diganti.
+    assert mock_get.call_count >= 1, "probe tidak mengirim permintaan sama sekali"
+    first = mock_get.call_args_list[0]
+    assert "wth-ssrf-probe" in str(first), f"permintaan pertama harus probe: {first}"
+    assert mock_get.call_count <= 2, f"terlalu banyak permintaan: {mock_get.call_count}"
 
 
 def test_read_only_recon_block_still_takes_precedence():
