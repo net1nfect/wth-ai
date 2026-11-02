@@ -219,3 +219,176 @@ def test_router_records_a_call_even_when_provider_reports_no_usage(tmp_path, mon
     data = get_ledger().summary()
     assert data["calls"] == 1
     assert data["total_tokens"] == 0
+
+
+# --------------------------------------------------------------------------- #
+# budget enforcement (the guard that did not exist: the budget was REPORTED,
+# never enforced, and it compared against the lifetime total)
+# --------------------------------------------------------------------------- #
+def _router_with_stub(tmp_path, monkeypatch, *, provider_tokens=500):
+    """A router whose only provider is a local stub (no network)."""
+    monkeypatch.setenv("WTH_HOME", str(tmp_path))
+    reset_ledger()
+
+    from wth_ai.config import ProviderRoleConfig, WTHConfig
+    from wth_ai.llm.router import LLMProviderRouter
+
+    class _Provider:
+        provider_type = "stub"
+        last_usage: dict = {}
+
+        def available(self) -> bool:
+            return True
+
+        def chat_with_fallback(self, primary, backup, messages, **kwargs):
+            self.calls = getattr(self, "calls", 0) + 1
+            self.last_usage = {"total_tokens": provider_tokens}
+            return "ok", primary
+
+    provider = _Provider()
+    cfg = WTHConfig.load()
+    cfg.providers["planner"] = ProviderRoleConfig(type="stub", model="m")
+    router = LLMProviderRouter(cfg)
+    monkeypatch.setattr(router, "_get_or_create_provider", lambda ptype: provider)
+    return router, provider
+
+
+def test_budget_policy_parses_env(monkeypatch):
+    from wth_ai.llm.usage import load_budget_policy
+
+    monkeypatch.setenv("WTH_TOKEN_BUDGET", "5000")
+    monkeypatch.setenv("WTH_BUDGET_MODE", "stop")
+    monkeypatch.setenv("WTH_BUDGET_SCOPE", "total")
+    policy = load_budget_policy()
+    assert (policy.limit_tokens, policy.mode, policy.scope) == (5000, "stop", "total")
+    assert policy.active is True
+
+
+def test_budget_policy_tolerates_garbage(monkeypatch):
+    from wth_ai.llm.usage import load_budget_policy
+
+    monkeypatch.setenv("WTH_TOKEN_BUDGET", "banyak")
+    monkeypatch.setenv("WTH_BUDGET_MODE", "ngawur")
+    policy = load_budget_policy()
+    assert policy.limit_tokens == 0 and policy.mode == "warn"
+    assert policy.active is False
+
+
+def test_session_scope_ignores_last_weeks_spend(tmp_path):
+    """The measured defect: budget compared to the LIFETIME total, so a budget set
+    today read as already-blown because of calls made earlier."""
+    from wth_ai.llm.usage import BudgetPolicy, UsageLedger
+
+    path = tmp_path / "usage.jsonl"
+    old = UsageLedger(path)
+    old.record(role="planner", provider="p", model="m", usage={"total_tokens": 999_999})
+
+    fresh = UsageLedger(path, policy=BudgetPolicy(limit_tokens=1000, mode="stop", scope="session"))
+    allowed, _ = fresh.check_budget()
+    assert allowed is True, "sesi baru dianggap kehabisan budget gara-gara pemakaian lama"
+
+    fresh.record(role="planner", provider="p", model="m", usage={"total_tokens": 1200})
+    allowed, message = fresh.check_budget()
+    assert allowed is False and "budget token habis" in message
+
+
+def test_total_scope_does_count_lifetime(tmp_path):
+    from wth_ai.llm.usage import BudgetPolicy, UsageLedger
+
+    path = tmp_path / "usage.jsonl"
+    old = UsageLedger(path)
+    old.record(role="planner", provider="p", model="m", usage={"total_tokens": 5000})
+
+    fresh = UsageLedger(path, policy=BudgetPolicy(limit_tokens=1000, mode="stop", scope="total"))
+    allowed, _ = fresh.check_budget()
+    assert allowed is False
+
+
+def test_off_mode_never_blocks(tmp_path):
+    from wth_ai.llm.usage import BudgetPolicy, UsageLedger
+
+    ledger = UsageLedger(tmp_path / "usage.jsonl", policy=BudgetPolicy(limit_tokens=1, mode="off"))
+    ledger.record(role="planner", provider="p", model="m", usage={"total_tokens": 10_000})
+    allowed, message = ledger.check_budget()
+    assert allowed is True and message == ""
+    assert ledger.budget_state()["active"] is False
+
+
+def test_stop_mode_refuses_before_spending(tmp_path, monkeypatch):
+    """The essential property: refuse the call, do NOT let the provider run."""
+    from wth_ai.llm.usage import BudgetExceeded
+
+    monkeypatch.setenv("WTH_TOKEN_BUDGET", "1")
+    monkeypatch.setenv("WTH_BUDGET_MODE", "stop")
+    router, provider = _router_with_stub(tmp_path, monkeypatch, provider_tokens=500)
+
+    router.chat_for_role("planner", [{"role": "user", "content": "hi"}], timeout=5)
+    assert provider.calls == 1
+
+    with pytest.raises(BudgetExceeded) as exc:
+        router.chat_for_role("planner", [{"role": "user", "content": "hi"}], timeout=5)
+    assert provider.calls == 1, "provider tetap dipanggil padahal budget sudah habis"
+    assert "WTH_TOKEN_BUDGET" in str(exc.value)      # pesannya harus actionable
+
+
+def test_warn_mode_continues_and_notifies_once(tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("WTH_TOKEN_BUDGET", "1")
+    monkeypatch.setenv("WTH_BUDGET_MODE", "warn")
+    router, provider = _router_with_stub(tmp_path, monkeypatch, provider_tokens=500)
+
+    router.chat_for_role("planner", [{"role": "user", "content": "hi"}], timeout=5)
+    router.chat_for_role("planner", [{"role": "user", "content": "hi"}], timeout=5)
+    router.chat_for_role("planner", [{"role": "user", "content": "hi"}], timeout=5)
+
+    assert provider.calls == 3, "mode warn tidak boleh menghentikan call"
+    assert router.budget_notice, "notice tidak diisi"
+    err = capsys.readouterr().err
+    assert err.count("[budget]") == 1, f"peringatan harus sekali, dapat {err.count('[budget]')}"
+
+
+def test_under_budget_is_silent(tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("WTH_TOKEN_BUDGET", "100000")
+    monkeypatch.setenv("WTH_BUDGET_MODE", "warn")
+    router, _ = _router_with_stub(tmp_path, monkeypatch, provider_tokens=10)
+    router.chat_for_role("planner", [{"role": "user", "content": "hi"}], timeout=5)
+    assert router.budget_notice == ""
+    assert "[budget]" not in capsys.readouterr().err
+
+
+def test_summary_reports_session_and_budget_with_the_right_denominator(tmp_path):
+    from wth_ai.llm.usage import BudgetPolicy, UsageLedger
+
+    path = tmp_path / "usage.jsonl"
+    UsageLedger(path).record(role="planner", provider="p", model="m", usage={"total_tokens": 9000})
+
+    ledger = UsageLedger(path, policy=BudgetPolicy(limit_tokens=1000, mode="warn", scope="session"))
+    ledger.record(role="planner", provider="p", model="m", usage={"total_tokens": 300})
+    text = ledger.format_summary()
+
+    assert "Sesi ini: 1 call . 300 token" in text.replace("·", ".")
+    # Label scope ikut di-assert: tanpa itu, "0/1000" di sesi baru terbaca
+    # seolah budget belum tersentuh seumur hidup.
+    assert "300/1000 token di sesi ini (di bawah)" in text
+    assert "9000" not in text.split("Sesi ini")[1].split("Budget")[0]
+
+
+def test_summary_labels_a_disabled_budget_as_unenforced(tmp_path):
+    from wth_ai.llm.usage import BudgetPolicy, UsageLedger
+
+    ledger = UsageLedger(tmp_path / "usage.jsonl", policy=BudgetPolicy(limit_tokens=500, mode="off"))
+    ledger.record(role="planner", provider="p", model="m", usage={"total_tokens": 10})
+    assert "tidak ditegakkan" in ledger.format_summary()
+
+
+def test_summary_calls_out_lifetime_total_exceeding_a_session_budget(tmp_path):
+    """`wth usage` in a fresh process reported "0/5000 (di bawah)" while the machine
+    total was 14k -- technically true for that process, and thoroughly misleading."""
+    from wth_ai.llm.usage import BudgetPolicy, UsageLedger
+
+    path = tmp_path / "usage.jsonl"
+    UsageLedger(path).record(role="planner", provider="p", model="m", usage={"total_tokens": 14_083})
+
+    ledger = UsageLedger(path, policy=BudgetPolicy(limit_tokens=5_000, mode="warn", scope="session"))
+    text = ledger.format_summary()
+    assert "0/5000 token di sesi ini (di bawah)" in text
+    assert "total seumur hidup 14083 token sudah di atas" in text

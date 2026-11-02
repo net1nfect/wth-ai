@@ -31,6 +31,54 @@ _TOTAL_KEYS = ("total_tokens",)
 _COST_KEYS = ("cost", "cost_usd", "total_cost")
 
 
+class BudgetExceeded(RuntimeError):
+    """Raised when `WTH_BUDGET_MODE=stop` and the session budget is spent.
+
+    Carries the actionable message (what the limit is, what was used, how to
+    raise it) because the caller is usually an agent loop that will show it
+    verbatim.
+    """
+
+
+@dataclass(frozen=True)
+class BudgetPolicy:
+    """How much this run may spend, and what happens when it runs out.
+
+    Scope is SESSION (this process run) by default. Measured defect in the first
+    version: the budget was compared against the LIFETIME ledger total, so a
+    budget set today read as "already over" because of calls made last week --
+    the number was never about the run being bounded.
+    """
+
+    limit_tokens: int = 0
+    mode: str = "warn"          # warn | stop | off
+    scope: str = "session"      # session | total
+
+    @property
+    def active(self) -> bool:
+        return self.limit_tokens > 0 and self.mode != "off"
+
+    def describe(self) -> str:
+        return f"{self.limit_tokens} token (mode={self.mode}, scope={self.scope})"
+
+
+def load_budget_policy() -> BudgetPolicy:
+    """Read the policy from the environment, tolerating garbage."""
+    def _int(name: str) -> int:
+        try:
+            return max(0, int(os.environ.get(name, "0") or 0))
+        except ValueError:
+            return 0
+
+    mode = (os.environ.get("WTH_BUDGET_MODE", "warn") or "warn").strip().lower()
+    if mode not in ("warn", "stop", "off"):
+        mode = "warn"
+    scope = (os.environ.get("WTH_BUDGET_SCOPE", "session") or "session").strip().lower()
+    if scope not in ("session", "total"):
+        scope = "session"
+    return BudgetPolicy(limit_tokens=_int("WTH_TOKEN_BUDGET"), mode=mode, scope=scope)
+
+
 def _first_int(payload: dict[str, Any], keys: tuple[str, ...]) -> int:
     for key in keys:
         value = payload.get(key)
@@ -113,10 +161,18 @@ class UsageEntry:
 class UsageLedger:
     """Append-only token/cost ledger. Read-side aggregates on demand."""
 
-    def __init__(self, path: Path | None = None, *, budget_tokens: int = 0) -> None:
+    def __init__(
+        self,
+        path: Path | None = None,
+        *,
+        budget_tokens: int = 0,
+        policy: BudgetPolicy | None = None,
+    ) -> None:
         self.path = path or self._default_path()
-        self.budget_tokens = budget_tokens
+        self.policy = policy or BudgetPolicy(limit_tokens=budget_tokens)
+        self.budget_tokens = self.policy.limit_tokens
         self._session: list[UsageEntry] = []
+        self._warned = False
 
     @staticmethod
     def _default_path() -> Path:
@@ -174,6 +230,52 @@ class UsageLedger:
         return out
 
     # ------------------------------------------------------------------ #
+    def session_entries(self) -> list[UsageEntry]:
+        """Entries recorded by THIS process run (the budget's denominator)."""
+        return list(self._session)
+
+    def session_tokens(self) -> int:
+        return sum(entry.total_tokens for entry in self._session)
+
+    def budget_state(self) -> dict[str, Any]:
+        """Limit vs used, with the RIGHT denominator for the configured scope."""
+        # NB: sum the rows directly here. Calling `summary()` would re-enter
+        # `budget_state()` (summary embeds it) and blow the stack -- caught by
+        # `test_total_scope_does_count_lifetime`.
+        used = (
+            self.session_tokens()
+            if self.policy.scope == "session"
+            else sum(row.total_tokens for row in self.load())
+        )
+        limit = self.policy.limit_tokens
+        over = bool(limit and used >= limit)
+        return {
+            "active": self.policy.active,
+            "mode": self.policy.mode,
+            "scope": self.policy.scope,
+            "limit_tokens": limit,
+            "used_tokens": used,
+            "remaining_tokens": max(0, limit - used) if limit else 0,
+            "over": over,
+        }
+
+    def check_budget(self) -> tuple[bool, str]:
+        """(allowed, message). Pure read: decides nothing, records nothing."""
+        state = self.budget_state()
+        if not state["active"] or not state["over"]:
+            return True, ""
+        detail = (
+            f"budget token habis: {state['used_tokens']}/{state['limit_tokens']} "
+            f"(scope={state['scope']}, mode={state['mode']})"
+        )
+        if state["mode"] == "stop":
+            return False, (
+                f"{detail}. Panggilan LLM dihentikan supaya tidak melewati batas. "
+                "Naikkan `WTH_TOKEN_BUDGET`, set `WTH_BUDGET_MODE=warn` untuk lanjut dengan "
+                "peringatan, atau `WTH_BUDGET_MODE=off` untuk mematikan batasnya."
+            )
+        return True, detail
+
     def summary(self, *, entries: list[UsageEntry] | None = None) -> dict[str, Any]:
         rows = entries if entries is not None else self.load()
         total = sum(row.total_tokens for row in rows)
@@ -192,8 +294,11 @@ class UsageLedger:
             "cost_usd": round(cost, 8),
             "by_model": by_model,
             "by_role": by_role,
+            "session_calls": len(self._session),
+            "session_tokens": self.session_tokens(),
             "budget_tokens": self.budget_tokens,
-            "over_budget": bool(self.budget_tokens and total > self.budget_tokens),
+            "over_budget": bool(self.budget_state()["over"]),
+            "budget": self.budget_state(),
         }
 
     def format_summary(self, *, entries: list[UsageEntry] | None = None) -> str:
@@ -217,9 +322,33 @@ class UsageLedger:
             lines.append("Per role:")
             for role, slot in sorted(data["by_role"].items(), key=lambda kv: -kv[1]["tokens"]):
                 lines.append(f"  {role}: {slot['calls']} call · {slot['tokens']} token")
-        if data["budget_tokens"]:
-            status = "LEWAT" if data["over_budget"] else "di bawah"
-            lines.append(f"Budget: {data['total_tokens']}/{data['budget_tokens']} token ({status})")
+        budget = data.get("budget", {})
+        if data.get("session_calls"):
+            lines.append(
+                f"Sesi ini: {data['session_calls']} call · {data['session_tokens']} token"
+            )
+        if budget.get("active"):
+            status = "HABIS/LEWAT" if budget["over"] else "di bawah"
+            # Label the scope explicitly: with scope=session a standalone
+            # `wth usage` run legitimately shows 0 used, and an unqualified
+            # "0/1000" reads like the budget is untouched machine-wide.
+            scope_label = "di sesi ini" if budget["scope"] == "session" else "seumur hidup"
+            lines.append(
+                f"Budget ({budget['mode']}, scope={budget['scope']}): "
+                f"{budget['used_tokens']}/{budget['limit_tokens']} token {scope_label} "
+                f"({status}), sisa {budget['remaining_tokens']}"
+            )
+            # A standalone `wth usage` run has an empty session, so the line above
+            # can read "0/5000 (di bawah)" while the machine total is far past the
+            # limit. Say that out loud instead of letting it mislead.
+            if budget["scope"] == "session" and data["total_tokens"] > budget["limit_tokens"]:
+                lines.append(
+                    f"Catatan: total seumur hidup {data['total_tokens']} token sudah di atas "
+                    f"batas {budget['limit_tokens']}, tapi batas ini berlaku per sesi (proses), "
+                    "bukan seumur hidup."
+                )
+        elif data["budget_tokens"]:
+            lines.append(f"Budget: {data['budget_tokens']} token (mode=off — tidak ditegakkan)")
         return "\n".join(lines)
 
 
@@ -230,12 +359,7 @@ def get_ledger() -> UsageLedger:
     """Process-wide ledger, so every router instance writes to one file."""
     global _LEDGER
     if _LEDGER is None:
-        budget = 0
-        try:
-            budget = int(os.environ.get("WTH_TOKEN_BUDGET", "0") or 0)
-        except ValueError:
-            budget = 0
-        _LEDGER = UsageLedger(budget_tokens=budget)
+        _LEDGER = UsageLedger(policy=load_budget_policy())
     return _LEDGER
 
 
