@@ -42,6 +42,7 @@ PROMPT_STYLE = Style.from_dict({
     "status-brand": THEME["brand"],
     "status-plan": THEME["plan"],
     "placeholder": THEME["muted"],
+    "rule": THEME["border"],
 })
 
 
@@ -88,6 +89,9 @@ class WTHRepl:
             multiline=False,
             completer=build_completer(),
             auto_suggest=AutoSuggestFromHistory(),
+            # Mouse enabled so the completion menu can be scrolled with the wheel
+            # and a row clicked instead of only typed.
+            mouse_support=True,
             complete_while_typing=True,
             complete_style=CompleteStyle.COLUMN,
             reserve_space_for_menu=8,
@@ -271,6 +275,25 @@ class WTHRepl:
             out.append((style, f"{prefix}{text}"))
         return out or [("class:status-brand", " wth-ai")]
 
+    def _rule_line(self) -> list[tuple[str, str]]:
+        """A dim horizontal line bracketing the input, so the line you type on is
+        visibly a LINE rather than text floating above the status bar."""
+        import shutil
+
+        width = max(20, min(200, shutil.get_terminal_size((100, 24)).columns - 1))
+        return [("class:rule", "─" * width)]
+
+    def _prompt_text(self) -> FormattedText:
+        return FormattedText([
+            ("class:rule", "─" * self._rule_width()),
+            ("class:prompt", "\n" + (self.prompt_fn() if self.prompt_fn else PROMPT_SYMBOL)),
+        ])
+
+    def _rule_width(self) -> int:
+        import shutil
+
+        return max(20, min(200, shutil.get_terminal_size((100, 24)).columns - 1))
+
     def _help_line(self) -> list[tuple[str, str]]:
         return [("class:status", " ← for agents · ? for shortcuts · /help")]
 
@@ -310,7 +333,13 @@ class WTHRepl:
             return self._toolbar_cache
         try:
             status = self._status_line()
-            self._toolbar_cache = status + [("class:status", "\n")] + self._help_line()
+            self._toolbar_cache = (
+                self._rule_line()                       # garis bawah input
+                + [("class:status", "\n")]
+                + status
+                + [("class:status", "\n")]
+                + self._help_line()
+            )
         except Exception:  # noqa: BLE001 - a broken toolbar must not break input
             self._toolbar_cache = [("class:status", "wth-ai")]
         self._toolbar_at = now
@@ -362,6 +391,55 @@ class WTHRepl:
             pass
 
         return out
+
+    def _maybe_open_menu(self, text: str) -> str | None:
+        """Open the interactive menu when the input asks for one.
+
+        Returns the text to submit (possibly rewritten, e.g. `/config` ->
+        `/config show`), or None to skip the turn (menu cancelled). Plain text and
+        commands WITH arguments are returned untouched: the menu is an aid, never a
+        gate between the operator and a command they already typed.
+        """
+        from wth_ai.cli.ui.menu import (
+            build_command_menu,
+            interactive_available,
+            parse_subcommands,
+            run_menu,
+        )
+
+        stripped = (text or "").strip()
+        if not stripped.startswith("/") or not interactive_available():
+            return text
+        if stripped.endswith("?"):          # `/config?` = tanya, bukan buka menu
+            return text
+
+        tokens = stripped.split()
+        if len(tokens) > 1:                  # sudah ada argumen: jangan ganggu
+            return text
+
+        root = tokens[0]
+        if root == "/":
+            choice = run_menu(build_command_menu(), title="Command")
+            return None if choice is None else choice
+
+        try:
+            from wth_ai.platform.registry import get_platform_registry
+
+            registry = get_platform_registry()
+            command = next((c for c in registry.commands if c.name == root), None)
+        except Exception:  # noqa: BLE001
+            command = None
+        if command is None:
+            return text
+
+        subs = parse_subcommands(getattr(command, "usage", "") or "")
+        if not subs:
+            return text
+        from wth_ai.cli.ui.menu import MenuItem
+
+        items = [MenuItem(label=s, description=f"{root} {s}", action=f"{root} {s}") for s in subs]
+        choice = run_menu(items, title=f"{root} · {getattr(command, 'description', '')}"[:60])
+        return None if choice is None else choice
 
     def _print_shortcuts(self) -> None:
         from wth_ai.cli.ui.picker import show_panel
@@ -484,8 +562,7 @@ class WTHRepl:
 
         while True:
             try:
-                prompt_text = self.prompt_fn() if self.prompt_fn else PROMPT_SYMBOL
-                user_input = self.session.prompt(prompt_text)
+                user_input = self.session.prompt(self._prompt_text())
             except (EOFError, KeyboardInterrupt):
                 self._shutdown_quiet()
                 self.console.print(f"\n[{THEME['muted']}]bye[/]")
@@ -494,6 +571,11 @@ class WTHRepl:
             text = user_input.strip()
             if not text:
                 continue
+
+            selected = self._maybe_open_menu(text)
+            if selected is None:
+                continue
+            text = selected.strip()
 
             use_live = self._use_live_panel() and not is_quick_command(text)
             try:
