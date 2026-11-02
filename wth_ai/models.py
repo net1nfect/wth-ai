@@ -78,6 +78,76 @@ class FindingState(str, Enum):
     RETEST_PASSED = "retest_passed"
 
 
+class InvalidFindingStateTransitionError(Exception):
+    """Raised by finding_state_transition_allowed()-guarded callers
+    (FindingsDB.update_finding_state, ClaimStore.update_verification_status)
+    for an illegal transition when running under WTH_TEST_MODE=1 or
+    WTH_STRICT_SM=1 (WU-116, mirrors loop/state_machine.py's
+    InvalidTransitionError pattern, ADR-011)."""
+
+
+_FINDING_STATE_PRE_DECISION = frozenset({
+    FindingState.HYPOTHESIS, FindingState.NEEDS_EVIDENCE, FindingState.CANDIDATE,
+})
+_FINDING_STATE_FORWARD: dict[FindingState, frozenset[FindingState]] = {
+    # VERIFIED may only move FORWARD to a still-a-real-finding triage state.
+    # It can NEVER go to FALSE_POSITIVE or back to a pre-decision state --
+    # both would HIDE a verified finding from the report's verified list
+    # (`[f for f in findings if f.state == VERIFIED]`). That hiding is the
+    # exact bug WU-116 closes.
+    FindingState.VERIFIED: frozenset({FindingState.ACCEPTED_RISK, FindingState.FIXED}),
+    FindingState.FIXED: frozenset({FindingState.RETEST_PASSED}),
+    # FALSE_POSITIVE is deliberately NOT terminal: a finding wrongly dismissed
+    # (e.g. by an earlier/flaky LLM verdict) may be PROMOTED to VERIFIED or
+    # RE-OPENED for more evidence when new evidence arrives. This is the SAFE
+    # direction of the "surface, never hide" ratchet -- it can never flip back
+    # (VERIFIED->FALSE_POSITIVE stays blocked above), so findings monotonically
+    # ratchet TOWARD being surfaced, never silently suppressed. Making
+    # FALSE_POSITIVE terminal (the first WU-116 cut) was over-restrictive and
+    # could permanently suppress a real finding -- contrary to the tool's whole
+    # purpose; corrected in the WU-116/P1 exit review.
+    FindingState.FALSE_POSITIVE: frozenset({
+        FindingState.VERIFIED, FindingState.NEEDS_EVIDENCE, FindingState.CANDIDATE,
+    }),
+}
+
+
+def finding_state_transition_allowed(current: FindingState, new: FindingState) -> bool:
+    """WU-116 (DATA-MODEL.md FindingState lifecycle) -- shared transition
+    guard for Finding.state (FindingsDB) and Claim.verification_status
+    (ClaimStore); both reuse this same enum.
+
+    Design principle: a "surface, never hide" ratchet. Grounded in actual
+    usage (grep-verified against every real call site -- orchestrator._verify,
+    supervisor_dispatch's verify_finding tool, engagement_loop): findings move
+    from a not-yet-decided state to VERIFIED/FALSE_POSITIVE. Two of those sites
+    (orchestrator._verify with an explicit finding_id, and the verify_finding
+    tool) fetch a finding by id WITHOUT filtering by its current state --
+    nothing stops the LLM/user from invoking verify twice on an already-decided
+    finding_id, which previously silently flipped VERIFIED<->FALSE_POSITIVE
+    with no guard at all. That silent flip is the bug this closes.
+
+    The ONE thing the guard protects: a VERIFIED finding can never be silently
+    downgraded/hidden (no VERIFIED->FALSE_POSITIVE, no VERIFIED->pre-decision).
+    The opposite direction (FALSE_POSITIVE->VERIFIED, re-opening for evidence)
+    stays ALLOWED on purpose -- suppressing a real finding is worse than noise
+    for a security tool, and it can't cause flapping because the reverse edge
+    is blocked.
+
+    ACCEPTED_RISK/FIXED/RETEST_PASSED have zero real call sites (as source or
+    target) anywhere in the codebase today -- the forward progression permitted
+    for them reflects the enum's apparent intent (post-verification triage),
+    NOT evidenced usage. Documented explicitly rather than silently invented,
+    so a future WU wiring an actual `/finding accept-risk` or `/finding retest`
+    command knows this is the assumption to revisit.
+    """
+    if current == new:
+        return True
+    if current in _FINDING_STATE_PRE_DECISION:
+        return True
+    return new in _FINDING_STATE_FORWARD.get(current, frozenset())
+
+
 class AssessmentPhase(str, Enum):
     INTAKE = "intake"
     RECON = "recon"
@@ -100,6 +170,11 @@ class Scope:
     test_accounts: list[str] = field(default_factory=list)
     rate_limit_rps: float = 2.0
     forbidden: list[str] = field(default_factory=list)
+    #: Opt-in PER ENGAGEMENT untuk aksi yang mengubah/menghapus data target.
+    #: Default False: alat ini tidak pernah destruktif karena kebetulan. Operator
+    #: membukanya secara eksplisit (`/scope set destructive=yes`), dan tiap aksi
+    #: yang lolos karena flag ini tetap butuh otorisasi target + tercatat.
+    destructive_allowed: bool = False
     notes: str = ""
 
     def to_dict(self) -> dict[str, Any]:
@@ -235,6 +310,14 @@ class ExecutorTask:
     success_criteria: str = ""
     approval_needed: bool = False
     module: str = "dynamic"  # static|dynamic|fuzzer|dependency|log
+    # WU-117 (PRD-009, ADR-002): advisory only -- NOT a DAG scheduler
+    # (rejected explicitly, see ADR-002). priority: lower number = picked
+    # first among ready tasks. depends_on: task ids that must appear in
+    # completed_tasks before this task is picked by advisory auto-select
+    # (sort_tasks_by_dependencies below) -- not hard-enforced anywhere else.
+    priority: int = 5
+    depends_on: list[str] = field(default_factory=list)
+    origin: str = "llm_json"  # provenance: llm_json|chain_planner|manual|...
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> ExecutorTask:
@@ -258,7 +341,29 @@ class ExecutorTask:
             success_criteria=data.get("success_criteria", ""),
             approval_needed=data.get("approval_needed", False),
             module=data.get("module", "dynamic"),
+            priority=data.get("priority", 5),
+            depends_on=data.get("depends_on", []),
+            origin=data.get("origin", "llm_json"),
         )
+
+
+def sort_tasks_by_dependencies(
+    task_queue: list[dict[str, Any]], completed_task_ids: set[str],
+) -> list[dict[str, Any]]:
+    """Advisory sort ONLY (PRD-009 FR#2, ADR-002 -- DAG scheduler explicitly
+    rejected, no cycle detection, no hard enforcement elsewhere). Tasks whose
+    `depends_on` isn't fully satisfied yet (some id not in
+    `completed_task_ids`) are pushed to the back of the queue; each group
+    keeps stable relative order except sorted by `priority` (lower first).
+    """
+    def _ready(t: dict[str, Any]) -> bool:
+        deps = t.get("depends_on") or []
+        return all(d in completed_task_ids for d in deps)
+
+    ready = [t for t in task_queue if _ready(t)]
+    blocked = [t for t in task_queue if not _ready(t)]
+    ready.sort(key=lambda t: t.get("priority", 5))
+    return ready + blocked
 
 
 class PlanHypothesis(BaseModel):
@@ -387,6 +492,48 @@ class Finding:
 
 
 @dataclass
+class Claim:
+    """Evidence-grounded claim (WU-114, ADR-007, DATA-MODEL.md §5) -- unifies
+    what Evidence/EvidenceVault/ExecutorTask.evidence_schema each partially
+    represented. `verification_status` REUSES `FindingState` (not a new
+    enum) -- the same 5-value lifecycle already governs `Finding.state`."""
+
+    claim_id: str
+    text: str
+    claim_type: str = "observation"  # observation|hypothesis_test_result|vulnerability
+    vuln_class: str = ""
+    finding_id: str = ""
+    task_id: str = ""
+    evidence_refs: list[str] = field(default_factory=list)  # ["TX:xxxx","EV:xxxx"] only
+    confidence: float = 0.0
+    verification_status: FindingState = FindingState.HYPOTHESIS
+    severity_hint: str = "info"
+    source: str = ""  # "llm:planner" | "rule:hypothesis_engine" | "executor:idor"
+    captured_via: str = "llm_assertion"  # "broker_execution:<id>" | "llm_assertion"
+    created_at: str = field(default_factory=utc_now)
+    updated_at: str = field(default_factory=utc_now)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "claim_id": self.claim_id,
+            "text": self.text,
+            "claim_type": self.claim_type,
+            "vuln_class": self.vuln_class,
+            "finding_id": self.finding_id,
+            "task_id": self.task_id,
+            "evidence_refs": self.evidence_refs,
+            "confidence": self.confidence,
+            "verification_status": self.verification_status.value
+            if isinstance(self.verification_status, FindingState) else self.verification_status,
+            "severity_hint": self.severity_hint,
+            "source": self.source,
+            "captured_via": self.captured_via,
+            "created_at": self.created_at,
+            "updated_at": self.updated_at,
+        }
+
+
+@dataclass
 class SessionState:
     """Persisted engagement state for resume after token/context limits."""
 
@@ -394,12 +541,19 @@ class SessionState:
     created_at: str = field(default_factory=utc_now)
     updated_at: str = field(default_factory=utc_now)
     scope: Scope = field(default_factory=Scope)
+    # WU-112 Fase A (compat shim, ADR-011/ADR-012): optional link ke Engagement
+    # aggregate. Default "" = tidak ada Engagement tertaut (perilaku pra-WU-112
+    # persis, `scope` tetap satu-satunya sumber otorisasi hari ini). BUKAN
+    # migrasi Fase B -- 105 call-site `state.scope` TIDAK disentuh; ini murni
+    # fondasi supaya Engagement bisa dibuat/ditaut tanpa mengubahnya.
+    engagement_id: str = ""
     permission_mode: PermissionMode = PermissionMode.READ_ONLY_RECON
     current_phase: AssessmentPhase = AssessmentPhase.INTAKE
     known_assets: list[str] = field(default_factory=list)
     attack_surface: list[str] = field(default_factory=list)
     hypotheses: list[dict[str, Any]] = field(default_factory=list)
     findings: list[dict[str, Any]] = field(default_factory=list)
+    claims: list[dict[str, Any]] = field(default_factory=list)  # WU-114 (ADR-007)
     task_queue: list[dict[str, Any]] = field(default_factory=list)
     completed_tasks: list[dict[str, Any]] = field(default_factory=list)
     conversation: list[dict[str, str]] = field(default_factory=list)
@@ -416,12 +570,14 @@ class SessionState:
             "created_at": self.created_at,
             "updated_at": self.updated_at,
             "scope": self.scope.to_dict(),
+            "engagement_id": self.engagement_id,
             "permission_mode": self.permission_mode.value,
             "current_phase": self.current_phase.value,
             "known_assets": self.known_assets,
             "attack_surface": self.attack_surface,
             "hypotheses": self.hypotheses,
             "findings": self.findings,
+            "claims": self.claims,
             "task_queue": self.task_queue,
             "completed_tasks": self.completed_tasks,
             "conversation": self.conversation[-50:],
@@ -441,12 +597,14 @@ class SessionState:
             created_at=data.get("created_at", utc_now()),
             updated_at=data.get("updated_at", utc_now()),
             scope=scope,
+            engagement_id=data.get("engagement_id", ""),  # WU-112 Fase A; data lama tanpa key ini tetap load
             permission_mode=PermissionMode(perm) if perm in {p.value for p in PermissionMode} else PermissionMode.READ_ONLY_RECON,
             current_phase=AssessmentPhase(phase) if phase in {p.value for p in AssessmentPhase} else AssessmentPhase.INTAKE,
             known_assets=data.get("known_assets", []),
             attack_surface=data.get("attack_surface", []),
             hypotheses=data.get("hypotheses", []),
             findings=data.get("findings", []),
+            claims=data.get("claims", []),
             task_queue=data.get("task_queue", []),
             completed_tasks=data.get("completed_tasks", []),
             conversation=data.get("conversation", []),

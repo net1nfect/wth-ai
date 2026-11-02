@@ -254,6 +254,14 @@ class AgentTerminalBridge:
         approval_needed = method_upper not in SAFE_HTTP_METHODS
         if not approval_needed and high_risk_match(content_lower) is not None:
             approval_needed = True
+        # Opt-in destruktif per engagement: kalau operator sudah menyatakan
+        # (scope.destructive_allowed), method yang mengubah data boleh jalan TANPA
+        # gate approval per-request. Default tetap butuh approval -- alat ini tidak
+        # boleh destruktif karena kebetulan.
+        destructive = bool(getattr(self.scope, "destructive_allowed", False))
+        if approval_needed and destructive and not approved:
+            self._audit_destructive(actor, purpose, f"{method_upper} {url}")
+            approval_needed = False
         if approval_needed and not approved:
             return self._blocked(tid, actor, purpose, f"{method} {url}", "Approval required — use /approve")
 
@@ -268,10 +276,20 @@ class AgentTerminalBridge:
                 method.upper(), url, headers=hdrs, data=body, timeout=15, allow_redirects=True,
             )
             body_text = self.scope.redact_secrets(r.text[: self.config.tools.max_output_bytes])
+            from wth_ai.terminal.analysis import analyze_response
+
+            # Analisa header+isi DIHITUNG SEBELUM redaksi isi supaya sidik isi tetap
+            # konsisten antar-request, tapi header yang menarik juga dilaporkan
+            # (routing/auth/content-type) -- inilah bahan untuk uji adaptif.
+            analysis = analyze_response(
+                status=r.status_code, headers=dict(r.headers), body=r.text,
+                method=method.upper(), url=url,
+            )
             result = TerminalResult(
                 transcript_id=tid, actor=actor, purpose=purpose, command=cmd,
                 stdout=body_text, stderr="", exit_code=0 if r.ok else 1,
                 url=url, method=method.upper(), status_code=r.status_code,
+                analysis=self.scope.redact_secrets(analysis),
             )
         except requests.RequestException as exc:
             result = TerminalResult(
@@ -280,6 +298,24 @@ class AgentTerminalBridge:
             )
         self.transcripts.store(result)
         return result
+
+    def _audit_destructive(self, actor: str, purpose: str, cmd: str) -> None:
+        """Catat aksi destruktif yang diizinkan flag engagement.
+
+        Destruktif boleh, TAPI tidak boleh tak terlihat: nama aktor, tujuan, dan
+        perintahnya masuk audit log supaya bisa ditelusuri setelahnya.
+        """
+        try:
+            from wth_ai.audit import audit_log
+
+            audit_log(
+                "destructive_action_allowed",
+                actor=actor,
+                purpose=purpose,
+                command=cmd[:200],
+            )
+        except Exception:  # noqa: BLE001 - audit tidak boleh menggagalkan aksi
+            pass
 
     def _blocked(self, tid: str, actor: str, purpose: str, cmd: str, reason: str) -> TerminalResult:
         result = TerminalResult(

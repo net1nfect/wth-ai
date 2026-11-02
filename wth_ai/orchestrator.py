@@ -840,6 +840,16 @@ class WTHOrchestrator:
                     updates.update({k: v for k, v in intent.items() if v is not None})
                 elif key in ("accounts", "test_accounts"):
                     updates["test_accounts"] = [v.strip() for v in val.split(",") if v.strip()]
+                elif key in ("destructive", "destructive_allowed"):
+                    # Opt-in eksplisit per engagement. Nilai teks dinormalkan ke bool,
+                    # kalau tidak `/scope set destructive=yes` tersimpan sebagai string
+                    # dan gate-nya membaca string truthy -- benar, tapi rapuh.
+                    enabled = val.lower() in {"yes", "true", "1", "on"}
+                    updates["destructive_allowed"] = enabled
+                    if enabled:
+                        notes = updates.get("notes") or self.state.scope.notes or ""
+                        if "destructive=on" not in notes:
+                            updates["notes"] = (notes + " destructive=on").strip()
                 else:
                     updates[key] = val
         self.scope_mgr.update_from_dict(updates)

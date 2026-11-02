@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import re
 from typing import Any
 from urllib.parse import urlparse
 
@@ -37,6 +36,7 @@ class ScopeManager:
             f"- Test accounts: {', '.join(s.test_accounts) or 'none'}",
             f"- Rate limit: {s.rate_limit_rps} req/s",
             f"- Forbidden: {', '.join(s.forbidden) or 'none'}",
+            f"- Destructive: {'DIIZINKAN (opt-in)' if getattr(s, 'destructive_allowed', False) else 'tidak'}",
             f"- Notes: {s.notes or 'none'}",
         ]
         return "\n".join(lines)
@@ -96,11 +96,10 @@ class ScopeManager:
         return True, "Scope OK"
 
     def redact_secrets(self, text: str) -> str:
-        patterns = [
-            (r"(?i)(api[_-]?key|token|password|secret|authorization)\s*[:=]\s*\S+", r"\1=***REDACTED***"),
-            (r"Bearer\s+[A-Za-z0-9\-._~+/]+=*", "Bearer ***REDACTED***"),
-        ]
-        result = text
-        for pattern, repl in patterns:
-            result = re.sub(pattern, repl, result)
-        return result
+        """WU-203: delegate to canonical `wth_ai.redaction.redact_secrets`
+        (single source of truth). Previously a local 2-pattern copy; now also
+        covers AWS keys + JWTs on every surface that redacts output through
+        this method (run_shell/http_probe stdout, tool_runner output)."""
+        from wth_ai.redaction import redact_secrets
+
+        return redact_secrets(text)

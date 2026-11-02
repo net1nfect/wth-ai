@@ -186,6 +186,24 @@ TOOL_DEFINITIONS: dict[str, dict[str, Any]] = {
                     "method": {"type": "string", "enum": ["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE"]},
                     "url": {"type": "string"},
                     "purpose": {"type": "string"},
+                    "body": {
+                        "type": "string",
+                        "description": (
+                            "Badan permintaan (form/JSON/teks). Skema lama TIDAK "
+                            "mencantumkan ini, jadi model tidak punya cara mengirim "
+                            "body padahal handler-nya menerima -- penghalang nyata "
+                            "untuk uji business logic."
+                        ),
+                    },
+                    "compare_to": {
+                        "type": "string",
+                        "description": (
+                            "TX id request sebelumnya. Hasilnya menyertakan DIFF "
+                            "(status/ukuran/isi/sifat error) supaya perubahan satu "
+                            "variabel bisa dibaca langsung -- ini jalur uji adaptif: "
+                            "ubah satu hal, lihat apa yang berubah di server."
+                        ),
+                    },
                     "headers": {
                         "type": "object",
                         "description": (

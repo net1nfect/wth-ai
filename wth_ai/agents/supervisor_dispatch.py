@@ -266,6 +266,31 @@ def _dispatch(ctx: SupervisorContext, name: str, args: dict[str, Any], *, approv
             if ctx.callbacks.on_approval_required:
                 ctx.callbacks.on_approval_required(result.transcript_id)
             return f"APPROVAL_REQUIRED:{result.transcript_id} — ask user to approve"
+        if name == "http_probe":
+            # Pengujian adaptif: agent perlu (a) SINYAL respons, (b) pembanding
+            # terhadap request sebelumnya, dan (c) pasangan request/response yang
+            # masuk ke rantai bukti supaya /verify dan scoring bisa memakainya.
+            from wth_ai.terminal.analysis import diff_responses, evidence_pair
+
+            parts = [result.summary()]
+            if result.analysis:
+                parts.append(result.analysis)
+            compare_to = str(args.get("compare_to") or "").strip()
+            if compare_to:
+                prior = ctx.terminal.transcripts.get(compare_to)
+                if prior:
+                    parts.append(diff_responses(prior, result.to_dict()))
+                else:
+                    parts.append(f"[DIFF vs TX] baseline {compare_to} tidak ditemukan")
+            if not result.blocked:
+                ctx.state.metadata.setdefault("request_pairs", []).append(
+                    evidence_pair(result, role=str(args.get("purpose") or "adaptive"))
+                )
+            if result.stdout:
+                parts.append(result.stdout[:3000])
+            elif result.stderr:
+                parts.append(result.stderr[:500])
+            return "\n".join(part for part in parts if part)
         return result.summary() + "\n" + (result.stdout[:3000] if result.stdout else result.stderr[:500])
 
     if name == "plan_hunt":

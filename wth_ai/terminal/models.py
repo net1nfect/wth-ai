@@ -20,6 +20,10 @@ class TerminalResult:
     url: str = ""
     method: str = ""
     status_code: int = 0
+    #: Ringkasan analisa respons (status/ukuran/sidik isi/header penting). Dipakai
+    #: agent untuk memutuskan langkah berikutnya dari sinyal, bukan membaca ulang
+    #: seluruh badan respons. Lihat `terminal/analysis.py`.
+    analysis: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -35,6 +39,7 @@ class TerminalResult:
             "url": self.url,
             "method": self.method,
             "status_code": self.status_code,
+            "analysis": self.analysis[:4000],
         }
 
     def summary(self) -> str:
