@@ -254,7 +254,9 @@ class AgentConfig:
 @dataclass
 class UIConfig:
     mode: str = "plain"  # plain | tui
-    compact: bool = True
+    # Default False = auto: penuh di terminal, compact saat dipipe (lihat
+    # cli/ui/renderer.compact_enabled). Set True untuk memaksa ringkas.
+    compact: bool = False
     verbose: bool = True
     activity_mode: str = "live"  # live | stream | quiet
     animations: bool = True

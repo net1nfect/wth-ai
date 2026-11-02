@@ -45,12 +45,45 @@ def test_no_animation_env():
 
 
 def test_repl_has_slash_completer():
+    """The completer must still complete slash commands.
+
+    Asserts the CAPABILITY, not the wrapper class: the session now wraps the
+    completer in `FuzzyCompleter` (so `/reocn` still finds `/recon`), and locking
+    the concrete type made that improvement look like a regression.
+    """
+    from prompt_toolkit.completion import CompleteEvent, Completer
+    from prompt_toolkit.document import Document
+
     from wth_ai.cli.repl import WTHRepl
-    from wth_ai.cli.tui.widgets.slash_completer import SlashCompleter
 
     repl = WTHRepl(lambda t: t)
-    assert isinstance(repl.session.completer, SlashCompleter)
+    assert isinstance(repl.session.completer, Completer)
 
+    # A real CompleteEvent, not None: FuzzyCompleter reads it, and passing None
+    # made the completer look broken when the completer was fine.
+    event = CompleteEvent(completion_requested=True)
+    completions = list(repl.session.completer.get_completions(Document("/rec", 4), event))
+    assert completions, "tidak ada completion untuk '/rec'"
+    names = {c.text for c in completions}
+    assert any(n.startswith("/rec") for n in names), names
+
+
+def test_fuzzy_command_still_matches_without_the_broken_wrapper():
+    """`/rcn` must still find `/recon`.
+
+    `FuzzyCompleter` looked like the obvious way to get this, and it silently
+    emptied the menu (it strips the slash before delegating). The capability is
+    asserted here so the wrapper is never re-added as an "improvement".
+    """
+    from prompt_toolkit.completion import Completer
+    from prompt_toolkit.document import Document
+
+    from wth_ai.cli.repl import WTHRepl
+
+    repl = WTHRepl(lambda t: t)
+    assert isinstance(repl.session.completer, Completer)
+    completions = list(repl.session.completer.get_completions(Document("/rcn", 4), None))
+    assert any("/recon" in c.text for c in completions), [c.text for c in completions]
 
 def test_repl_single_live_handler():
     """Progress+Live nesting caused 'Only one live display' — use one Live only."""

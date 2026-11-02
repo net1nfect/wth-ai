@@ -45,8 +45,8 @@ def render_status_panel(
     line2 = Text.assemble(
         (f"session {session}", THEME["muted"]),
         (f"  ·  phase {agent_phase}", THEME["plan"]),
-        (f"  ·  tools {tool_count}", THEME["muted"]),
-        (f"  ·  ext {tools_installed}/{tools_total}", THEME["muted"]),
+        (f"  ·  used {tool_count}", THEME["muted"]),
+        (f"  ·  agent-tools {tools_installed}/{tools_total}", THEME["muted"]),
     )
     if verified:
         line2.append_text(Text(f"  ·  verified {verified}", style=THEME["verify"]))
@@ -82,8 +82,8 @@ def render_status_line(
         f"perm {perm}",
         f"{llm_dot} llm {llm}",
         f"phase {agent_phase}",
-        f"tools {tool_count}",
-        f"ext {tools_installed}/{tools_total}",
+        f"used {tool_count}",                      # tools used in this session
+        f"agent-tools {tools_installed}/{tools_total}",   # LLM-callable tools
         f"cov {cov_pct}%",
         f"session {session}",
     ]
