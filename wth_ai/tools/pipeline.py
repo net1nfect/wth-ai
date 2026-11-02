@@ -13,6 +13,23 @@ from wth_ai.models import LiveHost, ParamCandidate
 from wth_ai.tools.registry import ToolRegistry, _which
 
 
+# Characters that can never legitimately appear in a hostname/IP literal.
+# Pipeline stages hand the target to a tool as a plain argv element (never as a
+# shell string) -- this is a sanity filter so a malformed or hostile target
+# makes the chain skip cleanly instead of being passed to a tool as a bogus
+# argument. It is deliberately permissive: every real host, IPv4, IPv6 and
+# host:port form passes.
+_UNSAFE_TARGET_CHARS = re.compile(r"[\s;|&$`'\"()<>\\{}\n\r\t]")
+
+
+def _safe_target(value: str) -> str | None:
+    """Return an argv-safe target token, or None if it can never be one."""
+    token = (value or "").strip()
+    if not token or _UNSAFE_TARGET_CHARS.search(token):
+        return None
+    return token
+
+
 @dataclass
 class ChainResult:
     name: str
@@ -35,35 +52,82 @@ class ToolChainOrchestrator:
             return None
         return self.registry.binary_path(tool_id) or _which(spec.binary)
 
-    def _run_shell(self, cmd: str) -> tuple[str, str, int]:
+    def _run_pipeline(self, stages: list[list[str]]) -> tuple[str, str, int]:
+        """Run ``a | b | c`` as a real OS pipe built from argv lists — no shell.
+
+        Previously this was a single ``subprocess.run(f"...|...", shell=True)``
+        string assembled with f-strings, so anything reaching ``domain``/``url``
+        was interpreted by /bin/sh. A genuine argv pipe keeps identical
+        ``a | b | c`` semantics with nothing interpreted by a shell at all.
+
+        Stderr is discarded for every stage, matching the ``2>/dev/null`` that
+        the old command strings carried on each one -- so the stderr behaviour
+        of each chain is unchanged.
+        """
+        live = [argv for argv in stages if argv]
+        if not live:
+            return "", "empty command", 1
+
+        procs: list[subprocess.Popen[str]] = []
         try:
-            proc = subprocess.run(
-                cmd,
-                shell=True,
-                capture_output=True,
-                text=True,
-                timeout=self.timeout,
-            )
-            return proc.stdout, proc.stderr, proc.returncode
+            prev: subprocess.Popen[str] | None = None
+            for argv in live:
+                proc = subprocess.Popen(
+                    argv,
+                    stdin=prev.stdout if prev is not None else None,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.DEVNULL,
+                    text=True,
+                )
+                if prev is not None and prev.stdout is not None:
+                    # Close our copy so the upstream stage sees EOF once the
+                    # downstream stage has consumed what it needs.
+                    prev.stdout.close()
+                procs.append(proc)
+                prev = proc
+            stdout, _ = procs[-1].communicate(timeout=self.timeout)
+            for proc in procs[:-1]:
+                try:
+                    proc.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    proc.kill()
+            return stdout or "", "", procs[-1].returncode
         except subprocess.TimeoutExpired:
-            return "", "timeout", 124
+            self._kill_all(procs)
+            return "", f"timeout after {self.timeout}s", 124
         except OSError as exc:
+            self._kill_all(procs)
             return "", str(exc), 1
+
+    @staticmethod
+    def _kill_all(procs: list[subprocess.Popen[str]]) -> None:
+        for proc in procs:
+            try:
+                proc.kill()
+            except OSError:
+                pass
+            try:
+                # Reap, so a timed-out pipeline does not leave zombies behind.
+                proc.wait(timeout=5)
+            except (subprocess.TimeoutExpired, OSError):
+                pass
 
     def chain_subdomain_dns_http(self, domain: str) -> ChainResult:
         """subfinder | dnsx | httpx — core subdomain → live host pipeline."""
+        host = _safe_target(domain)
+        if host is None:
+            return ChainResult("subdomain_dns_http", "", "invalid target", 1)
         subfinder = self._bin("subfinder")
         dnsx = self._bin("dnsx")
         httpx = self._bin("httpx")
-        if not all([subfinder, dnsx, httpx]):
+        if subfinder is None or dnsx is None or httpx is None:
             return ChainResult("subdomain_dns_http", "", "missing tools", 1)
 
-        cmd = (
-            f"{subfinder} -d {domain} -silent 2>/dev/null | "
-            f"{dnsx} -a -aaaa -silent 2>/dev/null | "
-            f"{httpx} -silent -status-code -title -tech-detect -json 2>/dev/null"
-        )
-        stdout, stderr, code = self._run_shell(cmd)
+        stdout, stderr, code = self._run_pipeline([
+            [subfinder, "-d", host, "-silent"],
+            [dnsx, "-a", "-aaaa", "-silent"],
+            [httpx, "-silent", "-status-code", "-title", "-tech-detect", "-json"],
+        ])
         parsed = self._parse_httpx_json(stdout)
         if not parsed.get("hosts") and stdout:
             parsed = self._parse_httpx_text(stdout)
@@ -71,26 +135,35 @@ class ToolChainOrchestrator:
 
     def chain_gau_sqli_candidates(self, domain: str) -> ChainResult:
         """gau + gf sqli pattern filter."""
+        host = _safe_target(domain)
+        if host is None:
+            return ChainResult("gau_sqli", "", "invalid target", 1)
         gau = self._bin("gau")
         if not gau:
             return ChainResult("gau_sqli", "", "gau missing", 1)
         gf = self._bin("gf")
-        cmd = f"{gau} {domain} 2>/dev/null"
+        stages: list[list[str]] = [[gau, host]]
         if gf:
-            cmd += f" | {gf} sqli 2>/dev/null"
+            stages.append([gf, "sqli"])
         else:
-            cmd += " | grep -Ei '(id=|user=|page=|cat=)' 2>/dev/null"
-        stdout, stderr, code = self._run_shell(cmd)
+            stages.append(["grep", "-Ei", "(id=|user=|page=|cat=)"])
+        stdout, stderr, code = self._run_pipeline(stages)
         urls = [ln.strip() for ln in stdout.splitlines() if ln.strip().startswith("http")]
         return ChainResult("gau_sqli", stdout, stderr, code, {"urls": urls[:500]})
 
     def chain_katana_params(self, url: str, *, depth: int = 2) -> ChainResult:
         """katana crawl → extract param URLs."""
+        # Validate the target before touching the registry, so a malformed
+        # target fails identically whether or not the binaries are installed.
+        target = _safe_target(url)
+        if target is None:
+            return ChainResult("katana_params", "", "invalid target", 1)
         katana = self._bin("katana")
         if not katana:
             return ChainResult("katana_params", "", "katana missing", 1)
-        cmd = f"{katana} -u {url} -d {depth} -silent -jc 2>/dev/null"
-        stdout, stderr, code = self._run_shell(cmd)
+        stdout, stderr, code = self._run_pipeline([
+            [katana, "-u", target, "-d", str(depth), "-silent", "-jc"],
+        ])
         urls = [ln.strip() for ln in stdout.splitlines() if ln.strip().startswith("http")]
         params: list[dict[str, str]] = []
         for u in urls:

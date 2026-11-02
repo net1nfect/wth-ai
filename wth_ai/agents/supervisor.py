@@ -48,6 +48,11 @@ class SupervisorAgent(BaseLLMAgent):
     def stop(self) -> str:
         self._stopped = True
         if self._ctx:
+            # WU-106: ctx.stopped is what AgentToolLoop actually reads --
+            # self._stopped alone was write-only (set here, never read
+            # anywhere) before this WU. Kept in sync for any external code
+            # still inspecting SupervisorAgent._stopped directly.
+            self._ctx.stopped = True
             self._ctx.state.current_phase = AssessmentPhase.STOPPED
         return "Agent stopped. Say anything to continue or `/help`."
 
@@ -62,6 +67,13 @@ class SupervisorAgent(BaseLLMAgent):
         if self._ctx is None:
             return "Supervisor not initialized"
         self._ctx.state = state
+        # WU-106: "Say anything to continue" (stop()'s own return message) --
+        # a NEW user turn clears a previous /stop. Known narrow race (not
+        # hardened further, this is best-effort UX not a security boundary):
+        # if a stop for turn N arrives while turn N+1 is already inside this
+        # reset, turn N+1 could clear it before turn N's loop observes it.
+        self._stopped = False
+        self._ctx.stopped = False
         if callbacks:
             self._ctx.callbacks = callbacks
         if persist_fn:
@@ -112,6 +124,14 @@ class SupervisorAgent(BaseLLMAgent):
         self._ctx.callbacks.on_approval_required = lambda tid: self._on_approval(tid, on_approval)
 
         started = time.time()
+        # The approval the operator just granted applies to THIS turn only.
+        # `approved_tasks` used to be read but never cleared, so a single "yes"
+        # left `approved=True` on every dispatch of every later turn for the
+        # rest of the session -- a standing bypass of the human-approval
+        # dimension instead of approval of the one action that was pending.
+        # (`orchestrator._approved_tasks`, the `/execute` path, is separate and
+        # untouched.)
+        turn_approved = bool(self._ctx.approved_tasks)
         result = loop.run(
             self.config.models.planner,
             self.system_prompt,
@@ -119,8 +139,10 @@ class SupervisorAgent(BaseLLMAgent):
             actor="supervisor",
             backup=self.config.models.planner_backup,
             timeout=self.config.models.planner_timeout_seconds,
-            approved=bool(self._ctx.approved_tasks),
+            approved=turn_approved,
         )
+        if turn_approved:
+            self._ctx.approved_tasks.clear()
         elapsed = round(time.time() - started, 1)
         content = (result.get("content") or "").strip()
         if not content:
@@ -141,25 +163,17 @@ class SupervisorAgent(BaseLLMAgent):
             chained(task_id)
 
     def _build_context_block(self, state: SessionState) -> str:
-        cov = self._ctx.asset_graph.coverage() if self._ctx else {}
-        from wth_ai.memory.md_context import context_block as md_block
-        md = md_block()
-        parts = [
-            f"Session: {state.session_id}",
-            f"Target: {state.scope.target or 'unset'}",
-            f"Authorized: {state.scope.authorized}",
-            f"Permission: {state.permission_mode.value}",
-            f"Phase: {state.current_phase.value}",
-            f"Graph nodes: {cov.get('nodes', 0)} coverage: {cov.get('coverage_pct', 0)}%",
-            f"Queued tasks: {len(state.task_queue)}",
-        ]
-        if self._ctx and self._ctx.action_memory:
-            am = self._ctx.action_memory.context_block()
-            if am:
-                parts.append(am)
-        if md:
-            parts.append(md)
-        return "\n".join(parts)
+        """WU-111 (ADR-004): migrated to `ContextBuilder` -- same sources
+        (action_memory + md_context) and same unconditional session-summary
+        preamble as the hand-rolled version this replaces, byte-for-byte
+        equivalent output for this call site."""
+        from wth_ai.context.builder import ContextBuilder
+
+        builder = ContextBuilder(
+            action_memory=self._ctx.action_memory if self._ctx else None,
+            asset_graph=self._ctx.asset_graph if self._ctx else None,
+        )
+        return builder.build(state, sources=["action_memory", "md_context"])
 
     def _offline_fallback(self, text: str, state: SessionState) -> str:
         from wth_ai.scope_intent import parse_scope_intent

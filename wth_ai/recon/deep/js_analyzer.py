@@ -7,6 +7,8 @@ from typing import Any
 
 import requests
 
+from wth_ai.redaction import MASKED
+
 ROUTE_PATTERNS = [
     re.compile(r"""['"](/api/[^'"?\s]+)['"]"""),
     re.compile(r"""['"](/v\d+/[^'"?\s]+)['"]"""),
@@ -52,7 +54,11 @@ class JsAnalyzer:
                 continue
             routes.extend(self.extract_routes(content, base_url))
             for m in re.findall(r"(?i)(api[_-]?key|aws[_-]?access|secret)\s*[:=]\s*['\"]([^'\"]{8,})['\"]", content):
-                secrets.append(f"{m[0]}={m[1][:20]}... @ {url}")
+                # `m[1][:20]` used to be written out -- 20 characters of the
+                # secret, which is the ENTIRE AWS access-key id (AKIA + 16) and
+                # enough of most other keys to be a leak. Every other surface
+                # masks with the canonical constant; do the same here.
+                secrets.append(f"{m[0]}={MASKED} @ {url}")
         return {
             "routes": list(dict.fromkeys(routes))[:200],
             "secrets": secrets[:20],

@@ -8,7 +8,7 @@ from typing import Any, Callable
 import requests
 
 from wth_ai.llm.errors import LLMError
-from wth_ai.llm.providers.base import BaseLLMProvider
+from wth_ai.llm.providers.base import BaseLLMProvider, raise_for_status
 
 
 class OllamaProvider(BaseLLMProvider):
@@ -37,8 +37,9 @@ class OllamaProvider(BaseLLMProvider):
 
     def list_models(self) -> list[str]:
         try:
-            r = requests.get(f"{self.base_url}/api/tags", timeout=10)
-            r.raise_for_status()
+            url = f"{self.base_url}/api/tags"
+            r = requests.get(url, timeout=10)
+            raise_for_status(self.name, "list-models", url, r)
             models = r.json().get("models", [])
             return [m.get("name", "") for m in models if m.get("name")]
         except Exception:
@@ -72,7 +73,7 @@ class OllamaProvider(BaseLLMProvider):
         if payload["stream"]:
             full: list[str] = []
             with requests.post(url, json=payload, timeout=req_timeout, stream=True) as r:
-                r.raise_for_status()
+                raise_for_status(self.name, model, url, r)
                 for line in r.iter_lines(decode_unicode=True):
                     if not line:
                         continue
@@ -85,7 +86,7 @@ class OllamaProvider(BaseLLMProvider):
                         break
             return "".join(full)
         r = requests.post(url, json=payload, timeout=req_timeout)
-        r.raise_for_status()
+        raise_for_status(self.name, model, url, r)
         return r.json()["message"]["content"]
 
     def chat_with_tools(
@@ -107,6 +108,6 @@ class OllamaProvider(BaseLLMProvider):
         }
         url = f"{self.base_url}/api/chat"
         r = requests.post(url, json=payload, timeout=timeout or self.default_timeout)
-        r.raise_for_status()
+        raise_for_status(self.name, model, url, r)
         data = r.json()
         return {"message": data.get("message", {}), "model": model, "raw": data}

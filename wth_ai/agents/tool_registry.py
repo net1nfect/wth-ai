@@ -41,7 +41,11 @@ TOOL_DEFINITIONS: dict[str, dict[str, Any]] = {
                 "properties": {
                     "mode": {
                         "type": "string",
-                        "enum": ["read_only_recon", "standard_testing", "elevated_testing", "full_lab"],
+                        # Real PermissionMode values. The previous enum listed
+                        # "read_only_recon"/"standard_testing"/"elevated_testing",
+                        # none of which `PermissionMode(value)` accepts -- so the
+                        # model could only ever set full_lab.
+                        "enum": ["read_only", "standard", "elevated", "full_lab", "unrestricted"],
                     },
                 },
                 "required": ["mode"],
@@ -117,6 +121,17 @@ TOOL_DEFINITIONS: dict[str, dict[str, Any]] = {
                     "method": {"type": "string", "enum": ["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE"]},
                     "url": {"type": "string"},
                     "purpose": {"type": "string"},
+                    "headers": {
+                        "type": "object",
+                        "description": (
+                            "Optional request headers. For a target credential "
+                            "(e.g. Authorization/session token), use a "
+                            "'vault:<name>' reference as the value instead of "
+                            "the plaintext secret -- it is resolved just-in-time "
+                            "server-side and the real value is never sent back "
+                            "to you or stored in any transcript."
+                        ),
+                    },
                 },
                 "required": ["url"],
             },

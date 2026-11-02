@@ -77,6 +77,18 @@ class CronStore:
 
     def add(self, job_type: str, target: str, schedule: str, *, profile: str = "recon-only") -> CronEntry:
         entries = self._load()
+        # Idempotent per (job_type, target). `wth recon watch example.com`
+        # previously appended a SECOND entry whenever it was re-run (e.g. to
+        # change the profile), so the target was scanned twice per interval --
+        # double the traffic for one watch. Re-running now updates the existing
+        # entry instead of duplicating it.
+        for e in entries:
+            if e.job_type == job_type and e.target == target:
+                e.schedule = schedule
+                e.profile = profile
+                e.enabled = True
+                self._save(entries)
+                return e
         entry = CronEntry(
             cron_id=str(uuid.uuid4())[:8],
             job_type=job_type,

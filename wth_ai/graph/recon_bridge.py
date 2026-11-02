@@ -127,28 +127,45 @@ def sync_recon_to_graph(
     if data is None:
         norm_dir = base / "normalized"
         if norm_dir.exists():
+            # Bucket -> the file `ReconNormalizer.write_normalized()` ACTUALLY
+            # writes. Three of these do not follow the `<bucket>.json`
+            # convention (urls -> crawl_urls.json, http_probes -> alive_urls.json,
+            # fingerprints -> fingerprint.json), which is why the previous
+            # f"{name}.json" guess silently dropped every URL, HTTP probe and
+            # technology on this fallback path -- the path taken whenever
+            # normalized_result.json is absent (older jobs, or a run that died
+            # before the engine wrote it).
+            bucket_files = {
+                "subdomains": "subdomains.json",
+                "dns_records": "dns_records.json",
+                "urls": "crawl_urls.json",
+                "http_probes": "alive_urls.json",
+                "tls": "tls.json",
+                "fingerprints": "fingerprint.json",
+                "endpoints": "endpoints.json",
+                "params": "params.json",
+                "js_intel": "js_intel.json",
+                "secret_candidates": "secret_candidates.json",
+                "cloud_candidates": "cloud_candidates.json",
+                "findings": "findings.json",
+            }
             merged: dict[str, Any] = {}
-            for name in (
-                "subdomains", "dns_records", "urls", "http_probes", "headers",
-                "cookies", "tls", "fingerprints", "endpoints", "params",
-                "js_intel", "secret_candidates", "cloud_candidates", "findings",
-            ):
-                fp = norm_dir / f"{name}.json"
-                if name == "headers":
-                    hc = norm_dir / "headers_cookies.json"
-                    if hc.exists():
-                        try:
-                            blob = json.loads(hc.read_text(encoding="utf-8"))
-                            merged["headers"] = blob.get("headers", [])
-                            merged["cookies"] = blob.get("cookies", [])
-                        except (OSError, json.JSONDecodeError):
-                            pass
+            for bucket, fname in bucket_files.items():
+                fp = norm_dir / fname
+                if not fp.exists():
                     continue
-                if fp.exists():
-                    try:
-                        merged[name] = json.loads(fp.read_text(encoding="utf-8"))
-                    except (OSError, json.JSONDecodeError):
-                        pass
+                try:
+                    merged[bucket] = json.loads(fp.read_text(encoding="utf-8"))
+                except (OSError, json.JSONDecodeError):
+                    pass
+            hc = norm_dir / "headers_cookies.json"
+            if hc.exists():
+                try:
+                    blob = json.loads(hc.read_text(encoding="utf-8"))
+                    merged["headers"] = blob.get("headers", [])
+                    merged["cookies"] = blob.get("cookies", [])
+                except (OSError, json.JSONDecodeError):
+                    pass
             if merged:
                 data = merged
     if not data:

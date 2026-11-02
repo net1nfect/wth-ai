@@ -45,10 +45,25 @@ from wth_ai.scope_manager import ScopeManager
 from wth_ai.session_store import SessionStore
 from wth_ai.skills.registry import SkillRegistry
 from wth_ai.skills.fusion import SkillFusionEngine
-from wth_ai.slash_commands import SlashCommandHandler
 from wth_ai.cli.recon_wizard import ReconWizard
 from wth_ai.terminal.bridge import AgentTerminalBridge
 from wth_ai.tool_runner import ToolRunner
+
+
+def _finding_learning_label(finding: Any) -> str:
+    """Stable label for a verified finding in the learning memory.
+
+    Prefers the CWE; otherwise the first token of the title; otherwise
+    ``"unnamed"``. A finding title is allowed to be empty (the
+    ``FINDING_CANDIDATE`` block parser accepts a bare ``- title:``), and the
+    pre-fix inline ``finding.cwe or finding.title.split()[0].lower()`` raised
+    ``IndexError: list index out of range`` for exactly that case.
+    """
+    if getattr(finding, "cwe", ""):
+        return str(finding.cwe)
+    title = str(getattr(finding, "title", "") or "")
+    return (title.split() or ["unnamed"])[0].lower()
+
 
 class WTHOrchestrator:
     """User → SupervisorAgent → tool loop (full agentic)."""
@@ -61,7 +76,6 @@ class WTHOrchestrator:
         self.approval_gate = ApprovalGate()
         self.findings_db = FindingsDB()
         self.session_store = SessionStore(self.config)
-        self.slash = SlashCommandHandler()
         from wth_ai.cli.slash_router import build_slash_router
         self.slash_router = build_slash_router(self)
         self._load_plugins_into_slash()
@@ -99,6 +113,17 @@ class WTHOrchestrator:
             self.memory = EngagementMemory(self.state.session_id)
             self.asset_graph = AssetGraph(self.state.session_id)
             self.evidence_vault = EvidenceVault(self.state.session_id)
+        # WU-113 (ADR-004): asset_graph diset pasca-konstruksi -- EngagementMemory
+        # dibangun SEBELUM AssetGraph di urutan init ini (dan bisa dibangun
+        # ulang di blok `if not fresh`), sama seperti alasan wiring
+        # evidence_vault WU-117 di bawah.
+        self.memory.asset_graph = self.asset_graph
+        # WU-117 (PRD-009): tool_runner butuh evidence_vault untuk wiring
+        # stop_condition (early-exit command_plan begitu evidence_schema
+        # sudah terpenuhi) -- diset sebagai atribut pasca-konstruksi, bukan
+        # constructor param, karena EvidenceVault dibuat SETELAH ToolRunner
+        # di urutan init ini (dan bisa dibuat ulang di blok `if not fresh`).
+        self.tool_runner.evidence_vault = self.evidence_vault
         self._reinit_terminal()
         self.executor = ExecutorAgent(
             self.config, self.client, self.tool_runner, self.manifest_runner,
@@ -221,7 +246,9 @@ class WTHOrchestrator:
         self.findings_db = FindingsDB()
         self._approved_tasks.clear()
         self.asset_graph = AssetGraph(self.state.session_id)
+        self.memory.asset_graph = self.asset_graph  # WU-113: re-wire after new_session() rebuilds asset_graph
         self.evidence_vault = EvidenceVault(self.state.session_id)
+        self._rewire_session_services()
         self._reinit_terminal()
         self.executor = ExecutorAgent(
             self.config, self.client, self.tool_runner, self.manifest_runner,
@@ -231,6 +258,31 @@ class WTHOrchestrator:
         self._init_supervisor_ctx()
         self._persist()
         return self.state.session_id
+
+    def _rewire_session_services(self) -> None:
+        """Point every long-lived service at the CURRENT session's objects.
+
+        `new_session()` replaces `scope_mgr`, `evidence_vault`, `asset_graph` and
+        the session id, but `tool_runner` and `manifest_runner` receive those by
+        constructor injection in `__init__` and were never refreshed. Verified on
+        the pre-fix code: after `new_session()`,
+        `tool_runner.scope is orch.scope_mgr` was False -- a scope check answered
+        by the PREVIOUS session's ScopeManager (letting through a target the new
+        session rejects), and evidence written into the dead session's vault
+        while `stop_condition` early-exit consulted that same stale vault.
+        `EngagementMemory` had the same problem, so it is rebuilt here too.
+        """
+        for runner in (getattr(self, "tool_runner", None), getattr(self, "manifest_runner", None)):
+            if runner is None:
+                continue
+            if hasattr(runner, "scope"):
+                runner.scope = self.scope_mgr
+            if hasattr(runner, "permission"):
+                runner.permission = self.permission_mgr
+            if hasattr(runner, "evidence_vault"):
+                runner.evidence_vault = self.evidence_vault
+        self.memory = EngagementMemory(self.state.session_id)
+        self.memory.asset_graph = self.asset_graph
 
     def startup_message(self) -> str:
         from wth_ai.cli.theme import THEME
@@ -334,6 +386,7 @@ class WTHOrchestrator:
         self.scope_mgr.scope = self.state.scope
         self.findings_db.load_from_dict({"findings": self.state.findings, "hypotheses": self.state.hypotheses})
         self.asset_graph = AssetGraph(self.state.session_id)
+        self.memory.asset_graph = self.asset_graph  # WU-113: re-wire after resume() rebuilds asset_graph
         self.evidence_vault = EvidenceVault(self.state.session_id)
         self._reinit_terminal()
         self.executor = ExecutorAgent(
@@ -351,26 +404,18 @@ class WTHOrchestrator:
         if not text:
             return ""
         lower = text.lower()
-        if lower in {"/help", "help", "?", "bantuan"}:
-            parts = text.split(maxsplit=1)
-            topic = parts[1].strip().lower() if len(parts) > 1 else None
-            return self.slash_router.help_text(topic)
-        if lower in {"/quit", "/exit", "quit", "exit"}:
+        # WU-118 (PRD-002 FR#1): fast-path RETAINED ONLY for bare (no `/`)
+        # quit/exit/stop -- SlashRouter.parse() structurally requires a `/`
+        # prefix, so these bare forms need a translation step here. Every
+        # OTHER command (help, new-session, resume, doctor, status, sessions)
+        # is now a regular SlashRouter.handlers entry (see
+        # cli/slash_router.py::build_slash_router()) -- previously a SEPARATE
+        # literal if/elif block here, unsynced with the /-prefixed form of
+        # the SAME command already registered in SlashRouter.handlers.
+        if lower in {"quit", "exit"}:
             self.request_quit()
-        if lower in {"/stop", "stop"}:
+        if lower == "stop":
             return self.supervisor.stop()
-        if lower == "/new-session":
-            sid = self.new_session()
-            return f"Session baru: {sid}"
-        if lower.startswith("/resume"):
-            parts = text.split(maxsplit=1)
-            return self.resume(parts[1] if len(parts) > 1 else None)
-        if lower == "/doctor":
-            return self.doctor.full_report()
-        if lower == "/status":
-            return self._status_summary("WTH-AI Status")
-        if lower == "/sessions":
-            return self._list_sessions()
 
         if text.startswith("/"):
             routed = self.slash_router.route(text)
@@ -388,7 +433,9 @@ class WTHOrchestrator:
 
         # Hybrid routing: chat vs security-assess based on intent.
         agent_mode = getattr(getattr(self.config, "agent", None), "mode", "hybrid")
-        intent = self.skill_router.detect_intent(text)
+        # WU-119: session-aware fallback -- follow-up tanpa keyword eksplisit
+        # tapi di tengah engagement aktif (target+phase != INTAKE) -> "assess".
+        intent = self.skill_router.detect_intent(text, session_state=self.state)
         if agent_mode in {"hybrid", "chat"} and intent == "chat":
             resp = self._chat_turn(text)
             self._index_fts(text, resp)
@@ -844,8 +891,13 @@ class WTHOrchestrator:
             if verdict == "verified":
                 self.findings_db.update_finding_state(finding.id, FindingState.VERIFIED)
                 tech = self.state.metadata.get("tech_profile", "generic_web")
+                # `finding.cwe` is often empty and `title` can legitimately be
+                # empty (the FINDING_CANDIDATE block parser accepts `- title:`
+                # with no value), so a bare `finding.title.split()[0]` used to
+                # raise IndexError here -- which aborted the whole /verify run,
+                # not just this one finding's learning record.
                 self.learning.record_from_finding(
-                    tech, finding.cwe or finding.title.split()[0].lower(),
+                    tech, _finding_learning_label(finding),
                     verified=True, session_id=self.state.session_id,
                 )
             elif verdict == "false_positive":
@@ -889,6 +941,7 @@ class WTHOrchestrator:
             "approval_needed": task.approval_needed,
             "module": task.module,
             "evidence_schema": task.evidence_schema,
+            "priority": task.priority, "depends_on": task.depends_on, "origin": task.origin,
         }
 
     def _sync_state_from_db(self) -> None:

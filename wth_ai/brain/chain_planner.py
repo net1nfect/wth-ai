@@ -56,6 +56,29 @@ class ExploitChain:
         }
 
 
+def _normalize_steps(raw: Any) -> list[dict[str, Any]]:
+    """Coerce a chain definition into step dicts.
+
+    Two producers feed this module with differently-shaped chains:
+    ``CHAIN_TEMPLATES`` below uses dicts
+    (``{"step": ..., "action": ..., "proof": ...}``) while
+    ``brain/rules.yaml`` writes a plain string list
+    (``chain: [baseline_user_a, swap_id_user_b, diff_response]``, surfaced as
+    ``chain_steps`` by ``hypothesis_engine``). The string form used to reach
+    ``steps[-1].get("proof")`` and die with
+    ``AttributeError: 'str' object has no attribute 'get'``, which took down
+    the whole ``/plan`` run rather than one chain.
+    """
+    out: list[dict[str, Any]] = []
+    for item in raw or []:
+        if isinstance(item, dict):
+            out.append(item)
+        elif isinstance(item, str) and item.strip():
+            name = item.strip()
+            out.append({"step": name, "action": name, "proof": name})
+    return out
+
+
 class ChainPlanner:
     """Build exploit chains from hypotheses."""
 
@@ -67,9 +90,9 @@ class ChainPlanner:
         chains: list[ExploitChain] = []
         for hyp in hypotheses[:15]:
             vc = hyp.get("vuln_class", "unknown")
-            steps = hyp.get("chain_steps") or CHAIN_TEMPLATES.get(vc, [])
+            steps = _normalize_steps(hyp.get("chain_steps") or CHAIN_TEMPLATES.get(vc, []))
             if not steps and vc in CHAIN_TEMPLATES:
-                steps = CHAIN_TEMPLATES[vc]
+                steps = _normalize_steps(CHAIN_TEMPLATES[vc])
             if not steps:
                 continue
             chains.append(ExploitChain(
@@ -104,6 +127,6 @@ class ChainPlanner:
                 allowed_tools=["httpx", "curl", "diff_brain"],
                 evidence_schema=chain.evidence_schema,
                 module=module_map.get(chain.vuln_class, "dynamic"),
-                command_plan=[{"command": s.get("action", ""), "purpose": s.get("step", "")} for s in chain.steps],
+                command_plan=[{"command": s.get("action", ""), "purpose": s.get("step", "")} for s in _normalize_steps(chain.steps)],
             ))
         return tasks

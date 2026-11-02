@@ -136,5 +136,12 @@ class BrowserController:
             return {"success": False, "error": str(exc)}
 
 
+# Modes allowed to drive the browser. UNRESTRICTED is the most permissive
+# dimension-2 (capability) label, so this allow-list has to be a superset of
+# the lower modes -- omitting it made the MOST permissive mode the only one
+# that could not browse at all (orchestrator.py::_browser_probe gates on this).
+_BROWSER_ALLOWED_MODES = frozenset({"standard", "elevated", "full_lab", "unrestricted"})
+
+
 def browser_allowed(permission_mode: PermissionMode) -> bool:
-    return permission_mode.value in {"standard", "elevated", "full_lab"}
+    return permission_mode.value in _BROWSER_ALLOWED_MODES

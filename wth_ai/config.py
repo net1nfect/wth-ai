@@ -97,9 +97,9 @@ class ProviderPrefsConfig:
 
 @dataclass
 class SafetyConfig:
-    unrestricted: bool = False
+    unrestricted: bool = False  # dimensi 2 (capability ceiling) -- lihat engagement/mode.py
     default_permission: str = "full_lab"
-    require_authorized: bool = False
+    require_authorized: bool = True  # dimensi 1 (scope authorization) -- WU-003, default AMAN
 
 
 @dataclass
@@ -136,6 +136,7 @@ class TelegramIntegration:
     enabled: bool = False
     bot_token_ref: str | None = None  # e.g. "vault:telegram_bot_token"
     allowed_chat_ids: list[str] = field(default_factory=list)
+    owner_user_ids: list[str] = field(default_factory=list)  # WU-009 (NET-01): role real, bukan hardcode
     notify: dict[str, bool] = field(default_factory=lambda: dict(DEFAULT_NOTIFY_RULES))
 
 
@@ -239,7 +240,7 @@ class AgentConfig:
     max_iters: int = 50
     recon_profile: str = "recon-only"
     stream_tools: bool = True
-    auto_approve_unrestricted: bool = True
+    auto_approve_unrestricted: bool = False  # dimensi 3 (human approval) -- WU-003, default AMAN
     mode: str = "hybrid"  # hybrid | chat | security
 
 
@@ -422,8 +423,14 @@ class WTHConfig:
             "ollama_base_url": self.secrets.ollama_base_url,
             "router9_base_url": self.secrets.router9_base_url,
         }
-        if self.secrets.custom_base_url:
-            secrets_out["custom_base_url"] = self.secrets.custom_base_url
+        # Any endpoint override the operator set must survive a save/reload.
+        # Only custom_base_url used to be written, so a base URL configured for
+        # openai/anthropic/google (a proxy, a gateway, a self-hosted mirror) was
+        # silently dropped the next time the config was saved.
+        for field in ("custom_base_url", "openai_base_url", "anthropic_base_url", "google_base_url"):
+            value = getattr(self.secrets, field, None)
+            if value:
+                secrets_out[field] = value
         for field, vname in (
             ("router9_api_key", "router9_api_key"),
             ("openrouter_api_key", "openrouter_api_key"),
@@ -452,6 +459,7 @@ class WTHConfig:
                 "enabled": ig.telegram.enabled,
                 "bot_token_ref": ig.telegram.bot_token_ref,
                 "allowed_chat_ids": ig.telegram.allowed_chat_ids,
+                "owner_user_ids": ig.telegram.owner_user_ids,
                 "notify": ig.telegram.notify,
             },
             "discord": {
@@ -519,6 +527,12 @@ class WTHConfig:
             lines.append(f"TELEGRAM_BOT_TOKEN={self.bots.telegram_token}")
         USER_ENV_PATH.parent.mkdir(parents=True, exist_ok=True)
         USER_ENV_PATH.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        # WU-210 (DATA-04): this file holds PLAINTEXT provider/bot secrets --
+        # chmod 600 immediately after writing (same treatment as USER_CONFIG_PATH
+        # above / vault.key), otherwise it is created world/group-readable per
+        # the process umask.
+        from wth_ai.workspace import secure_file
+        secure_file(USER_ENV_PATH)
         for line in lines:
             if "=" in line:
                 k, v = line.split("=", 1)
@@ -577,6 +591,7 @@ def _parse_integrations(raw: dict[str, Any]) -> IntegrationsConfig:
         enabled=bool(tg_raw.get("enabled", False)),
         bot_token_ref=tg_raw.get("bot_token_ref"),
         allowed_chat_ids=[str(x) for x in tg_raw.get("allowed_chat_ids", [])],
+        owner_user_ids=[str(x) for x in tg_raw.get("owner_user_ids", [])],
         notify=_notify(tg_raw),
     )
     discord = DiscordIntegration(

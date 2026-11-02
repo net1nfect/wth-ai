@@ -7,8 +7,8 @@ import time
 from typing import Any
 
 from wth_ai.agents.supervisor_context import SupervisorContext
-from wth_ai.engagement.mode import is_unrestricted
-from wth_ai.models import AssessmentPhase, ExecutorTask, FindingState, PermissionMode
+from wth_ai.engagement.mode import auto_approve_enabled
+from wth_ai.models import AssessmentPhase, ExecutorTask, FindingState, PermissionMode, sort_tasks_by_dependencies
 
 
 def dispatch_supervisor_tool(
@@ -57,7 +57,12 @@ def _dispatch(ctx: SupervisorContext, name: str, args: dict[str, Any], *, approv
         in_scope = args.get("in_scope") or ([target] if target else [])
         ctx.scope_mgr.set_scope(
             target=target,
-            authorized=args.get("authorized", True),
+            # WU-011 (AGENT-01): default False, bukan True. "authorized" TIDAK
+            # ada di required[] tool schema (tool_registry.py) -- LLM bisa
+            # memanggil scope_set(target=...) tanpa pernah menyebut otorisasi
+            # sama sekali dan sebelumnya lolos jadi authorized=True begitu
+            # saja. Fail-closed law: MISSING -> DENY.
+            authorized=args.get("authorized", False),
             environment=args.get("environment", "production"),
             in_scope=in_scope,
             rate_limit_rps=args.get("rate_limit_rps", ctx.scope_mgr.scope.rate_limit_rps),
@@ -73,10 +78,13 @@ def _dispatch(ctx: SupervisorContext, name: str, args: dict[str, Any], *, approv
     if name == "permission_set":
         mode = args.get("mode", "read_only_recon")
         try:
-            pm = PermissionMode(mode)
-        except ValueError:
-            return f"Invalid mode: {mode}"
-        ctx.permission_mgr.set_mode(pm)
+            # `set_mode()` applies PERMISSION_ALIASES (so the legacy spellings
+            # still resolve) and reports the VALID list on failure.
+            # `PermissionMode(mode)` did neither, which is why three of the four
+            # modes the tool schema advertised came back as "Invalid mode".
+            pm = ctx.permission_mgr.set_mode(mode)
+        except ValueError as exc:
+            return f"Invalid mode: {mode} — {exc}"
         ctx.state.permission_mode = pm
         return f"Permission mode: {pm.value}"
 
@@ -116,6 +124,14 @@ def _dispatch(ctx: SupervisorContext, name: str, args: dict[str, Any], *, approv
         target = args.get("target") or ctx.state.scope.target
         if not target:
             return "ERROR: set scope target first"
+        # Both the tool name and the target come from the model, and
+        # `ReconAgentBridge` holds no ScopeManager of its own (`SafeToolRunner`
+        # only checks binary availability), so nothing downstream would reject
+        # an out-of-scope host. Verified on the pre-fix code: a `target`
+        # argument was forwarded verbatim into `run_tool`.
+        in_scope, scope_msg = ctx.scope_mgr.is_in_scope(target)
+        if not in_scope:
+            return f"ERROR: target out of scope — {scope_msg}"
         out = ctx.recon_bridge.run_tool(args.get("tool_name", ""), target=target)
         ctx.state.metadata["last_recon"] = ctx.recon_bridge.state_snapshot()
         ctx.state.metadata["graph_coverage"] = ctx.asset_graph.coverage()
@@ -152,7 +168,7 @@ def _dispatch(ctx: SupervisorContext, name: str, args: dict[str, Any], *, approv
         return "No vault or transcript"
 
     if name in ("http_probe", "run_shell"):
-        auto = ctx.config.agent.auto_approve_unrestricted and is_unrestricted()
+        auto = auto_approve_enabled(ctx.config)
         result = ctx.terminal.dispatch_tool(name, args, actor="supervisor", approved=approved or auto)
         if result.blocked and "approval" in (result.block_reason or "").lower():
             if ctx.callbacks.on_approval_required:
@@ -175,7 +191,7 @@ def _dispatch(ctx: SupervisorContext, name: str, args: dict[str, Any], *, approv
         ctx.state.task_queue = [_task_dict(t) for t in tasks]
         for hyp in plan_result.get("hypotheses", []):
             ctx.findings_db.add_hypothesis(hyp)
-        ctx.state.current_phase = AssessmentPhase.PLANNING
+        ctx.state.current_phase = AssessmentPhase.HYPOTHESIS
         return json.dumps({
             "summary": plan_result.get("planner_summary", "")[:2000],
             "tasks": len(tasks),
@@ -195,15 +211,20 @@ def _dispatch(ctx: SupervisorContext, name: str, args: dict[str, Any], *, approv
                     task_dict = td
                     break
         elif ctx.state.task_queue:
-            task_dict = ctx.state.task_queue[0]
+            # WU-117 (PRD-009): advisory sort -- task dengan depends_on yang
+            # belum masuk completed_tasks didorong ke belakang. Hanya
+            # berlaku di jalur auto-select ini (task_id eksplisit di atas
+            # TIDAK terpengaruh -- itu pilihan eksplisit pemanggil).
+            completed_ids = {t.get("id") for t in ctx.state.completed_tasks}
+            task_dict = sort_tasks_by_dependencies(ctx.state.task_queue, completed_ids)[0]
         if not task_dict:
             return "No task in queue"
         task = ExecutorTask.from_dict(task_dict)
-        auto = ctx.config.agent.auto_approve_unrestricted and is_unrestricted()
+        auto = auto_approve_enabled(ctx.config)
         result = ctx.executor.execute_module(task, ctx.state, approved=approved or auto or task.id in ctx.approved_tasks)
         ctx.state.completed_tasks.append(result.to_dict())
         ctx.state.task_queue = [t for t in ctx.state.task_queue if t.get("id") != task.id]
-        ctx.state.current_phase = AssessmentPhase.EXECUTION
+        ctx.state.current_phase = AssessmentPhase.DYNAMIC
         return json.dumps(result.to_dict(), indent=2)[:4000]
 
     if name == "verify_finding":
@@ -234,7 +255,7 @@ def _dispatch(ctx: SupervisorContext, name: str, args: dict[str, Any], *, approv
         if not ctx.reporter:
             return "Reporter unavailable"
         report = ctx.reporter.build(ctx.state, ctx.findings_db, evidence_vault=ctx.evidence_vault)
-        ctx.state.current_phase = AssessmentPhase.REPORTING
+        ctx.state.current_phase = AssessmentPhase.REPORT
         return report[:12000]
 
     if name == "job_create_recon":
@@ -247,6 +268,7 @@ def _dispatch(ctx: SupervisorContext, name: str, args: dict[str, Any], *, approv
             "recon", target=target, profile=args.get("profile", "recon-only"),
             created_by="supervisor",
             metadata={"authorized": ctx.state.scope.authorized},
+            permission_mode=ctx.state.permission_mode,
         )
         return json.dumps({"job_id": job.job_id, "status": job.status}, indent=2)
 
@@ -291,6 +313,9 @@ def _task_dict(task: ExecutorTask) -> dict[str, Any]:
         "permission_required": task.permission_required.value if task.permission_required else None,
         "evidence_schema": task.evidence_schema,
         "approval_needed": task.approval_needed,
+        "priority": task.priority,
+        "depends_on": task.depends_on,
+        "origin": task.origin,
     }
 
 
