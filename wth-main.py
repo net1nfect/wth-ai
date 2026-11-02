@@ -120,7 +120,8 @@ def usage_cmd() -> None:
 @click.option("--steps", default=6, show_default=True, help="Langkah per cycle.")
 @click.option("--cycles", default=2, show_default=True, help="Jumlah pass adaptif.")
 @click.option("--dry-run", is_flag=True, help="Susun rencana tanpa menjalankan apa pun.")
-def autopilot_group(target: str | None, steps: int, cycles: int, dry_run: bool) -> None:
+@click.option("--every", default=None, help="Daftarkan sebagai cron, mis. 6h / 30m.")
+def autopilot_group(target: str | None, steps: int, cycles: int, dry_run: bool, every: str | None) -> None:
     """Operasi otonom: susun langkah berbatas dari temuan, jalankan, lalu belajar."""
     from wth_ai.workspace import init_workspace
 
@@ -132,6 +133,16 @@ def autopilot_group(target: str | None, steps: int, cycles: int, dry_run: bool) 
     chosen = target or orch.state.scope.target
     if not chosen:
         click.echo("Tidak ada target. Pakai --target atau set scope dulu (/target).")
+        return
+    if every:
+        from wth_ai.cron.store import CronStore
+
+        store = CronStore()
+        entry = store.add(target=chosen, schedule=f"every {every}",
+                          job_type="autopilot", profile="recon-only")
+        click.echo(f"Cron autopilot terdaftar: {entry.cron_id} · {entry.schedule} · target {chosen}")
+        click.echo("Ticker akan menjalankan autopilot berbatas sesuai jadwal. "
+                   "Gerbang destruktif tetap dibaca dari scope saat job berjalan.")
         return
     if dry_run:
         from wth_ai.hunt.autopilot import run_autopilot
@@ -175,6 +186,26 @@ def payloads_show(payload_id: str) -> None:
         click.echo(f"{payload_id}: tidak ada di katalog")
         return
     click.echo(json.dumps(payload.to_dict(), indent=2, ensure_ascii=False))
+
+
+@payloads_group.command("gen")
+@click.option("--class", "vuln_class", required=True, help="Kelas kerentanan.")
+@click.option("--goal", required=True, help="Tujuan pengujian menurut operator.")
+@click.option("--tech", "tech_stack", default="", help="Teknologi target (opsional).")
+@click.option("--count", default=3, show_default=True)
+@click.option("--config", "config_path", default="config/wth_config.yaml", show_default=True)
+def payloads_gen(vuln_class: str, goal: str, tech_stack: str, count: int, config_path: str) -> None:
+    """Minta AI menyusun payload BARU, lalu validasi + simpan ke store generate."""
+    from wth_ai.hunt.generator import format_generation, generate_with_llm, save_generated
+    from wth_ai.llm.router import LLMProviderRouter
+
+    router = LLMProviderRouter(_load_config(config_path))
+    result = generate_with_llm(router, vuln_class=vuln_class, goal=goal,
+                               tech_stack=tech_stack, count=count)
+    if result.accepted:
+        path = save_generated(result.accepted)
+        result.saved_path = str(path) if path else ""
+    click.echo(format_generation(result))
 
 
 @payloads_group.command("doc")

@@ -220,6 +220,38 @@ TOOL_DEFINITIONS: dict[str, dict[str, Any]] = {
             },
         },
     },
+    "propose_payload": {
+        "type": "function",
+        "function": {
+            "name": "propose_payload",
+            "description": (
+                "Ajukan payload BARU yang kamu susun sendiri (di luar katalog) untuk "
+                "situasi spesifik di engagement ini. Payload divalidasi: wajib memuat "
+                "proves + probe(url) dan cleanup bila destruktif. Yang berdampak massal "
+                "(blast_radius 'mass') tetap DISIMPAN sebagai dokumentasi tetapi TIDAK "
+                "pernah dijalankan mesin. Payload destruktif hanya jalan bila engagement "
+                "membuka opt-in; tanpa itu ia tersimpan dan tidak dieksekusi."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "vuln_class": {"type": "string"},
+                    "title": {"type": "string"},
+                    "proves": {"type": "string", "description": "Temuan apa yang dibuktikan."},
+                    "probe": {
+                        "type": "object",
+                        "description": "Argumen http_probe: method, url, body, headers.",
+                    },
+                    "blast_radius": {"type": "string", "enum": ["self", "single-object", "mass"]},
+                    "reversible": {"type": "boolean"},
+                    "cleanup": {"type": "string", "description": "Wajib bila mengubah/menghapus data."},
+                    "requires_destructive": {"type": "boolean"},
+                    "run_now": {"type": "boolean", "description": "Jalankan bila batas mengizinkan."},
+                },
+                "required": ["vuln_class", "title", "proves", "probe"],
+            },
+        },
+    },
     "run_shell": {
         "type": "function",
         "function": {

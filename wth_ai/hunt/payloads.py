@@ -426,9 +426,30 @@ PAYLOADS: tuple[Payload, ...] = (
 # --------------------------------------------------------------------------- #
 # penyaring & penyaji
 # --------------------------------------------------------------------------- #
+def generated_payloads() -> list[Payload]:
+    """Payload hasil karangan AI (dimuat dari store). Gagal-baca -> katalog statis saja."""
+    try:
+        from wth_ai.hunt.generator import load_generated
+
+        return load_generated()
+    except Exception:  # noqa: BLE001
+        return []
+
+
+def all_payloads(*, include_generated: bool = True) -> list[Payload]:
+    """Katalog statis + payload hasil generate AI."""
+    if not include_generated:
+        return list(PAYLOADS)
+    merged: dict[str, Payload] = {payload.id: payload for payload in PAYLOADS}
+    for payload in generated_payloads():
+        merged.setdefault(payload.id, payload)
+    return list(merged.values())
+
+
 def get_payload(payload_id: str) -> Payload | None:
-    for payload in PAYLOADS:
-        if payload.id.lower() == str(payload_id).strip().lower():
+    wanted = str(payload_id).strip().lower()
+    for payload in all_payloads():
+        if payload.id.lower() == wanted:
             return payload
     return None
 
@@ -448,7 +469,7 @@ def filter_payloads(
     """
     limit = BLAST_ORDER.get(max_blast, 1)
     out: list[Payload] = []
-    for payload in PAYLOADS:
+    for payload in all_payloads():
         if vuln_class and payload.vuln_class != vuln_class:
             continue
         if BLAST_ORDER.get(payload.blast_radius, 2) > limit:

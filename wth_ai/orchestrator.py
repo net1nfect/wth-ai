@@ -341,6 +341,21 @@ class WTHOrchestrator:
         """`/payloads [kelas] [--destructive]` — katalog payload berbatas."""
         from wth_ai.hunt.payloads import filter_payloads, format_payloads, get_payload
 
+        if args and args[0] == "gen":
+            goal = " ".join(args[2:]) if len(args) > 2 else "temukan bug pada alur ini"
+            vuln_class = args[1] if len(args) > 1 else "adaptive"
+            from wth_ai.hunt.generator import format_generation, generate_with_llm, save_generated
+
+            router = getattr(self, "client", None)
+            if router is None:
+                return "Router LLM tidak tersedia."
+            result = generate_with_llm(router, vuln_class=vuln_class, goal=goal,
+                                       tech_stack=str(self.state.metadata.get("tech_profile", "")))
+            if result.accepted:
+                path = save_generated(result.accepted)
+                result.saved_path = str(path) if path else ""
+            return format_generation(result)
+
         if args and args[0] not in {"list", "semua"}:
             payload = get_payload(args[0])
             if payload is None:
