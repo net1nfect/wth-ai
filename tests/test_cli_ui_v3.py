@@ -173,7 +173,7 @@ def test_toolbar_renders_without_an_orchestrator():
     # No orchestrator: the bar still shows a working context (`~`) and controls,
     # and must not start with a stray separator.
     assert "~" in status and not status.startswith(" ·")
-    assert "for agents" in lines[2]
+    assert "agents" in lines[2] and "pgup" in lines[2]
 
 
 def test_toolbar_never_raises_even_if_the_orchestrator_is_broken():

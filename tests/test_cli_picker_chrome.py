@@ -248,7 +248,9 @@ def test_toolbar_is_two_lines_status_then_help():
     text = "".join(s for _, s in segs)
     assert "\n" in text, "toolbar harus dua baris (status + bantuan)"
     status, _, help_line = text.partition("\n")
-    assert "← for agents" in help_line and "? for shortcuts" in help_line
+    # Hint sekarang lebih ringkas dan menyebut pager: "← agents · ? shortcuts · pgup output"
+    assert "agents" in help_line and "shortcuts" in help_line
+    assert "pgup output" in help_line, "hint harus memberi tahu PageUp tersedia"
     assert status.strip(), "baris status tidak boleh kosong"
 
 
