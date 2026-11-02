@@ -394,3 +394,79 @@ def test_bare_command_without_subcommands_gets_no_menu(monkeypatch):
     repl = _repl()
     # /doctor punya usage tanpa bracket -> tidak ada menu, teks diteruskan apa adanya
     assert repl._maybe_open_menu("/doctor") == "/doctor"
+
+
+# --------------------------------------------------------------------------- #
+# leaves that need arguments must never be submitted half-finished
+#
+# Measured: selecting `/model use` (the verb, without its number) ran
+# `_model_set_role(planner, "use")` and PERSISTED a model named "use".
+# --------------------------------------------------------------------------- #
+_MEASURED_ARG_LEAVES = (
+    ("/model", "use"), ("/model", "set"), ("/config", "set"), ("/cron", "add"),
+    ("/cron", "remove"), ("/graph", "query"), ("/hunt", "goal"), ("/plan", "goal"),
+    ("/intel", "domain"), ("/help", "topic"), ("/memory", "edit"), ("/memory", "search"),
+)
+
+
+def _leaf(command: str, verb: str):
+    for category in build_command_menu():
+        for cmd in category.children:
+            if cmd.label == command:
+                return next((c for c in cmd.children if c.label == verb), None)
+    return None
+
+
+def test_measured_argument_leaves_are_flagged():
+    missing = [(c, v) for c, v in _MEASURED_ARG_LEAVES if not (_leaf(c, v) and _leaf(c, v).needs_args)]
+    assert not missing, f"leaf ini masih dianggap command lengkap: {missing}"
+
+
+def test_flagged_leaves_ask_the_repl_to_prefill():
+    item = _leaf("/model", "use")
+    assert item.action.endswith(" "), "aksi harus menandai 'masih perlu argumen'"
+
+
+def test_complete_leaves_do_not_ask_for_prefill():
+    for command, verb in (("/model", "list"), ("/model", "show"), ("/config", "show")):
+        item = _leaf(command, verb)
+        assert item is not None and not item.needs_args, f"{command} {verb} salah ditandai"
+
+
+def test_repl_prefills_only_for_incomplete_choices():
+    from wth_ai.cli.repl import WTHRepl
+
+    assert WTHRepl._needs_more_input("/model use ", "/model") is True
+    assert WTHRepl._needs_more_input("/model show", "/model") is False
+    # operator yang sudah mengetik spasi sendiri tidak dipaksa mengetik lagi
+    assert WTHRepl._needs_more_input("/model use ", "/model ") is False
+
+
+def test_model_verb_without_argument_never_becomes_a_model_name(monkeypatch):
+    """The corruption test: `/model use` must print usage, not persist "use"."""
+    from wth_ai.config import ProviderRoleConfig
+
+    class _Cfg:
+        def __init__(self):
+            self.providers = {"planner": ProviderRoleConfig(type="custom", model="auto")}
+            self.saved = 0
+
+        def save_user_config(self):
+            self.saved += 1
+
+    class _Client:
+        def list_models(self, provider_type):
+            return ["auto", "glm-5.3-flash-rr"]
+
+    class _Orch:
+        def __init__(self):
+            self.config = _Cfg()
+            self.client = _Client()
+
+    from wth_ai.cli.handlers.setup_handler import handle_model
+
+    orch = _Orch()
+    out = handle_model(orch, ["use"])
+    assert "Usage" in out or "butuh argumen" in out
+    assert orch.config.providers["planner"].model == "auto", "config tersentuh!"
+    assert orch.config.saved == 0, "config disimpan padahal tidak ada yang diubah"
