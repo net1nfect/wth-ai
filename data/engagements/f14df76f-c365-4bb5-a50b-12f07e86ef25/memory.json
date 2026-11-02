@@ -1,0 +1,46 @@
+{
+  "session_id": "f14df76f-c365-4bb5-a50b-12f07e86ef25",
+  "updated_at": "2026-07-06T16:29:30.228506+00:00",
+  "assets": [
+    "ssc-siakad-697406990.ap-southeast-1.elb.amazonaws.com",
+    "18.141.34.97",
+    "56.10.19.145",
+    "\"universitas-a.ssc.sevimaplatform.com\"",
+    "universitas-a.ssc.sevimaplatform.com",
+    "https://universitas-a.ssc.sevimaplatform.com"
+  ],
+  "routes": [
+    {
+      "path": "ssc-siakad-697406990.ap-southeast-1.elb.amazonaws.com",
+      "type": "host"
+    },
+    {
+      "path": "18.141.34.97",
+      "type": "host"
+    },
+    {
+      "path": "56.10.19.145",
+      "type": "host"
+    },
+    {
+      "path": "\"universitas-a.ssc.sevimaplatform.com\"",
+      "type": "host"
+    },
+    {
+      "path": "universitas-a.ssc.sevimaplatform.com",
+      "type": "host"
+    },
+    {
+      "path": "https://universitas-a.ssc.sevimaplatform.com",
+      "type": "endpoint"
+    }
+  ],
+  "controllers": [],
+  "middleware": [],
+  "input_surfaces": [],
+  "trust_boundaries": [],
+  "rejected_hypotheses": [],
+  "evidence_gaps": [],
+  "iteration": 5,
+  "tech_profile": "generic_web"
+}

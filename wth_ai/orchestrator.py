@@ -7,6 +7,8 @@ import json
 from typing import Any, Callable
 
 from wth_ai.agents.chat import ChatAgent
+from wth_ai.agents.supervisor import SupervisorAgent
+from wth_ai.agents.supervisor_context import SupervisorCallbacks, SupervisorContext
 from wth_ai.agents.executor import ExecutorAgent
 from wth_ai.agents.planner import PlannerAgent
 from wth_ai.agents.report_builder import ReportBuilderAgent
@@ -35,7 +37,7 @@ from wth_ai.memory.engagement_memory import EngagementMemory
 from wth_ai.memory.learning import HuntMemoryLearning
 from wth_ai.mcp.client import MCPClient
 from wth_ai.probe.diff_brain import ResponseDiffBrain
-from wth_ai.recon.orchestrator import ReconOrchestrator
+from wth_ai.recon.agent_bridge import ReconAgentBridge
 from wth_ai.tools.doctor import ToolDoctor
 from wth_ai.tools.registry import ToolRegistry
 from wth_ai.tools.runner import ManifestToolRunner
@@ -43,13 +45,28 @@ from wth_ai.scope_manager import ScopeManager
 from wth_ai.session_store import SessionStore
 from wth_ai.skills.registry import SkillRegistry
 from wth_ai.skills.fusion import SkillFusionEngine
-from wth_ai.slash_commands import SlashCommandHandler
 from wth_ai.cli.recon_wizard import ReconWizard
 from wth_ai.terminal.bridge import AgentTerminalBridge
 from wth_ai.tool_runner import ToolRunner
 
+
+def _finding_learning_label(finding: Any) -> str:
+    """Stable label for a verified finding in the learning memory.
+
+    Prefers the CWE; otherwise the first token of the title; otherwise
+    ``"unnamed"``. A finding title is allowed to be empty (the
+    ``FINDING_CANDIDATE`` block parser accepts a bare ``- title:``), and the
+    pre-fix inline ``finding.cwe or finding.title.split()[0].lower()`` raised
+    ``IndexError: list index out of range`` for exactly that case.
+    """
+    if getattr(finding, "cwe", ""):
+        return str(finding.cwe)
+    title = str(getattr(finding, "title", "") or "")
+    return (title.split() or ["unnamed"])[0].lower()
+
+
 class WTHOrchestrator:
-    """User → Intent Router → Chat | Planner | Executor | Verifier | Report"""
+    """User → SupervisorAgent → tool loop (full agentic)."""
 
     def __init__(self, config: WTHConfig | None = None, *, fresh: bool = False) -> None:
         self.config = config or WTHConfig.load()
@@ -59,7 +76,10 @@ class WTHOrchestrator:
         self.approval_gate = ApprovalGate()
         self.findings_db = FindingsDB()
         self.session_store = SessionStore(self.config)
-        self.slash = SlashCommandHandler()
+        from wth_ai.cli.slash_router import build_slash_router
+        self.slash_router = build_slash_router(self)
+        self._load_plugins_into_slash()
+        self._ui_bus = None
         self.skills = SkillRegistry(
             openclaw_path=self.config.skills.openclaw_path,
             local_path=self.config.skills.local_path,
@@ -82,7 +102,7 @@ class WTHOrchestrator:
         self.verifier = VerifierAgent(self.config, self.client)
         self.reporter = ReportBuilderAgent(self.config, self.client)
         self.chat = ChatAgent(self.config, self.client, self.skills)
-        self.recon = ReconOrchestrator(self.config)
+        self.supervisor = SupervisorAgent(self.config, self.client)
         self.browser = BrowserController(headless=self.config.browser.headless)
         self.asset_graph = AssetGraph(self.state.session_id)
         self.hypothesis_engine = HypothesisEngine()
@@ -93,6 +113,17 @@ class WTHOrchestrator:
             self.memory = EngagementMemory(self.state.session_id)
             self.asset_graph = AssetGraph(self.state.session_id)
             self.evidence_vault = EvidenceVault(self.state.session_id)
+        # WU-113 (ADR-004): asset_graph diset pasca-konstruksi -- EngagementMemory
+        # dibangun SEBELUM AssetGraph di urutan init ini (dan bisa dibangun
+        # ulang di blok `if not fresh`), sama seperti alasan wiring
+        # evidence_vault WU-117 di bawah.
+        self.memory.asset_graph = self.asset_graph
+        # WU-117 (PRD-009): tool_runner butuh evidence_vault untuk wiring
+        # stop_condition (early-exit command_plan begitu evidence_schema
+        # sudah terpenuhi) -- diset sebagai atribut pasca-konstruksi, bukan
+        # constructor param, karena EvidenceVault dibuat SETELAH ToolRunner
+        # di urutan init ini (dan bisa dibuat ulang di blok `if not fresh`).
+        self.tool_runner.evidence_vault = self.evidence_vault
         self._reinit_terminal()
         self.executor = ExecutorAgent(
             self.config, self.client, self.tool_runner, self.manifest_runner,
@@ -100,12 +131,99 @@ class WTHOrchestrator:
         )
         self.planner.set_terminal(self.terminal, self.asset_graph, self.evidence_vault)
         self._stream_callback: Callable[[str], None] | None = None
+        self._tool_trace = None
+        self._cron_ticker = None
+        self._init_supervisor_ctx()
+        import os
+        if os.environ.get("WTH_TEST_MODE") != "1" and os.environ.get("WTH_DISABLE_CRON") != "1":
+            self._start_local_cron()
+
+    def _start_local_cron(self) -> None:
+        try:
+            from wth_ai.cron.ticker import LocalCronTicker
+            self._cron_ticker = LocalCronTicker(self._supervisor_ctx.job_manager)
+            self._cron_ticker.start()
+        except Exception:
+            self._cron_ticker = None
+
+    def _load_plugins_into_slash(self) -> None:
+        try:
+            from wth_ai.plugins.manager import PluginManager
+
+            pm = PluginManager(self.config)
+            loaded = pm.load_all()
+            for cmd, handler in pm.slash_handlers().items():
+                if cmd not in self.slash_router.handlers:
+                    self.slash_router.handlers[cmd] = handler
+            if loaded:
+                self.state.metadata["plugins_loaded"] = loaded
+        except Exception:
+            pass
+
+    def _init_supervisor_ctx(self) -> None:
+        from wth_ai.jobs.manager import JobManager
+        from wth_ai.memory.action_memory import ActionMemory
+        profile = self.config.agent.recon_profile
+        bridge = ReconAgentBridge(
+            self.state.session_id, profile=profile, graph=self.asset_graph,
+        )
+        ctx = SupervisorContext(
+            config=self.config,
+            client=self.client,
+            state=self.state,
+            scope_mgr=self.scope_mgr,
+            permission_mgr=self.permission_mgr,
+            asset_graph=self.asset_graph,
+            evidence_vault=self.evidence_vault,
+            findings_db=self.findings_db,
+            terminal=self.terminal,
+            action_memory=ActionMemory(self.state.session_id),
+            planner=self.planner,
+            executor=self.executor,
+            verifier=self.verifier,
+            reporter=self.reporter,
+            skill_router=self.skill_router,
+            job_manager=JobManager(self.config),
+            recon_bridge=bridge,
+            approved_tasks=self._approved_tasks,
+            persist_fn=self._persist,
+            orchestrator=self,
+        )
+        self.supervisor.bind(ctx)
+        self._supervisor_ctx = ctx
 
     def _reinit_terminal(self) -> None:
         self.terminal = AgentTerminalBridge(
             self.config, self.permission_mgr, self.scope_mgr, self.state.session_id,
             registry=self.tool_registry,
+            on_line=self._on_terminal_line if self._verbose_ui_enabled() else None,
         )
+
+    def _verbose_ui_enabled(self) -> bool:
+        from wth_ai.cli.ui.activity_stream import verbose_enabled
+        return verbose_enabled(self.config)
+
+    def _on_terminal_line(self, line: str) -> None:
+        from wth_ai.cli.ui.activity_stream import verbose_enabled
+        if not verbose_enabled(self.config):
+            return
+        ui = getattr(self.config, "ui", None)
+        activity_mode = getattr(ui, "activity_mode", "live") if ui else "live"
+        stream = getattr(self, "_activity_stream", None)
+        trace = self._tool_trace
+        bus = self._ui_bus
+        if stream and activity_mode == "stream":
+            stream.on_subprocess_line(line)
+        if trace and activity_mode == "live":
+            trace.add_log_line(f"$ {line}")
+        if bus:
+            bus.emit("subprocess_line", line=line)
+
+    def _patch_terminal_verbose(self) -> None:
+        """Rebind terminal subprocess lines to verbose UI sinks."""
+        if not hasattr(self, "terminal") or not hasattr(self.terminal, "runner"):
+            return
+        self.terminal.runner.on_line = self._on_terminal_line if self._verbose_ui_enabled() else None
 
     def set_stream_callback(self, callback: Callable[[str], None] | None) -> None:
         self._stream_callback = callback
@@ -128,15 +246,43 @@ class WTHOrchestrator:
         self.findings_db = FindingsDB()
         self._approved_tasks.clear()
         self.asset_graph = AssetGraph(self.state.session_id)
+        self.memory.asset_graph = self.asset_graph  # WU-113: re-wire after new_session() rebuilds asset_graph
         self.evidence_vault = EvidenceVault(self.state.session_id)
+        self._rewire_session_services()
         self._reinit_terminal()
         self.executor = ExecutorAgent(
             self.config, self.client, self.tool_runner, self.manifest_runner,
             terminal=self.terminal, evidence_vault=self.evidence_vault, asset_graph=self.asset_graph,
         )
         self.planner.set_terminal(self.terminal, self.asset_graph, self.evidence_vault)
+        self._init_supervisor_ctx()
         self._persist()
         return self.state.session_id
+
+    def _rewire_session_services(self) -> None:
+        """Point every long-lived service at the CURRENT session's objects.
+
+        `new_session()` replaces `scope_mgr`, `evidence_vault`, `asset_graph` and
+        the session id, but `tool_runner` and `manifest_runner` receive those by
+        constructor injection in `__init__` and were never refreshed. Verified on
+        the pre-fix code: after `new_session()`,
+        `tool_runner.scope is orch.scope_mgr` was False -- a scope check answered
+        by the PREVIOUS session's ScopeManager (letting through a target the new
+        session rejects), and evidence written into the dead session's vault
+        while `stop_condition` early-exit consulted that same stale vault.
+        `EngagementMemory` had the same problem, so it is rebuilt here too.
+        """
+        for runner in (getattr(self, "tool_runner", None), getattr(self, "manifest_runner", None)):
+            if runner is None:
+                continue
+            if hasattr(runner, "scope"):
+                runner.scope = self.scope_mgr
+            if hasattr(runner, "permission"):
+                runner.permission = self.permission_mgr
+            if hasattr(runner, "evidence_vault"):
+                runner.evidence_vault = self.evidence_vault
+        self.memory = EngagementMemory(self.state.session_id)
+        self.memory.asset_graph = self.asset_graph
 
     def startup_message(self) -> str:
         from wth_ai.cli.theme import THEME
@@ -148,7 +294,87 @@ class WTHOrchestrator:
             f"[{THEME['text']}]wth v{__version__}[/] [{THEME['muted']}]realtime · TTST[/] [{THEME['muted']}]authorized only[/]\n"
             f"[{THEME['muted']}]target[/] {target} · [{THEME['muted']}]perm[/] {perm} · "
             f"[{THEME['muted']}]tools[/] {ts['installed']}/{ts['total']} · [{THEME['muted']}]llm[/] {llm}\n"
-            f"[{THEME['muted']}]type /help or /scope set target=domain.com authorized=yes[/]"
+            f"[{THEME['muted']}]chat to hunt · e.g. scope example.com then recon/hunt[/]"
+        )
+
+    def _ui_callbacks(self) -> SupervisorCallbacks:
+        trace = self._tool_trace
+        bus = self._ui_bus
+        stream = getattr(self, "_activity_stream", None)
+        from wth_ai.cli.ui.activity_stream import verbose_enabled
+        verbose = verbose_enabled(self.config)
+        ui = getattr(self.config, "ui", None)
+        activity_mode = getattr(ui, "activity_mode", "live") if ui else "live"
+        use_stream = verbose and activity_mode == "stream"
+        use_trace = verbose and activity_mode == "live"
+
+        def on_start(name: str, args: dict) -> None:
+            if trace and use_trace:
+                trace.add_pending(name, args)
+            if stream and use_stream:
+                stream.on_tool_start(name, args)
+            if bus:
+                bus.emit("tool_start", name=name, args=args)
+
+        def on_end(name: str, result: str, ms: int) -> None:
+            if trace and use_trace:
+                trace.complete(name, result, ms)
+            if stream and use_stream:
+                stream.on_tool_end(name, result, ms)
+            if bus:
+                bus.emit("tool_end", name=name, result=result, ms=ms)
+
+        def on_phase(phase: str, pct: int) -> None:
+            if trace and use_trace:
+                trace.set_phase(phase, pct)
+            if stream and use_stream:
+                stream.on_phase(phase, pct)
+            if self._supervisor_ctx:
+                self._supervisor_ctx.current_phase = phase
+            if bus:
+                bus.emit("phase", phase=phase, pct=pct)
+
+        def on_token(t: str) -> None:
+            if stream and use_stream and getattr(getattr(self.config, "ui", None), "stream_tokens", True):
+                stream.on_token(t)
+            if self._stream_callback:
+                self._stream_callback(t)
+            if bus:
+                bus.emit("token", text=t)
+
+        def on_llm_start(role: str, provider: str, model: str, meta: dict) -> None:
+            if trace and use_trace:
+                host = meta.get("host", "")
+                trace.set_llm(f"llm {role} · {model} · {provider}" + (f" · {host}" if host else ""))
+            if stream and use_stream:
+                stream.on_llm_start(role, provider, model, meta)
+            if bus and verbose:
+                bus.emit("llm_start", role=role, provider=provider, model=model, meta=meta)
+
+        def on_llm_tick(role: str, elapsed_s: int) -> None:
+            if trace and use_trace:
+                trace.set_llm(f"llm {role} · waiting {elapsed_s}s…")
+            if stream and use_stream:
+                stream.on_llm_tick(role, elapsed_s)
+            if bus and verbose:
+                bus.emit("llm_tick", role=role, elapsed_s=elapsed_s)
+
+        def on_llm_end(role: str, model: str, ms: int, meta: dict) -> None:
+            if trace and use_trace:
+                trace.clear_llm()
+            if stream and use_stream:
+                stream.on_llm_end(role, model, ms, meta)
+            if bus and verbose:
+                bus.emit("llm_end", role=role, model=model, ms=ms, meta=meta)
+
+        return SupervisorCallbacks(
+            on_tool_start=on_start,
+            on_tool_end=on_end,
+            on_phase_change=on_phase,
+            on_token=on_token,
+            on_llm_start=on_llm_start,
+            on_llm_tick=on_llm_tick,
+            on_llm_end=on_llm_end,
         )
 
     def resume(self, session_id: str | None = None) -> str:
@@ -159,79 +385,127 @@ class WTHOrchestrator:
         self.permission_mgr.set_mode(self.state.permission_mode)
         self.scope_mgr.scope = self.state.scope
         self.findings_db.load_from_dict({"findings": self.state.findings, "hypotheses": self.state.hypotheses})
+        self.asset_graph = AssetGraph(self.state.session_id)
+        self.memory.asset_graph = self.asset_graph  # WU-113: re-wire after resume() rebuilds asset_graph
+        self.evidence_vault = EvidenceVault(self.state.session_id)
+        self._reinit_terminal()
+        self.executor = ExecutorAgent(
+            self.config, self.client, self.tool_runner, self.manifest_runner,
+            terminal=self.terminal, evidence_vault=self.evidence_vault, asset_graph=self.asset_graph,
+        )
+        self.planner.set_terminal(self.terminal, self.asset_graph, self.evidence_vault)
+        self._init_supervisor_ctx()
         summary = self.session_store.resume_context_summary(self.state)
         self._persist()
         return f"✓ Session resumed: {self.state.session_id}\n\n{summary}"
 
     def handle_input(self, user_input: str) -> str:
-        wizard_resp = ReconWizard.handle_input(self, user_input)
-        if wizard_resp is not None:
-            return wizard_resp
+        text = user_input.strip()
+        if not text:
+            return ""
+        lower = text.lower()
+        # WU-118 (PRD-002 FR#1): fast-path RETAINED ONLY for bare (no `/`)
+        # quit/exit/stop -- SlashRouter.parse() structurally requires a `/`
+        # prefix, so these bare forms need a translation step here. Every
+        # OTHER command (help, new-session, resume, doctor, status, sessions)
+        # is now a regular SlashRouter.handlers entry (see
+        # cli/slash_router.py::build_slash_router()) -- previously a SEPARATE
+        # literal if/elif block here, unsynced with the /-prefixed form of
+        # the SAME command already registered in SlashRouter.handlers.
+        if lower in {"quit", "exit"}:
+            self.request_quit()
+        if lower == "stop":
+            return self.supervisor.stop()
 
-        cmd, args = self.slash.parse(user_input)
+        if text.startswith("/"):
+            routed = self.slash_router.route(text)
+            if routed is not None:
+                self._sync_state_from_db()
+                self._persist()
+                self._index_fts(text, routed)
+                return routed
 
-        if cmd == "/help" or (not cmd.startswith("/") and user_input.strip().lower() in {"help", "?", "bantuan"}):
-            return self.slash.help_text()
-        if cmd == "/status":
-            return self._status_summary("WTH-AI Status")
-        if cmd == "/new-session":
-            sid = self.new_session()
-            return f"Session baru: {sid}"
-        if cmd == "/scope":
-            return self._handle_scope(args)
-        if cmd == "/permission":
-            return self._handle_permission(args)
-        if cmd == "/resume":
-            return self.resume(args[0] if args else None)
-        if cmd == "/sessions":
-            return self._list_sessions()
-        if cmd == "/approve":
-            return self._handle_approve(args)
-        if cmd == "/findings":
-            return self.findings_db.format_summary_table()
-        if cmd == "/hypotheses":
-            return self.findings_db.format_hypotheses()
-        if cmd == "/skills":
-            return self.skills.format_catalog(args[0] if args else None)
-        if cmd == "/skill":
-            return self._show_skill(args[0] if args else "")
-        if cmd == "/browser":
-            return self._browser_probe(args)
-        if cmd == "/stop":
-            self.state.current_phase = AssessmentPhase.STOPPED
+        from wth_ai.cli.handlers.setup_handler import apply_target_from_text
+        target_hint = apply_target_from_text(self, text)
+        if target_hint is not None:
+            self._sync_state_from_db()
+            return target_hint
+
+        # Hybrid routing: chat vs security-assess based on intent.
+        agent_mode = getattr(getattr(self.config, "agent", None), "mode", "hybrid")
+        # WU-119: session-aware fallback -- follow-up tanpa keyword eksplisit
+        # tapi di tengah engagement aktif (target+phase != INTAKE) -> "assess".
+        intent = self.skill_router.detect_intent(text, session_state=self.state)
+        if agent_mode in {"hybrid", "chat"} and intent == "chat":
+            resp = self._chat_turn(text)
+            self._index_fts(text, resp)
+            return resp
+        if agent_mode == "chat":
+            resp = self._chat_turn(text)
+            self._index_fts(text, resp)
+            return resp
+        resp = self._supervisor_turn(text)
+        self._index_fts(text, resp)
+        return resp
+
+    def _index_fts(self, user_text: str, response: str) -> None:
+        try:
+            from wth_ai.memory.fts import SessionFtsIndex
+            SessionFtsIndex().index_turn(f"cli:{self.state.session_id}", user_text, response)
+        except Exception:
+            pass
+
+    def _chat_turn(self, text: str) -> str:
+        from wth_ai.llm.errors import LLMError, LLMUnavailableError
+        try:
+            self.state.conversation.append({"role": "user", "content": text})
+            result = self.chat.respond(text, self.state)
+            reply = (result or {}).get("raw") or ""
+            self.state.conversation.append({"role": "assistant", "content": reply[:8000]})
             self._persist()
-            return self._status_summary("Testing dihentikan.")
-        if cmd == "/recon":
-            return self._run_recon(args)
-        if cmd == "/doctor":
-            return self.doctor.full_report()
-        if cmd == "/intel":
-            return self._run_intel(args)
-        if cmd == "/mcp":
-            return self.mcp.format_status()
-        if cmd == "/tools":
-            return self._handle_tools(args)
-        if cmd == "/hunt":
-            return self._run_hunt(args)
-        if cmd == "/graph":
-            return self.asset_graph.format_summary()
-        if cmd in {"/plan", "/static", "/dynamic", "/patch", "/retest"}:
-            return self._assess_loop(user_input)
-        if cmd == "/execute":
-            run_all = "--all" in args
-            task_id = next((a for a in args if a != "--all"), None)
-            return self._execute_next(task_id, run_all=run_all)
-        if cmd == "/verify":
-            return self._verify(args[0] if args else None)
-        if cmd == "/report":
-            return self._report()
+            return reply + f"\n\n*mode: chat · model: {(result or {}).get('model','')}*"
+        except LLMUnavailableError as exc:
+            return str(exc)
+        except LLMError as exc:
+            return f"Chat model error: {exc}"
 
-        intent = self.skill_router.detect_intent(user_input)
-        if intent == "command":
-            return self.slash.help_text()
-        if intent == "chat":
-            return self._chat_loop(user_input)
-        return self._assess_loop(user_input)
+    def _supervisor_turn(self, text: str) -> str:
+        from wth_ai.llm.errors import LLMError, LLMUnavailableError
+        try:
+            result = self.supervisor.run(
+                text, self.state,
+                callbacks=self._ui_callbacks(),
+                persist_fn=self._persist,
+            )
+            self._sync_state_from_db()
+            self._persist()
+            return result
+        except LLMUnavailableError as exc:
+            return str(exc)
+        except LLMError as exc:
+            return (
+                "LLM tidak tersedia untuk chat agentic.\n"
+                "Jalankan `wth setup` untuk API key dan model, atau set provider Ollama di config.\n\n"
+                f"Detail: {exc}"
+            )
+        except Exception as exc:
+            msg = str(exc)
+            if "timed out" in msg.lower() or "timeout" in msg.lower():
+                rc = self.client.role_config("planner")
+                model, _ = self.client.model_for_role("planner")
+                provider = self.client.provider_for_role("planner")
+                host = getattr(provider, "base_url", rc.type)
+                return (
+                    f"LLM timeout — tidak ada respons dalam batas waktu.\n"
+                    f"- Provider: {rc.type} · model: {model}\n"
+                    f"- Endpoint: {host}\n\n"
+                    "Coba:\n"
+                    "  `/model list` — cek model aktif\n"
+                    "  `/provider` — ganti provider atau model lebih ringan\n"
+                    "  pastikan 9router/Ollama masih jalan di mesin lokal\n\n"
+                    f"Detail: {msg}"
+                )
+            raise
 
     def _chat_loop(self, user_input: str) -> str:
         text = user_input.lower()
@@ -345,131 +619,16 @@ class WTHOrchestrator:
         return "\n".join(parts)
 
     def _run_recon(self, args: list[str]) -> str:
-        fast = "--fast" in args
-        focus = None
-        if "--focus" in args:
-            idx = args.index("--focus")
-            if idx + 1 < len(args):
-                focus = args[idx + 1].lower()
-        clean_args = [a for a in args if a not in {"--fast", "--focus"} and not a.startswith("--")]
-        if "--focus" in args:
-            fi = args.index("--focus")
-            if fi + 1 < len(args) and args[fi + 1] in clean_args:
-                clean_args = [a for a in clean_args if a != args[fi + 1]]
-
-        target = self.state.scope.target or (clean_args[0] if clean_args else "")
+        """Legacy hook for EngagementLoop — delegates to supervisor."""
+        target = self.state.scope.target or (args[0] if args else "")
         if not target:
-            return ReconWizard.start_target_prompt(self)
-        ok, msg = self.scope_mgr.is_in_scope(target)
-        if not ok:
-            return f"Blocked: {msg}"
-
-        self.state.current_phase = AssessmentPhase.RECON
-        result = self.recon.run_sync(
-            target,
-            fast=fast,
-            focus=focus,
-            rate_limit_rps=self.scope_mgr.scope.rate_limit_rps,
-            auto_install=True,
-            terminal_bridge=self.terminal,
+            return "Set target first: scope example.com authorized"
+        return self.supervisor.run(
+            f"Run recon on {target}: discover subdomains, DNS, HTTP, headers, TLS, then finalize.",
+            self.state,
+            callbacks=self._ui_callbacks(),
+            persist_fn=self._persist,
         )
-        if result.get("error"):
-            return f"Recon error: {result['error']}"
-
-        surface = result.get("attack_surface")
-        summary = result.get("summary", {})
-        if surface:
-            self.memory.update_from_recon(surface)
-            self.state.metadata["attack_surface_obj"] = surface.to_dict()
-            self.state.metadata["tech_profile"] = summary.get("adaptive_profile", "generic_web")
-            self.asset_graph.add_from_recon(surface)
-            from wth_ai.recon.deep.auth_surface import AuthSurfaceDetector
-            for flow in AuthSurfaceDetector().detect(surface.urls):
-                self.asset_graph.add_auth_flow(flow["url"], flow["flow_type"])
-            for acc in self.state.scope.test_accounts:
-                if ":" in acc:
-                    role_name = acc.split(":", 1)[0].split("@")[0]
-                    self.asset_graph.add_role(role_name)
-            self.asset_graph.save()
-            cov = self.asset_graph.coverage()
-            self.state.metadata["graph_coverage"] = cov
-            surface_items = surface.flat_observations()
-
-            # Response-Diff Brain auto-probe
-            try:
-                pre_findings = self.diff_brain.probe_surface(surface, limit=15, scope=self.state.scope)
-                if pre_findings:
-                    self.state.metadata["pre_findings"] = pre_findings
-            except Exception:
-                pass
-        else:
-            surface_items = []
-
-        self.state.known_assets = list(dict.fromkeys(self.state.known_assets + (surface.subdomains[:100] if surface else [])))
-        for item in surface_items:
-            if item not in self.state.attack_surface:
-                self.state.attack_surface.append(item)
-
-        self.state.metadata["last_recon"] = summary
-        self.state.metadata["recon_artifacts"] = result.get("artifacts_dir", "")
-        self._persist()
-
-        lines = [
-            f"## Recon — {target}",
-            f"- Artifacts: `{result.get('artifacts_dir', '')}`",
-            f"- Phases: {summary.get('phases_completed', 0)}",
-            f"- Graph nodes: {self.asset_graph.coverage().get('nodes', 0)}",
-            f"- Graph coverage: {self.state.metadata.get('graph_coverage', {}).get('coverage_pct', 0)}%",
-            f"- Subdomains: {summary.get('subdomains', 0)}",
-            f"- Live hosts: {summary.get('live_hosts', 0)}",
-            f"- URLs: {summary.get('urls', 0)}",
-            f"- API endpoints: {summary.get('api_endpoints', 0)}",
-            f"- Parameters: {summary.get('parameters', 0)}",
-            f"- JS files: {summary.get('js_files', 0)}",
-            f"- Secrets: {summary.get('secrets', 0)}",
-            f"- Nuclei: {summary.get('nuclei', 0)}",
-            "",
-        ]
-        if result.get("warnings"):
-            lines.append("### Warnings")
-            for w in result["warnings"][:8]:
-                lines.append(f"- {w}")
-            lines.append("")
-
-        if surface and surface.live_hosts:
-            lines.append("### Live hosts (sample)")
-            for h in surface.live_hosts[:10]:
-                lines.append(f"- {h.raw or h.url}")
-            lines.append("")
-
-        if surface and surface.api_endpoints:
-            lines.append("### API endpoints (sample)")
-            for u in surface.api_endpoints[:8]:
-                lines.append(f"- {u}")
-            lines.append("")
-
-        if surface and surface.nuclei:
-            lines.append("### Nuclei (sample)")
-            for f in surface.nuclei[:5]:
-                lines.append(f"- {f}")
-            lines.append("")
-
-        if summary.get("matched_rules"):
-            lines.append(f"- Adaptive rules: {', '.join(summary['matched_rules'])}")
-        if summary.get("skipped_phases"):
-            lines.append(f"- Skipped phases: {summary['skipped_phases']}")
-        if self.state.metadata.get("pre_findings"):
-            lines.append(f"- Pre-findings (diff brain): {len(self.state.metadata['pre_findings'])}")
-
-        if summary.get("thin_surface"):
-            lines.append(
-                "> **5-Minute Rule:** Surface tipis — banyak 403/static, sedikit API/parameter. "
-                "Pertimbangkan ganti target atau perluas scope."
-            )
-            lines.append("")
-
-        lines.append(f"Lanjut: `/graph` · `/hunt` · `/plan Audit {target}`")
-        return "\n".join(lines)
 
     def _run_intel(self, args: list[str]) -> str:
         surface_obj = self.state.metadata.get("attack_surface_obj")
@@ -485,12 +644,29 @@ class WTHOrchestrator:
         intel = self.intel.gather(surface, domain)
         return self.intel.format_report(intel)
 
+    def _install_progress(self, msg: str) -> None:
+        stream = getattr(self, "_activity_stream", None)
+        trace = self._tool_trace
+        bus = self._ui_bus
+        ui = getattr(self.config, "ui", None)
+        activity_mode = getattr(ui, "activity_mode", "live") if ui else "live"
+        if stream and activity_mode == "stream":
+            stream.on_install(msg)
+        if trace and activity_mode == "live":
+            trace.add_log_line(msg)
+        if bus:
+            bus.emit("activity_log", msg=msg)
+
     def _handle_tools(self, args: list[str]) -> str:
         if not args:
-            return self.tool_registry.format_report()
+            from wth_ai.tools.platform import platform_summary
+            return self.tool_registry.format_report() + f"\n\nPlatform: {platform_summary()}"
         if args[0] == "install":
-            category = args[1] if len(args) > 1 else "all"
-            return self.doctor.auto_install(category, use_sudo=True)
+            use_sudo = "--no-sudo" not in args
+            parts = [a for a in args[1:] if not a.startswith("--")]
+            category = parts[0] if parts else "all"
+            progress = self._install_progress if getattr(self.config.ui, "verbose", True) else None
+            return self.doctor.auto_install(category, use_sudo=use_sudo, on_progress=progress)
         return self.tool_registry.format_report(args[0])
 
     def _run_hunt(self, args: list[str]) -> str:
@@ -499,7 +675,23 @@ class WTHOrchestrator:
             return err
         goal = " ".join(args) if args else f"Audit {self.state.scope.target} — defensive vuln hunt"
         loop = EngagementLoop(self)
-        return loop.run(goal)
+        try:
+            return loop.run(goal)
+        except Exception as exc:
+            from wth_ai.llm.errors import LLMError, LLMUnavailableError
+            import requests
+            if isinstance(exc, (LLMError, LLMUnavailableError)):
+                rc = self.client._role_config("planner")
+                return (
+                    f"LLM error during hunt ({rc.type}): {exc}\n"
+                    f"Cek provider/model planner: `wth config show planner` atau `wth doctor`"
+                )
+            if isinstance(exc, requests.HTTPError):
+                return (
+                    f"LLM HTTP error during hunt: {exc}\n"
+                    f"Cek model 9router (`wth model list`) — reporter/planner harus model yang ada di gateway."
+                )
+            raise
 
     def _browser_probe(self, args: list[str]) -> str:
         if not browser_allowed(self.permission_mgr.mode):
@@ -584,8 +776,9 @@ class WTHOrchestrator:
                 elif key == "authorized":
                     updates["authorized"] = val.lower() in {"yes", "true", "1"}
                 elif key == "target":
-                    updates["target"] = val
-                    updates.setdefault("in_scope", [val])
+                    from wth_ai.scope_intent import parse_scope_intent
+                    intent = parse_scope_intent(f"set target {val}") or {"target": val, "authorized": True, "in_scope": [val]}
+                    updates.update({k: v for k, v in intent.items() if v is not None})
                 elif key in ("accounts", "test_accounts"):
                     updates["test_accounts"] = [v.strip() for v in val.split(",") if v.strip()]
                 else:
@@ -698,8 +891,13 @@ class WTHOrchestrator:
             if verdict == "verified":
                 self.findings_db.update_finding_state(finding.id, FindingState.VERIFIED)
                 tech = self.state.metadata.get("tech_profile", "generic_web")
+                # `finding.cwe` is often empty and `title` can legitimately be
+                # empty (the FINDING_CANDIDATE block parser accepts `- title:`
+                # with no value), so a bare `finding.title.split()[0]` used to
+                # raise IndexError here -- which aborted the whole /verify run,
+                # not just this one finding's learning record.
                 self.learning.record_from_finding(
-                    tech, finding.cwe or finding.title.split()[0].lower(),
+                    tech, _finding_learning_label(finding),
                     verified=True, session_id=self.state.session_id,
                 )
             elif verdict == "false_positive":
@@ -743,6 +941,7 @@ class WTHOrchestrator:
             "approval_needed": task.approval_needed,
             "module": task.module,
             "evidence_schema": task.evidence_schema,
+            "priority": task.priority, "depends_on": task.depends_on, "origin": task.origin,
         }
 
     def _sync_state_from_db(self) -> None:
@@ -753,49 +952,58 @@ class WTHOrchestrator:
         if self.config.session.auto_save:
             self.session_store.save(self.state)
 
-    def run_interactive(self) -> None:
-        from wth_ai.cli.repl import WTHRepl
-        from wth_ai.cli.status_bar import render_status_bar
-        from wth_ai.cli.theme import THEME
-        from rich.console import Console
+    def shutdown(self, *, reason: str = "quit") -> str:
+        """Stop agents, background jobs, and persist session."""
+        stopped_jobs = 0
+        try:
+            self.supervisor.stop()
+        except Exception:
+            pass
 
-        console = Console(highlight=False)
-        console.print(self.startup_message(), markup=True)
+        jm = getattr(self._supervisor_ctx, "job_manager", None) if self._supervisor_ctx else None
+        if jm is not None:
+            for job in jm.list_jobs():
+                if job.status in {"running", "queued", "pending"}:
+                    jm.stop_job(job.job_id)
+                    stopped_jobs += 1
 
-        def status_fn() -> str:
-            ts = self.tool_registry.summary()
-            return render_status_bar(
-                self.state,
-                self.config,
-                tools_installed=ts["installed"],
-                tools_total=ts["total"],
-                llm_online=self.client.available(),
-            )
+        try:
+            import asyncio
+            asyncio.run(self.browser.stop())
+        except Exception:
+            pass
 
-        def handler(text: str) -> str:
-            if self.config.models.streaming and text.strip().lower().startswith(("/plan", "/hunt", "/verify")):
-                from rich.live import Live
-                from rich.markdown import Markdown
+        self.state.current_phase = AssessmentPhase.STOPPED
+        self._sync_state_from_db()
+        self._persist()
 
-                live_tokens: list[str] = []
+        parts = ["✓ WTH-AI ditutup · session disimpan"]
+        if stopped_jobs:
+            parts.append(f"{stopped_jobs} job dihentikan")
+        if reason and reason != "quit":
+            parts.append(reason)
+        return " · ".join(parts)
 
-                def stream_to_live(t: str) -> None:
-                    live_tokens.append(t)
-                    live.update(Markdown("".join(live_tokens) or "_…_"))
+    def request_quit(self) -> None:
+        """Shutdown and signal the REPL to exit."""
+        from wth_ai.cli.quit import SessionQuit
+        raise SessionQuit(self.shutdown())
 
-                self.set_stream_callback(stream_to_live)
-                try:
-                    with Live(Markdown("_…_"), refresh_per_second=12, console=console, transient=True) as live:
-                        return self.handle_input(text)
-                finally:
-                    self.set_stream_callback(None)
-            return self.handle_input(text)
+    def run_interactive(self, *, local: bool = False) -> None:
+        import os
+        skip_gw = local or os.environ.get("WTH_LOCAL", "") == "1" or os.environ.get("WTH_SKIP_GATEWAY", "") == "1"
+        if not skip_gw:
+            try:
+                from wth_ai.gateway.client import GatewayClient, gateway_available
+                from wth_ai.gateway.remote_orch import RemoteOrchestrator
+                if gateway_available():
+                    RemoteOrchestrator(GatewayClient()).run_interactive()
+                    return
+            except Exception:
+                pass
 
-        repl = WTHRepl(
-            handler, banner="", status_fn=status_fn,
-            prompt_fn=lambda: ReconWizard.dynamic_prompt(self.state) or PROMPT_SYMBOL,
-        )
-        repl.run()
+        from wth_ai.cli.terminal_shell import run_terminal_shell
+        run_terminal_shell(self)
 
     def run_once(self, command: str) -> str:
         return self.handle_input(command)

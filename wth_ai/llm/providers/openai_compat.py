@@ -8,17 +8,89 @@ from typing import Any, Callable
 import requests
 
 from wth_ai.llm.errors import LLMError
-from wth_ai.llm.providers.base import BaseLLMProvider
+from wth_ai.llm.providers.base import BaseLLMProvider, http_error_message, raise_for_status
 
 DEFAULT_BASE_URLS = {
     "openai": "https://api.openai.com/v1",
     "anthropic": "https://api.anthropic.com/v1",
     "google": "https://generativelanguage.googleapis.com/v1beta/openai",
+    "groq": "https://api.groq.com/openai/v1",
+    "9router": "http://127.0.0.1:20128/v1",
 }
+
+# Providers that may legitimately run without an API key: a self-hosted
+# OpenAI-compatible endpoint (custom base URL) or the local 9router gateway.
+# The hosted providers (openai/anthropic/google/groq) always require one.
+_KEYLESS_PROVIDERS = frozenset({"custom", "9router"})
+
+
+def _normalize_base_url(provider_name: str, base_url: str | None) -> str:
+    raw = (base_url or DEFAULT_BASE_URLS.get(provider_name, DEFAULT_BASE_URLS["openai"])).rstrip("/")
+    if provider_name == "9router" and not raw.endswith("/v1"):
+        raw = f"{raw}/v1"
+    return raw
+
+
+def _parse_response_json(text: str) -> dict[str, Any]:
+    """Parse OpenAI JSON or SSE bodies (9router may stream even when stream=false)."""
+    raw = (text or "").strip()
+    if not raw:
+        raise LLMError("empty LLM response body")
+    if raw.startswith("data:") or "\ndata:" in raw:
+        return _parse_sse_payload(raw)
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError as exc:
+        if "Extra data" in str(exc):
+            obj, _ = json.JSONDecoder().raw_decode(raw)
+            return obj
+        raise
+
+
+def _parse_sse_payload(text: str) -> dict[str, Any]:
+    content_parts: list[str] = []
+    last_obj: dict[str, Any] | None = None
+    for line in text.splitlines():
+        line = line.strip()
+        if not line.startswith("data:"):
+            continue
+        payload = line[5:].strip()
+        if not payload or payload == "[DONE]":
+            continue
+        try:
+            obj = json.loads(payload)
+        except json.JSONDecodeError:
+            continue
+        last_obj = obj
+        choice = (obj.get("choices") or [{}])[0]
+        msg = choice.get("message")
+        if msg and msg.get("content"):
+            return obj
+        delta = choice.get("delta") or {}
+        if delta.get("content"):
+            content_parts.append(str(delta["content"]))
+    if content_parts and last_obj is not None:
+        merged = dict(last_obj)
+        merged["choices"] = [{
+            "index": 0,
+            "message": {"role": "assistant", "content": "".join(content_parts)},
+            "finish_reason": "stop",
+        }]
+        return merged
+    if last_obj is not None:
+        return last_obj
+    raise LLMError("could not parse streaming LLM response")
 
 
 class OpenAICompatProvider(BaseLLMProvider):
+    """OpenAI-compatible HTTP provider.
+
+    Serves OpenAI, Anthropic (proxy), Google Gemini (OpenAI-compat endpoint),
+    Groq, and any ``custom`` endpoint that speaks the OpenAI chat API.
+    """
+
     provider_type = "openai_compat"
+    tool_calling = True
 
     def __init__(
         self,
@@ -32,16 +104,31 @@ class OpenAICompatProvider(BaseLLMProvider):
     ) -> None:
         self.provider_name = provider_name
         self.api_key = api_key
-        self.base_url = (base_url or DEFAULT_BASE_URLS.get(provider_name, DEFAULT_BASE_URLS["openai"])).rstrip("/")
+        self.base_url = _normalize_base_url(provider_name, base_url)
         self.temperature = temperature
         self.max_tokens = max_tokens
         self.default_timeout = default_timeout
 
+    @property
+    def name(self) -> str:
+        return self.provider_name
+
     def available(self) -> bool:
-        return bool(self.api_key)
+        if self.api_key:
+            return True
+        # Self-hosted OpenAI-compatible endpoints (a local gateway, a custom
+        # base URL) commonly run WITHOUT auth. Demanding a key made such an
+        # endpoint report as unavailable, so the setup smoke test and every
+        # chat refused to touch it even though it was reachable.
+        return self.provider_name in _KEYLESS_PROVIDERS and bool(self.base_url)
 
     def _headers(self) -> dict[str, str]:
-        h = {"Authorization": f"Bearer {self.api_key}", "Content-Type": "application/json"}
+        # No key -> no Authorization header. Sending a literal
+        # "Authorization: Bearer None" to a keyless local endpoint is at best
+        # noise and at worst a 401.
+        h: dict[str, str] = {"Content-Type": "application/json"}
+        if self.api_key:
+            h["Authorization"] = f"Bearer {self.api_key}"
         if self.provider_name == "anthropic":
             h["anthropic-version"] = "2023-06-01"
         return h
@@ -60,6 +147,7 @@ class OpenAICompatProvider(BaseLLMProvider):
                 "openai": ["gpt-4o", "gpt-4o-mini", "o1-mini"],
                 "anthropic": ["claude-3-5-sonnet-20241022", "claude-3-haiku-20240307"],
                 "google": ["gemini-1.5-pro", "gemini-1.5-flash"],
+                "groq": ["llama-3.3-70b-versatile", "llama-3.1-8b-instant"],
             }
             return fallbacks.get(self.provider_name, [])
 
@@ -82,13 +170,15 @@ class OpenAICompatProvider(BaseLLMProvider):
             "messages": messages,
             "temperature": temperature if temperature is not None else self.temperature,
             "max_tokens": max_tokens or self.max_tokens,
+            "stream": False,
         }
         if response_format:
             payload["response_format"] = response_format
         url = f"{self.base_url}/chat/completions"
         r = requests.post(url, headers=self._headers(), json=payload, timeout=timeout or self.default_timeout)
-        r.raise_for_status()
-        return r.json()["choices"][0]["message"]["content"]
+        raise_for_status(self.provider_name, model, url, r)
+        data = _parse_response_json(r.text)
+        return data["choices"][0]["message"]["content"]
 
     def chat_with_tools(
         self,
@@ -109,9 +199,10 @@ class OpenAICompatProvider(BaseLLMProvider):
             "tool_choice": tool_choice,
             "temperature": self.temperature,
             "max_tokens": self.max_tokens,
+            "stream": False,
         }
         url = f"{self.base_url}/chat/completions"
         r = requests.post(url, headers=self._headers(), json=payload, timeout=timeout or self.default_timeout)
-        r.raise_for_status()
-        data = r.json()
+        raise_for_status(self.provider_name, model, url, r)
+        data = _parse_response_json(r.text)
         return {"message": data["choices"][0]["message"], "model": model, "raw": data}

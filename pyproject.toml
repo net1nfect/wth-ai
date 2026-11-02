@@ -18,11 +18,14 @@ dependencies = [
     "pydantic>=2.4",
     "discord.py>=2.3",
     "python-telegram-bot>=21.0",
+    "cryptography>=41.0",
 ]
 
 [project.optional-dependencies]
 browser = ["nodriver>=0.38"]
-full = ["nodriver>=0.38", "aiohttp>=3.9", "dnspython>=2.4", "beautifulsoup4>=4.12"]
+tui = ["textual>=0.80"]
+full = ["nodriver>=0.38", "aiohttp>=3.9", "dnspython>=2.4", "beautifulsoup4>=4.12", "lxml>=5.0", "textual>=0.80"]
+mcp = ["mcp>=1.0.0"]
 
 [project.scripts]
 wth = "wth_ai.cli.entry:main"

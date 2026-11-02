@@ -10,7 +10,11 @@ tools:
     install:
       go: go install -v github.com/projectdiscovery/subfinder/v2/cmd/subfinder@latest
       apt: apt-get install -y subfinder
+      dnf: dnf install -y subfinder
+      pacman: pacman -S --noconfirm subfinder
       brew: brew install subfinder
+      scoop: scoop install subfinder
+      choco: choco install -y subfinder
     verify: subfinder --version
   assetfinder:
     binary: assetfinder
@@ -30,7 +34,11 @@ tools:
     install:
       go: go install -v github.com/owasp-amass/amass/v4/...@master
       apt: apt-get install -y amass
+      dnf: dnf install -y amass
+      pacman: pacman -S --noconfirm amass
       brew: brew install amass
+      scoop: scoop install amass
+      choco: choco install -y amass
     verify: amass --version
   findomain:
     binary: findomain
@@ -40,7 +48,11 @@ tools:
     permission: read_only
     install:
       apt: apt-get install -y findomain
+      dnf: dnf install -y findomain
+      pacman: pacman -S --noconfirm findomain
       brew: brew install findomain
+      scoop: scoop install findomain
+      choco: choco install -y findomain
     verify: findomain --version
   chaos-client:
     binary: chaos
@@ -96,6 +108,8 @@ tools:
     install:
       pip: pip install sublist3r
       apt: apt-get install -y sublist3r
+      dnf: dnf install -y sublist3r
+      pacman: pacman -S --noconfirm sublist3r
     verify: sublist3r --version
   knockpy:
     binary: knockpy
@@ -123,6 +137,8 @@ tools:
     permission: read_only
     install:
       apt: apt-get install -y dnsrecon
+      dnf: dnf install -y dnsrecon
+      pacman: pacman -S --noconfirm dnsrecon
     verify: dnsrecon --version
   fierce:
     binary: fierce
@@ -132,6 +148,8 @@ tools:
     permission: read_only
     install:
       apt: apt-get install -y fierce
+      dnf: dnf install -y fierce
+      pacman: pacman -S --noconfirm fierce
     verify: fierce --version
   massdns:
     binary: massdns
@@ -141,6 +159,8 @@ tools:
     permission: read_only
     install:
       apt: apt-get install -y massdns
+      dnf: dnf install -y massdns
+      pacman: pacman -S --noconfirm massdns
     verify: massdns --version
   puredns:
     binary: puredns
@@ -249,7 +269,11 @@ tools:
     permission: read_only
     install:
       apt: apt-get install -y dnsutils
+      dnf: dnf install -y dnsutils
+      pacman: pacman -S --noconfirm dnsutils
       brew: brew install bind
+      scoop: scoop install bind
+      choco: choco install -y bind
     verify: dig --version
   host:
     binary: host
@@ -259,7 +283,11 @@ tools:
     permission: read_only
     install:
       apt: apt-get install -y dnsutils
+      dnf: dnf install -y dnsutils
+      pacman: pacman -S --noconfirm dnsutils
       brew: brew install bind
+      scoop: scoop install bind
+      choco: choco install -y bind
     verify: host --version
   nslookup:
     binary: nslookup
@@ -269,7 +297,11 @@ tools:
     permission: read_only
     install:
       apt: apt-get install -y dnsutils
+      dnf: dnf install -y dnsutils
+      pacman: pacman -S --noconfirm dnsutils
       brew: brew install bind
+      scoop: scoop install bind
+      choco: choco install -y bind
     verify: nslookup --version
   dog:
     binary: dog
@@ -279,7 +311,11 @@ tools:
     permission: read_only
     install:
       apt: apt-get install -y dog
+      dnf: dnf install -y dog
+      pacman: pacman -S --noconfirm dog
       brew: brew install dog
+      scoop: scoop install dog
+      choco: choco install -y dog
     verify: dog --version
   mDNSRecon:
     binary: mdnsrecon
@@ -297,6 +333,8 @@ tools:
     permission: read_only
     install:
       apt: apt-get install -y dnsenum
+      dnf: dnf install -y dnsenum
+      pacman: pacman -S --noconfirm dnsenum
     verify: dnsenum --version
   dnstracer:
     binary: dnstracer
@@ -306,6 +344,8 @@ tools:
     permission: read_only
     install:
       apt: apt-get install -y dnstracer
+      dnf: dnf install -y dnstracer
+      pacman: pacman -S --noconfirm dnstracer
     verify: dnstracer --version
   dnsgrep:
     binary: dnsgrep
@@ -392,6 +432,8 @@ tools:
     permission: read_only
     install:
       brew: brew install aquatone
+      scoop: scoop install aquatone
+      choco: choco install -y aquatone
     verify: aquatone --version
   whatweb:
     binary: whatweb
@@ -401,6 +443,8 @@ tools:
     permission: read_only
     install:
       apt: apt-get install -y whatweb
+      dnf: dnf install -y whatweb
+      pacman: pacman -S --noconfirm whatweb
     verify: whatweb --version
   wafw00f:
     binary: wafw00f
@@ -411,6 +455,8 @@ tools:
     install:
       pip: pip install wafw00f
       apt: apt-get install -y wafw00f
+      dnf: dnf install -y wafw00f
+      pacman: pacman -S --noconfirm wafw00f
     verify: wafw00f --version
   webanalyze:
     binary: webanalyze
@@ -446,7 +492,11 @@ tools:
     permission: read_only
     install:
       apt: apt-get install -y curl
+      dnf: dnf install -y curl
+      pacman: pacman -S --noconfirm curl
       brew: brew install curl
+      scoop: scoop install curl
+      choco: choco install -y curl
     verify: curl --version
   httpie:
     binary: http
@@ -457,7 +507,11 @@ tools:
     install:
       pip: pip install httpie
       apt: apt-get install -y httpie
+      dnf: dnf install -y httpie
+      pacman: pacman -S --noconfirm httpie
       brew: brew install httpie
+      scoop: scoop install httpie
+      choco: choco install -y httpie
     verify: http --version
   katana:
     binary: katana
@@ -558,6 +612,8 @@ tools:
     install:
       pip: pip install dirsearch
       apt: apt-get install -y dirsearch
+      dnf: dnf install -y dirsearch
+      pacman: pacman -S --noconfirm dirsearch
     verify: dirsearch --version
   feroxbuster:
     binary: feroxbuster
@@ -567,7 +623,11 @@ tools:
     permission: standard
     install:
       apt: apt-get install -y feroxbuster
+      dnf: dnf install -y feroxbuster
+      pacman: pacman -S --noconfirm feroxbuster
       brew: brew install feroxbuster
+      scoop: scoop install feroxbuster
+      choco: choco install -y feroxbuster
     verify: feroxbuster --version
   hakcheckurl:
     binary: hakcheckurl
@@ -746,6 +806,8 @@ tools:
     install:
       go: go install github.com/ffuf/ffuf/v2@latest
       brew: brew install ffuf
+      scoop: scoop install ffuf
+      choco: choco install -y ffuf
     verify: ffuf --version
   gobuster:
     binary: gobuster
@@ -756,7 +818,11 @@ tools:
     install:
       go: go install github.com/OJ/gobuster/v3@latest
       apt: apt-get install -y gobuster
+      dnf: dnf install -y gobuster
+      pacman: pacman -S --noconfirm gobuster
       brew: brew install gobuster
+      scoop: scoop install gobuster
+      choco: choco install -y gobuster
     verify: gobuster --version
   wfuzz:
     binary: wfuzz
@@ -766,6 +832,8 @@ tools:
     permission: standard
     install:
       apt: apt-get install -y wfuzz
+      dnf: dnf install -y wfuzz
+      pacman: pacman -S --noconfirm wfuzz
     verify: wfuzz --version
   param-miner:
     binary: param-miner
@@ -793,7 +861,11 @@ tools:
     permission: standard
     install:
       apt: apt-get install -y nikto
+      dnf: dnf install -y nikto
+      pacman: pacman -S --noconfirm nikto
       brew: brew install nikto
+      scoop: scoop install nikto
+      choco: choco install -y nikto
     verify: nikto --version
   wpscan:
     binary: wpscan
@@ -804,6 +876,8 @@ tools:
     install:
       gem: gem install wpscan
       apt: apt-get install -y wpscan
+      dnf: dnf install -y wpscan
+      pacman: pacman -S --noconfirm wpscan
     verify: wpscan --version
   testssl:
     binary: testssl.sh
@@ -813,7 +887,11 @@ tools:
     permission: read_only
     install:
       apt: apt-get install -y testssl
+      dnf: dnf install -y testssl
+      pacman: pacman -S --noconfirm testssl
       brew: brew install testssl
+      scoop: scoop install testssl
+      choco: choco install -y testssl
     verify: testssl.sh --version
   sslscan:
     binary: sslscan
@@ -823,7 +901,11 @@ tools:
     permission: read_only
     install:
       apt: apt-get install -y sslscan
+      dnf: dnf install -y sslscan
+      pacman: pacman -S --noconfirm sslscan
       brew: brew install sslscan
+      scoop: scoop install sslscan
+      choco: choco install -y sslscan
     verify: sslscan --version
   sslyze:
     binary: sslyze
@@ -842,7 +924,11 @@ tools:
     permission: standard
     install:
       apt: apt-get install -y nmap
+      dnf: dnf install -y nmap
+      pacman: pacman -S --noconfirm nmap
       brew: brew install nmap
+      scoop: scoop install nmap
+      choco: choco install -y nmap
     verify: nmap --version
   masscan:
     binary: masscan
@@ -852,7 +938,11 @@ tools:
     permission: full_lab
     install:
       apt: apt-get install -y masscan
+      dnf: dnf install -y masscan
+      pacman: pacman -S --noconfirm masscan
       brew: brew install masscan
+      scoop: scoop install masscan
+      choco: choco install -y masscan
     verify: masscan --version
   rustscan:
     binary: rustscan
@@ -862,6 +952,8 @@ tools:
     permission: standard
     install:
       apt: apt-get install -y rustscan
+      dnf: dnf install -y rustscan
+      pacman: pacman -S --noconfirm rustscan
     verify: rustscan --version
   naabu:
     binary: naabu
@@ -933,7 +1025,11 @@ tools:
     permission: elevated
     install:
       apt: apt-get install -y sqlmap
+      dnf: dnf install -y sqlmap
+      pacman: pacman -S --noconfirm sqlmap
       brew: brew install sqlmap
+      scoop: scoop install sqlmap
+      choco: choco install -y sqlmap
     verify: sqlmap --version
   commix:
     binary: commix
@@ -943,6 +1039,8 @@ tools:
     permission: elevated
     install:
       apt: apt-get install -y commix
+      dnf: dnf install -y commix
+      pacman: pacman -S --noconfirm commix
     verify: commix --version
   xsstrike:
     binary: xsstrike
@@ -988,6 +1086,8 @@ tools:
     permission: read_only
     install:
       brew: brew install grype
+      scoop: scoop install grype
+      choco: choco install -y grype
     verify: grype --version
   trivy:
     binary: trivy
@@ -997,7 +1097,11 @@ tools:
     permission: read_only
     install:
       apt: apt-get install -y trivy
+      dnf: dnf install -y trivy
+      pacman: pacman -S --noconfirm trivy
       brew: brew install trivy
+      scoop: scoop install trivy
+      choco: choco install -y trivy
     verify: trivy --version
   osv-scanner:
     binary: osv-scanner
@@ -1096,6 +1200,8 @@ tools:
     permission: elevated
     install:
       apt: apt-get install -y dotdotpwn
+      dnf: dnf install -y dotdotpwn
+      pacman: pacman -S --noconfirm dotdotpwn
     verify: dotdotpwn --version
   lfi-suite:
     binary: lfi-suite
@@ -1168,6 +1274,8 @@ tools:
     install:
       go: go install github.com/trufflesecurity/trufflehog/v3@latest
       brew: brew install trufflehog
+      scoop: scoop install trufflehog
+      choco: choco install -y trufflehog
     verify: trufflehog --version
   gitleaks:
     binary: gitleaks
@@ -1179,6 +1287,8 @@ tools:
     install:
       go: go install github.com/gitleaks/gitleaks/v8@latest
       brew: brew install gitleaks
+      scoop: scoop install gitleaks
+      choco: choco install -y gitleaks
     verify: gitleaks --version
   git-secrets:
     binary: git-secrets
@@ -1188,6 +1298,8 @@ tools:
     permission: read_only
     install:
       brew: brew install git-secrets
+      scoop: scoop install git-secrets
+      choco: choco install -y git-secrets
     verify: git-secrets --version
   cloudbrute:
     binary: cloudbrute
@@ -1294,6 +1406,8 @@ tools:
     permission: read_only
     install:
       apt: apt-get install -y kube-bench
+      dnf: dnf install -y kube-bench
+      pacman: pacman -S --noconfirm kube-bench
     verify: kube-bench --version
   docker-bench:
     binary: docker-bench-security
@@ -1320,6 +1434,8 @@ tools:
     permission: read_only
     install:
       brew: brew install terrascan
+      scoop: scoop install terrascan
+      choco: choco install -y terrascan
     verify: terrascan --version
   semgrep:
     binary: semgrep
@@ -1331,6 +1447,8 @@ tools:
     install:
       pip: pip install semgrep
       brew: brew install semgrep
+      scoop: scoop install semgrep
+      choco: choco install -y semgrep
     verify: semgrep --version
   bandit:
     binary: bandit
@@ -1342,6 +1460,8 @@ tools:
     install:
       pip: pip install bandit
       apt: apt-get install -y bandit
+      dnf: dnf install -y bandit
+      pacman: pacman -S --noconfirm bandit
     verify: bandit --version
   eslint:
     binary: eslint
@@ -1522,6 +1642,8 @@ tools:
     permission: full_lab
     install:
       apt: apt-get install -y hping3
+      dnf: dnf install -y hping3
+      pacman: pacman -S --noconfirm hping3
     verify: hping3 --version
   tcpdump:
     binary: tcpdump
@@ -1531,7 +1653,11 @@ tools:
     permission: read_only
     install:
       apt: apt-get install -y tcpdump
+      dnf: dnf install -y tcpdump
+      pacman: pacman -S --noconfirm tcpdump
       brew: brew install tcpdump
+      scoop: scoop install tcpdump
+      choco: choco install -y tcpdump
     verify: tcpdump --version
   netcat:
     binary: nc
@@ -1541,7 +1667,11 @@ tools:
     permission: full_lab
     install:
       apt: apt-get install -y netcat
+      dnf: dnf install -y netcat
+      pacman: pacman -S --noconfirm netcat
       brew: brew install netcat
+      scoop: scoop install netcat
+      choco: choco install -y netcat
     verify: nc --version
   socat:
     binary: socat
@@ -1551,7 +1681,11 @@ tools:
     permission: full_lab
     install:
       apt: apt-get install -y socat
+      dnf: dnf install -y socat
+      pacman: pacman -S --noconfirm socat
       brew: brew install socat
+      scoop: scoop install socat
+      choco: choco install -y socat
     verify: socat --version
   nbtscan:
     binary: nbtscan
@@ -1561,6 +1695,8 @@ tools:
     permission: standard
     install:
       apt: apt-get install -y nbtscan
+      dnf: dnf install -y nbtscan
+      pacman: pacman -S --noconfirm nbtscan
     verify: nbtscan --version
   enum4linux:
     binary: enum4linux
@@ -1570,6 +1706,8 @@ tools:
     permission: standard
     install:
       apt: apt-get install -y enum4linux
+      dnf: dnf install -y enum4linux
+      pacman: pacman -S --noconfirm enum4linux
     verify: enum4linux --version
   smbclient:
     binary: smbclient
@@ -1579,6 +1717,8 @@ tools:
     permission: standard
     install:
       apt: apt-get install -y smbclient
+      dnf: dnf install -y smbclient
+      pacman: pacman -S --noconfirm smbclient
     verify: smbclient --version
   rpcclient:
     binary: rpcclient
@@ -1588,6 +1728,8 @@ tools:
     permission: standard
     install:
       apt: apt-get install -y rpcclient
+      dnf: dnf install -y rpcclient
+      pacman: pacman -S --noconfirm rpcclient
     verify: rpcclient --version
   responder:
     binary: Responder
@@ -1597,6 +1739,8 @@ tools:
     permission: full_lab
     install:
       apt: apt-get install -y responder
+      dnf: dnf install -y responder
+      pacman: pacman -S --noconfirm responder
     verify: Responder --version
   laravel-routes:
     binary: php
@@ -1639,6 +1783,8 @@ tools:
     permission: read_only
     install:
       apt: apt-get install -y joomscan
+      dnf: dnf install -y joomscan
+      pacman: pacman -S --noconfirm joomscan
     verify: joomscan --version
   cmsmap:
     binary: cmsmap
@@ -1657,6 +1803,8 @@ tools:
     permission: read_only
     install:
       apt: apt-get install -y wig
+      dnf: dnf install -y wig
+      pacman: pacman -S --noconfirm wig
     verify: wig --version
   plecost:
     binary: plecost
@@ -1734,7 +1882,11 @@ tools:
     permission: read_only
     install:
       apt: apt-get install -y jq
+      dnf: dnf install -y jq
+      pacman: pacman -S --noconfirm jq
       brew: brew install jq
+      scoop: scoop install jq
+      choco: choco install -y jq
     verify: jq --version
   rg:
     binary: rg
@@ -1744,7 +1896,11 @@ tools:
     permission: read_only
     install:
       apt: apt-get install -y ripgrep
+      dnf: dnf install -y ripgrep
+      pacman: pacman -S --noconfirm ripgrep
       brew: brew install ripgrep
+      scoop: scoop install ripgrep
+      choco: choco install -y ripgrep
     verify: rg --version
   grep:
     binary: grep
@@ -1754,7 +1910,11 @@ tools:
     permission: read_only
     install:
       apt: apt-get install -y grep
+      dnf: dnf install -y grep
+      pacman: pacman -S --noconfirm grep
       brew: brew install grep
+      scoop: scoop install grep
+      choco: choco install -y grep
     verify: grep --version
   git:
     binary: git
@@ -1764,7 +1924,11 @@ tools:
     permission: read_only
     install:
       apt: apt-get install -y git
+      dnf: dnf install -y git
+      pacman: pacman -S --noconfirm git
       brew: brew install git
+      scoop: scoop install git
+      choco: choco install -y git
     verify: git --version
   python3:
     binary: python3
@@ -1774,7 +1938,11 @@ tools:
     permission: read_only
     install:
       apt: apt-get install -y python3
+      dnf: dnf install -y python3
+      pacman: pacman -S --noconfirm python3
       brew: brew install python3
+      scoop: scoop install python3
+      choco: choco install -y python3
     verify: python3 --version
   go:
     binary: go
@@ -1784,7 +1952,11 @@ tools:
     permission: read_only
     install:
       apt: apt-get install -y golang-go
+      dnf: dnf install -y golang-go
+      pacman: pacman -S --noconfirm golang-go
       brew: brew install go
+      scoop: scoop install go
+      choco: choco install -y go
     verify: go --version
   node:
     binary: node
@@ -1794,7 +1966,11 @@ tools:
     permission: read_only
     install:
       apt: apt-get install -y nodejs
+      dnf: dnf install -y nodejs
+      pacman: pacman -S --noconfirm nodejs
       brew: brew install node
+      scoop: scoop install node
+      choco: choco install -y node
     verify: node --version
   pip:
     binary: pip
@@ -1804,6 +1980,8 @@ tools:
     permission: read_only
     install:
       apt: apt-get install -y python3-pip
+      dnf: dnf install -y python3-pip
+      pacman: pacman -S --noconfirm python3-pip
     verify: pip --version
   hashcat:
     binary: hashcat
@@ -1813,7 +1991,11 @@ tools:
     permission: full_lab
     install:
       apt: apt-get install -y hashcat
+      dnf: dnf install -y hashcat
+      pacman: pacman -S --noconfirm hashcat
       brew: brew install hashcat
+      scoop: scoop install hashcat
+      choco: choco install -y hashcat
     verify: hashcat --version
   john:
     binary: john
@@ -1823,7 +2005,11 @@ tools:
     permission: full_lab
     install:
       apt: apt-get install -y john
+      dnf: dnf install -y john
+      pacman: pacman -S --noconfirm john
       brew: brew install john
+      scoop: scoop install john
+      choco: choco install -y john
     verify: john --version
   hydra:
     binary: hydra
@@ -1833,7 +2019,11 @@ tools:
     permission: full_lab
     install:
       apt: apt-get install -y hydra
+      dnf: dnf install -y hydra
+      pacman: pacman -S --noconfirm hydra
       brew: brew install hydra
+      scoop: scoop install hydra
+      choco: choco install -y hydra
     verify: hydra --version
   medusa:
     binary: medusa
@@ -1843,6 +2033,8 @@ tools:
     permission: full_lab
     install:
       apt: apt-get install -y medusa
+      dnf: dnf install -y medusa
+      pacman: pacman -S --noconfirm medusa
     verify: medusa --version
   cewl:
     binary: cewl
@@ -1852,6 +2044,8 @@ tools:
     permission: read_only
     install:
       apt: apt-get install -y cewl
+      dnf: dnf install -y cewl
+      pacman: pacman -S --noconfirm cewl
     verify: cewl --version
   crunch:
     binary: crunch
@@ -1861,6 +2055,8 @@ tools:
     permission: full_lab
     install:
       apt: apt-get install -y crunch
+      dnf: dnf install -y crunch
+      pacman: pacman -S --noconfirm crunch
     verify: crunch --version
   wordlists:
     binary: wordlists
@@ -1870,6 +2066,8 @@ tools:
     permission: read_only
     install:
       apt: apt-get install -y wordlists
+      dnf: dnf install -y wordlists
+      pacman: pacman -S --noconfirm wordlists
     verify: wordlists --version
   seclists:
     binary: seclists
@@ -1879,6 +2077,8 @@ tools:
     permission: read_only
     install:
       apt: apt-get install -y seclists
+      dnf: dnf install -y seclists
+      pacman: pacman -S --noconfirm seclists
     verify: seclists --version
   proxychains:
     binary: proxychains4
@@ -1888,7 +2088,11 @@ tools:
     permission: read_only
     install:
       apt: apt-get install -y proxychains4
+      dnf: dnf install -y proxychains4
+      pacman: pacman -S --noconfirm proxychains4
       brew: brew install proxychains-ng
+      scoop: scoop install proxychains-ng
+      choco: choco install -y proxychains-ng
     verify: proxychains4 --version
   mitmproxy:
     binary: mitmproxy
@@ -1899,6 +2103,8 @@ tools:
     install:
       pip: pip install mitmproxy
       brew: brew install mitmproxy
+      scoop: scoop install mitmproxy
+      choco: choco install -y mitmproxy
     verify: mitmproxy --version
   burpsuite:
     binary: burpsuite
@@ -1908,6 +2114,8 @@ tools:
     permission: standard
     install:
       apt: apt-get install -y burpsuite
+      dnf: dnf install -y burpsuite
+      pacman: pacman -S --noconfirm burpsuite
     verify: burpsuite --version
   zaproxy:
     binary: zaproxy
@@ -1917,6 +2125,8 @@ tools:
     permission: standard
     install:
       apt: apt-get install -y zaproxy
+      dnf: dnf install -y zaproxy
+      pacman: pacman -S --noconfirm zaproxy
     verify: zaproxy --version
   enum4linux-ng:
     binary: enum4linux-ng

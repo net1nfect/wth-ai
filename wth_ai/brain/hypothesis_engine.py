@@ -9,6 +9,15 @@ import yaml
 
 from wth_ai.graph.asset_graph import AssetGraph
 from wth_ai.graph.models import NodeType
+from wth_ai.models import tech_stack_blob
+
+
+def _text(value: Any) -> str:
+    if isinstance(value, str):
+        return value
+    if value is None:
+        return ""
+    return str(value)
 
 
 class HypothesisEngine:
@@ -22,7 +31,7 @@ class HypothesisEngine:
             self.rules = raw.get("rules", [])
 
     def generate(self, graph: AssetGraph, tech_stack: dict[str, str] | None = None) -> list[dict[str, Any]]:
-        tech_blob = " ".join(f"{k} {v}" for k, v in (tech_stack or {}).items()).lower()
+        tech_blob = tech_stack_blob(tech_stack)
         hypotheses: list[dict[str, Any]] = []
         seen: set[str] = set()
 
@@ -38,8 +47,8 @@ class HypothesisEngine:
         # Graph-native rules
         for p in graph.query_high_value_params(20):
             d = p.data
-            param = d.get("param", "")
-            url = d.get("url", "")
+            param = _text(d.get("param", ""))
+            url = _text(d.get("url", ""))
             if any(k in param.lower() for k in ("id", "user", "uuid")):
                 title = f"BOLA/IDOR on {param} @ {url[:60]}"
                 if title not in seen:
@@ -77,7 +86,7 @@ class HypothesisEngine:
     def _match_rule(self, rule: dict[str, Any], graph: AssetGraph, tech_blob: str) -> list[dict[str, Any]]:
         when = rule.get("when", {})
         if when.get("tech_contains"):
-            if not any(t.lower() in tech_blob for t in when["tech_contains"]):
+            if not any(_text(t).lower() in tech_blob for t in when["tech_contains"]):
                 return []
 
         out: list[dict[str, Any]] = []
@@ -87,10 +96,10 @@ class HypothesisEngine:
         for n in graph.nodes.values():
             if n.type != NodeType.PARAMETER:
                 continue
-            param = n.data.get("param", "")
+            param = _text(n.data.get("param", ""))
             if param_names and not any(p in param.lower() for p in param_names):
                 continue
-            url = n.data.get("url", "")
+            url = _text(n.data.get("url", ""))
             ep_key = url
             auth = n.data.get("auth_required", "/api/" in url)
             if auth_required is not None and bool(auth) != bool(auth_required):

@@ -25,22 +25,16 @@ class Sandbox:
         }
 
     def run(self, command: str, *, timeout: int | None = None) -> tuple[str, str, int]:
+        from wth_ai.shell_runner import run_command
+
         timeout = timeout or self.config.tools.timeout_seconds
-        try:
-            proc = subprocess.run(
-                command,
-                shell=True,
-                capture_output=True,
-                text=True,
-                timeout=timeout,
-                cwd=self.workdir,
-                env=self.env,
-            )
-            stdout = proc.stdout[: self.config.tools.max_output_bytes]
-            stderr = proc.stderr[:5000]
-            return stdout, stderr, proc.returncode
-        except subprocess.TimeoutExpired:
-            return "", f"Sandbox timeout after {timeout}s", 124
+        return run_command(
+            command,
+            timeout=timeout,
+            cwd=str(self.workdir),
+            env=self.env,
+            max_bytes=self.config.tools.max_output_bytes,
+        )
 
     def cleanup(self) -> None:
         import shutil

@@ -160,6 +160,14 @@ class AssetGraph:
             "coverage_pct": round(100 * tested / len(testable), 1) if testable else 0.0,
         }
 
+    def breakdown(self) -> dict[str, int]:
+        """Node counts grouped by graph node type."""
+        counts: dict[str, int] = {}
+        for node in self.nodes.values():
+            key = node.type.value
+            counts[key] = counts.get(key, 0) + 1
+        return counts
+
     def export_for_planner(self, limit: int = 60) -> str:
         cov = self.coverage()
         lines = [

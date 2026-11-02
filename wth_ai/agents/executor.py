@@ -87,6 +87,34 @@ class ExecutorAgent(BaseLLMAgent):
             task.target = state.scope.target or ""
         vuln_type = (task.evidence_schema or {}).get("type", "").lower()
         if vuln_type in VULN_EXECUTORS:
+            from wth_ai.models import PermissionMode
+            if state.permission_mode == PermissionMode.READ_ONLY_RECON:
+                return ExecutorResult(
+                    task_id=task.id, status="blocked", permission_check={"allowed": False},
+                    commands_used=[], output_summary="Vuln modules require standard permission or higher",
+                    evidence=[], observations=[], risk="medium",
+                    recommended_next_step="/permission standard", errors="read_only",
+                )
+            # WU-012 (AGENT-02): idor/ssrf/xss/auth/race semuanya memanggil
+            # requests.get()/SessionEngine.request() langsung dengan task.target
+            # tanpa is_in_scope() sinkron -- task.target berasal dari planner
+            # (LLM-proposed), jadi tanpa gate ini "LLM PROPOSES, POLICY DECIDES"
+            # bocor: target di luar scope yang di-authorize bisa lolos ke HTTP
+            # call nyata. execute_module() adalah titik konvergensi bersama
+            # kelima vuln executor -- satu check di sini menutup celah untuk
+            # semuanya sekaligus.
+            from wth_ai.scope_manager import ScopeManager
+            scope_mgr = ScopeManager()
+            scope_mgr.scope = state.scope
+            in_scope, scope_reason = scope_mgr.is_in_scope(task.target)
+            if not in_scope:
+                return ExecutorResult(
+                    task_id=task.id, status="blocked", permission_check={"allowed": False},
+                    commands_used=[], output_summary=f"Target out of scope: {scope_reason}",
+                    evidence=[], observations=[], risk="medium",
+                    recommended_next_step="/scope set target=<in-scope host> in_scope=<pattern>",
+                    errors="out_of_scope",
+                )
             try:
                 executor_cls = VULN_EXECUTORS[vuln_type]
                 return executor_cls(state).execute(task)
@@ -99,6 +127,20 @@ class ExecutorAgent(BaseLLMAgent):
                 )
         if self.terminal and self.client.available() and not task.command_plan:
             return self._execute_with_tools(task, state, approved=approved)
+
+        # Module-path gate (review finding A1, P0). MODULES run
+        # `task.command_plan` -- planner/LLM-authored strings -- through
+        # ExecutorRunnerV2 -> shell_runner. That runner has no permission/scope/
+        # policy dependency of its own, so without this block the module route
+        # was the one path to subprocess with NO gate at all: a task in
+        # READ_ONLY mode with an out-of-scope target ran its command_plan
+        # verbatim (verified on the pre-fix code: `uname -a` and
+        # `python3 -c print(42)` both executed despite `python3` being
+        # REQUIRE_HUMAN in every mode). Ordered like `tool_runner.execute_task`.
+        gate = self._gate_module_task(task, state)
+        if gate is not None:
+            return gate
+
         if not self.manifest_runner:
             return ExecutorResult(
                 task_id=task.id, status="failed", permission_check={},
@@ -115,11 +157,70 @@ class ExecutorAgent(BaseLLMAgent):
             sandbox.cleanup()
         return result
 
+    def _gate_module_task(
+        self, task: ExecutorTask, state: SessionState,
+    ) -> ExecutorResult | None:
+        """Scope + permission + per-command gate for the non-vuln module path.
+
+        Returns a blocked/needs-approval result when the task must not run,
+        else ``None``. Mirrors ``tool_runner.execute_task``'s ordering so both
+        routes to subprocess enforce the same things.
+        """
+        from wth_ai.models import PermissionMode
+        from wth_ai.permission_manager import PermissionManager
+        from wth_ai.scope_manager import ScopeManager
+
+        required = task.permission_required or PermissionMode.READ_ONLY_RECON
+
+        scope_mgr = ScopeManager()
+        scope_mgr.scope = state.scope
+        target = task.target or state.scope.target or ""
+        in_scope, scope_reason = scope_mgr.is_in_scope(target)
+        if not in_scope:
+            return ExecutorResult(
+                task_id=task.id, status="blocked", permission_check={"allowed": False},
+                commands_used=[], output_summary=f"Target out of scope: {scope_reason}",
+                evidence=[], observations=[], risk="medium",
+                recommended_next_step="/scope set target=<in-scope host> in_scope=<pattern>",
+                errors="out_of_scope",
+            )
+
+        perm = PermissionManager(state.permission_mode)
+        if not perm.mode_sufficient(required):
+            return ExecutorResult(
+                task_id=task.id, status="blocked", permission_check={"allowed": False},
+                commands_used=[],
+                output_summary=(
+                    f"Module task needs permission {required.value}, "
+                    f"have {state.permission_mode.value}"
+                ),
+                evidence=[], observations=[scope_reason], risk="medium",
+                recommended_next_step=f"/permission {required.value}",
+                errors="insufficient_permission",
+            )
+
+        for plan in (task.command_plan or [])[:5]:
+            cmd = str(plan.get("command", ""))
+            if not cmd:
+                continue
+            check = perm.check_command(cmd, required_mode=required)
+            if not check.get("allowed"):
+                return ExecutorResult(
+                    task_id=task.id, status="blocked", permission_check={"allowed": False},
+                    commands_used=[],
+                    output_summary=f"Command blocked by policy: {check.get('reason')}",
+                    evidence=[], observations=[], risk="high",
+                    recommended_next_step="/permission elevated",
+                    errors=str(check.get("reason")),
+                )
+        return None
+
     def _execute_with_tools(
         self, task: ExecutorTask, state: SessionState, *, approved: bool = False,
     ) -> ExecutorResult:
         loop = AgentToolLoop(
             self.client, self.terminal, graph=self.asset_graph, vault=self.evidence_vault,
+            max_iters=self.config.agent.max_iters,
         )
         prompt = (
             f"Execute this security task using run_shell and/or http_probe.\n"
@@ -178,6 +279,7 @@ class ExecutorAgent(BaseLLMAgent):
             self.system_prompt,
             [],
             prompt,
+            role="executor",
             timeout=self.config.models.executor_timeout_seconds,
         )
         commands = re.findall(r"Command:\s*(.+)", raw, re.IGNORECASE)
@@ -201,6 +303,7 @@ class ExecutorAgent(BaseLLMAgent):
             self.system_prompt,
             [],
             prompt,
+            role="executor",
             timeout=self.config.models.executor_timeout_seconds,
         )
         parsed = self._parse_executor_result(raw, result)
