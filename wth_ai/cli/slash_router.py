@@ -184,6 +184,8 @@ def build_slash_router(orch: Any) -> SlashRouter:
         "/eval": orch._handle_eval,
         "/usage": orch._handle_usage,
         "/next": orch._handle_next,
+        "/payloads": orch._handle_payloads,
+        "/autopilot": orch._handle_autopilot,
         "/eval act": orch._handle_eval_act,
         "/yolo": lambda args: orch._handle_permission(["yolo"]),
         "/model": lambda a: handle_model(orch, a),
