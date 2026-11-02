@@ -386,6 +386,18 @@ def build_menu_bindings(state: "MenuState", result: dict) -> Any:
 
     bindings = KeyBindings()
 
+    # Same eager wheel handling as the picker: scroll wherever the pointer is.
+    @bindings.add(Keys.Vt100MouseEvent, eager=True)
+    def _wheel_anywhere(event):
+        from wth_ai.cli.ui.picker import wheel_delta
+
+        delta = wheel_delta(event.data)
+        if not delta:
+            return NotImplemented
+        state.move(delta * 3)
+        event.app.invalidate()
+        return None
+
     @bindings.add("up")
     @bindings.add("c-p")
     def _up(event):
@@ -500,7 +512,12 @@ def run_menu(
         layout=Layout(Window(control)),
         key_bindings=bindings,
         style=style,
-        full_screen=False,
+        # Alternate screen ON (full_screen=True): terminals such as VTE
+        # (GNOME Terminal / Kali's default) only forward wheel events to the app in
+        # the alternate screen -- inline, the wheel scrolls the terminal's own
+        # scrollback and the app never sees it. Measured symptom: the wheel worked
+        # in tests (events injected directly) but not in the operator's terminal.
+        full_screen=True,
         mouse_support=mouse,
     )
     try:

@@ -673,3 +673,63 @@ def test_keyboard_navigation_still_works_alongside_the_mouse():
         assert state.selected() == "model-002"
     finally:
         ctx["stop"]()
+
+
+def test_picker_uses_the_alternate_screen():
+    """VTE terminals (GNOME/Kali) forward wheel events to the app ONLY in the
+    alternate screen; inline, the wheel scrolls the terminal's own buffer and the
+    app never sees a thing."""
+    from prompt_toolkit.key_binding import KeyBindings
+    from prompt_toolkit.output import DummyOutput
+
+    from wth_ai.cli.ui.picker import ListPickerState, build_picker_app
+
+    app = build_picker_app(ListPickerState(items=["a"]), {"value": None},
+                           bindings=KeyBindings(), style=None, output=DummyOutput())
+    assert app.full_screen is True
+
+
+def test_menu_uses_the_alternate_screen():
+    import inspect
+
+    from wth_ai.cli.ui import menu as menu_mod
+
+    assert "full_screen=True" in inspect.getsource(menu_mod.run_menu)
+
+
+def test_wheel_scrolls_even_when_the_pointer_is_outside_the_list():
+    """The operator's report: "tetep gabisa di scroll make touchpad".
+
+    Cause: prompt_toolkit dispatches a wheel event to the control under the POINTER,
+    so an inline list only scrolled when the cursor happened to be over it. The
+    eager binding scrolls wherever the pointer is.
+    """
+    ctx = _drive_picker([f"model-{i:03d}" for i in range(60)], per_item=1)
+    state, pipe = ctx["state"], ctx["pipe"]
+    try:
+        for where, seq in (
+            ("di atas daftar", "\x1b[<65;5;1M"),
+            ("bawah layar", "\x1b[<65;5;39M"),
+            ("kanan jauh", "\x1b[<65;79;20M"),
+        ):
+            before = state.index
+            pipe.send_text(seq)
+            ctx["sleep"](0.3)
+            assert state.index > before, f"roda diam saat pointer {where}"
+        pipe.send_text("\x1b[<64;5;1M")
+        ctx["sleep"](0.3)
+        assert state.index == 6, f"roda atas tidak jalan: {state.index}"
+    finally:
+        ctx["stop"]()
+
+
+def test_wheel_delta_parses_both_terminal_encodings():
+    from wth_ai.cli.ui.picker import wheel_delta
+
+    assert wheel_delta("\x1b[<64;10;12M") == -1        # SGR up
+    assert wheel_delta("\x1b[<65;10;12M") == 1         # SGR down
+    assert wheel_delta("\x1b[<0;10;12M") == 0          # left click
+    assert wheel_delta("\x1b[<0;10;12m") == 0          # release
+    assert wheel_delta("\x1b[M`*\"") == -1             # X10 up
+    assert wheel_delta("\x1b[Ma*\"") == 1              # X10 down
+    assert wheel_delta("") == 0 and wheel_delta("sampah") == 0
