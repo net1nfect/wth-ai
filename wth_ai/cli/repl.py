@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import itertools
 import sys
+from collections import deque
 import threading
 import time
 from typing import TYPE_CHECKING, Any, Callable
@@ -72,6 +73,12 @@ class WTHRepl:
         self.config = config or (getattr(orchestrator, "config", None) if orchestrator else None)
         self.console = Console(highlight=False)
         self.activity = ActivityStream(self.console)
+        #: Ring buffer of what this session printed. PageUp opens it in the in-app
+        #: pager: a raw-mode CLI owns the keyboard, so the TERMINAL cannot scroll
+        #: while `wth` runs -- the app has to provide the scroll itself.
+        self._output_buffer: deque[str] = deque(maxlen=4000)
+        #: set by the PageUp binding; the run loop opens the pager after the prompt
+        self._pager_requested = False
         self._live: Live | None = None
         #: revision of the tool trace at the last paint (see `_refresh_live`)
         self._painted_revision: int | None = None
@@ -145,6 +152,28 @@ class WTHRepl:
             from prompt_toolkit.application import run_in_terminal
 
             run_in_terminal(lambda: self._print_agents())
+
+        def _request_pager(event) -> None:
+            """Ask the RUN LOOP to open the pager after the prompt returns.
+
+            It cannot be opened from here: `run_in_terminal` runs inside the prompt's
+            live event loop, and launching another Application there dies with
+            "asyncio.run() cannot be called from a running event loop" (measured --
+            PageUp raised a traceback). Exiting the prompt first keeps the pager on
+            the same footing as the model picker, which opens after the prompt.
+            """
+            if event.app.current_buffer.text:
+                return                      # sedang mengetik: jangan ganggu
+            self._pager_requested = True
+            event.app.exit(result="")
+
+        @kb.add("pageup")
+        def _pager(event):
+            _request_pager(event)
+
+        @kb.add("c-o")
+        def _pager_ctrl(event):
+            _request_pager(event)
 
         @kb.add("c-c")
         def _cancel(event):
@@ -304,7 +333,7 @@ class WTHRepl:
         return max(20, min(200, shutil.get_terminal_size((100, 24)).columns - 1))
 
     def _help_line(self) -> list[tuple[str, str]]:
-        return [("class:status", " ← for agents · ? for shortcuts · /help")]
+        return [("class:status", " ← agents · ? shortcuts · pgup output · /help")]
 
     def _agents_lines(self) -> list[str]:
         """The `←` view: which agent is running which model right now."""
@@ -427,6 +456,24 @@ class WTHRepl:
 
     #: Commands whose bare form already opens an interactive view of its own.
     SELF_INTERACTIVE = frozenset({"/model", "/permission"})
+
+    def _remember_output(self, command: str, response: Any) -> None:
+        """Keep the last few thousand lines so PageUp has something to show."""
+        if not response:
+            return
+        self._output_buffer.append("")
+        self._output_buffer.append(f"❯ {command}")
+        for line in str(response).splitlines():
+            self._output_buffer.append(line)
+
+    def _open_pager(self) -> None:
+        from wth_ai.cli.ui.pager import collect_output, show_pager
+
+        lines = collect_output(self._output_buffer)
+        if not lines:
+            self.console.print(f"[{THEME['muted']}]belum ada output untuk digulir[/]")
+            return
+        show_pager(lines, title="output sesi ini")
 
     def _hand_terminal_back(self) -> None:
         """Release the terminal after a turn, whatever a nested app did.
@@ -652,6 +699,11 @@ class WTHRepl:
                 self.console.print(f"\n[{THEME['muted']}]bye[/]")
                 break
 
+            if self._pager_requested:
+                self._pager_requested = False
+                self._open_pager()
+                continue
+
             text = user_input.strip()
             if not text:
                 continue
@@ -699,6 +751,7 @@ class WTHRepl:
                 render_response(self.console, response, config=self.config)
             if not use_live:
                 self._show_tool_trace_plain()
+            self._remember_output(text, response)
             self._hand_terminal_back()
             kind = classify_command(text)
             if kind in {"heavy", "chat"} and not self.live_status:
