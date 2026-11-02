@@ -165,11 +165,15 @@ def test_toolbar_renders_without_an_orchestrator():
     segments = repl._toolbar()
     assert segments and all(isinstance(s, tuple) for s in segments)
     text = "".join(seg for _, seg in segments)
-    status, _, help_line = text.partition("\n")
+    # Three parts now: the closing RULE of the input line, the status, the help.
+    lines = text.split("\n")
+    assert len(lines) >= 3, text
+    assert lines[0].startswith("─"), "baris pertama harus garis penutup input"
+    status = lines[1]
     # No orchestrator: the bar still shows a working context (`~`) and controls,
     # and must not start with a stray separator.
     assert "~" in status and not status.startswith(" ·")
-    assert "for agents" in help_line
+    assert "for agents" in lines[2]
 
 
 def test_toolbar_never_raises_even_if_the_orchestrator_is_broken():
