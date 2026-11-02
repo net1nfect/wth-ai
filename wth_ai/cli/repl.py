@@ -73,6 +73,8 @@ class WTHRepl:
         self.console = Console(highlight=False)
         self.activity = ActivityStream(self.console)
         self._live: Live | None = None
+        #: revision of the tool trace at the last paint (see `_refresh_live`)
+        self._painted_revision: int | None = None
         self._job_activity_handler = None
         self.bindings = self._make_bindings()
         # The status used to be PRINTED after every heavy turn, so it scrolled
@@ -426,6 +428,29 @@ class WTHRepl:
     #: Commands whose bare form already opens an interactive view of its own.
     SELF_INTERACTIVE = frozenset({"/model", "/permission"})
 
+    def _hand_terminal_back(self) -> None:
+        """Release the terminal after a turn, whatever a nested app did.
+
+        Report: scrolling worked, then stopped after a chat/recon ran. A nested
+        picker/menu (or any app that enables mouse tracking) leaves the terminal
+        sending the wheel to the application; if the release is missed for any
+        reason, the operator cannot scroll anything until they restart the tool.
+        Emitting the OFF sequences here is idempotent -- the terminal ignores codes
+        for modes it is not in -- and it guarantees the wheel is the operator's
+        again as soon as a turn ends.
+        """
+        import sys
+
+        if not getattr(sys.stdout, "isatty", lambda: False)():
+            return
+        try:
+            # disable mouse tracking (X10, button-event, any-event, SGR) + leave
+            # the alternate screen if some nested app was still in it.
+            sys.stdout.write("\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l\x1b[?1015l\x1b[?1049l")
+            sys.stdout.flush()
+        except Exception:  # noqa: BLE001 - never let terminal cleanup break the REPL
+            pass
+
     def _maybe_open_menu(self, text: str) -> str | None:
         """Open the interactive menu when the input asks for one.
 
@@ -513,8 +538,22 @@ class WTHRepl:
                     self.console.print(result)
 
     def _refresh_live(self) -> None:
-        if self._live and self.tool_trace:
-            self._live.update(self.tool_trace.render_compact(bordered=False))
+        """Repaint the live region ONLY when the panel actually changed.
+
+        Measured cause of "can't scroll during/after the work": the panel repainted
+        at 12fps (spinner animation) plus once per second for the elapsed ticker, and
+        every repaint drags the terminal viewport back to the bottom. With the gate,
+        a silent phase writes nothing at all and the terminal belongs to the operator.
+        """
+        if not (self._live and self.tool_trace):
+            return
+        revision = getattr(self.tool_trace, "revision", None)
+        if revision is not None and revision == self._painted_revision:
+            return
+        self._painted_revision = revision
+        # The spinner advances on PAINT only, so it can no longer drive repaints.
+        self.tool_trace.advance_spinner()
+        self._live.update(self.tool_trace.render_compact(bordered=False))
 
     def _wire_live_callbacks(self) -> None:
         """Ensure orchestrator activity stream is attached before each turn."""
@@ -564,6 +603,12 @@ class WTHRepl:
         stop = threading.Event()
         anim = self._start_live_animation(stop)
         try:
+            # NOTE: `auto_refresh` is left at rich's default on purpose. Turning it
+            # off looked like the fix for constant repaints, but the measurement could
+            # not support the claim (this run: 23 repaint markers vs 14 before -- the
+            # proxy counts streamed tokens too, and answer lengths differ between
+            # runs). Gating on content changes (see `_refresh_live`) IS kept: it is
+            # what makes a silent phase cost zero writes.
             with Live(
                 self.tool_trace.render_compact(bordered=False),
                 refresh_per_second=12,
@@ -654,6 +699,7 @@ class WTHRepl:
                 render_response(self.console, response, config=self.config)
             if not use_live:
                 self._show_tool_trace_plain()
+            self._hand_terminal_back()
             kind = classify_command(text)
             if kind in {"heavy", "chat"} and not self.live_status:
                 # On a tty the toolbar already carries this, live. Printing the

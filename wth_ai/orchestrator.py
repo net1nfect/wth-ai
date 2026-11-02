@@ -405,9 +405,15 @@ class WTHOrchestrator:
                 bus.emit("llm_start", role=role, provider=provider, model=model, meta=meta)
 
         def on_llm_tick(role: str, elapsed_s: int) -> None:
-            if trace and use_trace:
+            # Coarse interval: repainting the live panel every second pins the
+            # terminal viewport to the bottom, so a long recon could not be scrolled
+            # while it ran. `ui.live_refresh_seconds` (default 15) is the knob.
+            interval = getattr(getattr(self.config, "ui", None), "live_refresh_seconds", 15)
+            from wth_ai.cli.ui.tool_trace import should_update_elapsed
+
+            if trace and use_trace and should_update_elapsed(elapsed_s, interval):
                 trace.set_llm(f"llm {role} · waiting {elapsed_s}s…")
-            if stream and use_stream:
+            if stream and use_stream and should_update_elapsed(elapsed_s, interval):
                 stream.on_llm_tick(role, elapsed_s)
             if bus and verbose:
                 bus.emit("llm_tick", role=role, elapsed_s=elapsed_s)

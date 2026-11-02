@@ -775,3 +775,67 @@ def test_completion_menu_filter_follows_the_buffer_state(monkeypatch):
     assert repl_mod.WTHRepl._completion_menu_open() is False
     monkeypatch.setattr(repl_mod, "get_app", lambda: _App(object()), raising=False)
     assert repl_mod.WTHRepl._completion_menu_open() is True
+
+
+# --------------------------------------------------------------------------- #
+# terminal handover after every turn
+#
+# Report: "scrolling worked, then stopped after a chat/recon ran". A nested app
+# (picker/menu) can leave the terminal capturing the mouse; if the release is
+# missed the operator cannot scroll anything until restarting the tool. The REPL
+# now releases the terminal unconditionally at the end of every turn.
+# --------------------------------------------------------------------------- #
+def test_handover_writes_the_release_sequences_on_a_tty(monkeypatch):
+    import sys
+
+    class _Tty:
+        """Records what the app writes (capsys cannot see a swapped-out stdout)."""
+
+        def __init__(self) -> None:
+            self.written: list[str] = []
+
+        def isatty(self) -> bool:
+            return True
+
+        def write(self, text: str) -> None:
+            self.written.append(text)
+
+        def flush(self) -> None:
+            pass
+
+    fake = _Tty()
+    monkeypatch.setattr(sys, "stdout", fake)
+    from wth_ai.cli.repl import WTHRepl
+
+    WTHRepl(lambda t: t)._hand_terminal_back()
+    out = "".join(fake.written)
+    for seq in ("\x1b[?1000l", "\x1b[?1003l", "\x1b[?1006l", "\x1b[?1049l"):
+        assert seq in out, f"urutan pelepasan {seq!r} tidak dikirim"
+    assert "\x1b[?1000h" not in out and "\x1b[?1049h" not in out, (
+        "handover tidak boleh MENGAKTIFKAN mode mouse/alt-screen"
+    )
+
+
+def test_handover_is_silent_when_stdout_is_not_a_tty(capsys, monkeypatch):
+    import sys
+
+    class _Pipe:
+        def isatty(self) -> bool:
+            return False
+
+    monkeypatch.setattr(sys, "stdout", _Pipe())
+    from wth_ai.cli.repl import WTHRepl
+
+    WTHRepl(lambda t: t)._hand_terminal_back()
+    assert capsys.readouterr().out == "", "output pipa tidak boleh kena escape terminal"
+
+
+def test_handover_runs_after_every_turn():
+    import inspect
+
+    from wth_ai.cli import repl as repl_mod
+
+    source = inspect.getsource(repl_mod.WTHRepl.run)
+    assert "self._hand_terminal_back()" in source, (
+        "pelepasan terminal harus dipanggil setiap turn, bukan hanya saat keluar"
+    )

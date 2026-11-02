@@ -31,26 +31,52 @@ class ToolTracePanel:
     log_lines: list[str] = field(default_factory=list)
     llm_status: str = ""
     _spinner_idx: int = field(default=0, repr=False)
+    #: Bumped on every real change. The REPL repaints the live region only when this
+    #: moves, so a silent job produces ZERO terminal writes -- measured cause of
+    #: "can't scroll while/after the work": the panel used to repaint 12x/second
+    #: (spinner animation + a per-second "waiting Ns…" ticker), and every repaint
+    #: pins the terminal viewport to the bottom.
+    revision: int = field(default=0, init=False, repr=False)
+
+    def _touch(self) -> None:
+        self.revision += 1
+
+    def current_frame(self) -> str:
+        """Current spinner frame WITHOUT advancing: rendering must be side-effect
+        free, or every repaint mutates the panel and no repaint can ever be skipped."""
+        return SPINNER_FRAMES[self._spinner_idx % len(SPINNER_FRAMES)]
 
     def advance_spinner(self) -> str:
-        frame = SPINNER_FRAMES[self._spinner_idx % len(SPINNER_FRAMES)]
+        frame = self.current_frame()
         self._spinner_idx += 1
+        self._touch()
         return frame
 
     def set_llm(self, status: str) -> None:
+        if status == self.llm_status:
+            return
         self.llm_status = status
+        self._touch()
 
     def clear_llm(self) -> None:
+        if not self.llm_status:
+            return
         self.llm_status = ""
+        self._touch()
 
     def set_phase(self, phase: str, pct: int) -> None:
         color = PHASE_COLORS.get(phase, THEME["thinking"])
-        self.current_label = f"[{color}]{phase}[/{color}] {pct}%"
+        label = f"[{color}]{phase}[/{color}] {pct}%"
+        if label == self.current_label:
+            return
+        self.current_label = label
+        self._touch()
 
     def add_pending(self, name: str, args: dict[str, Any]) -> None:
         summary = _args_summary(args)
         self.entries.append(TraceEntry(name=name, args_summary=summary, status="pending"))
         self._trim()
+        self._touch()
 
     def complete(self, name: str, result: str, duration_ms: int) -> None:
         for e in reversed(self.entries):
@@ -63,6 +89,7 @@ class ToolTracePanel:
             name=name, args_summary="", status="done", summary=result[:120], duration_ms=duration_ms,
         ))
         self._trim()
+        self._touch()
 
     def _trim(self) -> None:
         if len(self.entries) > self.max_lines:
@@ -75,15 +102,17 @@ class ToolTracePanel:
         self.log_lines.append(text[:120])
         if len(self.log_lines) > self.max_log_lines:
             self.log_lines = self.log_lines[-self.max_log_lines :]
+        self._touch()
 
-    def clear_log_lines(self) -> None:
+    def clear_log_lines(self) -> None:  # noqa: D401 - lihat _touch di badan
         self.log_lines.clear()
+        self._touch()
 
     def render(self) -> RenderableType:
         return self.render_compact(bordered=not _verbose_border())
 
     def render_compact(self, *, bordered: bool = False) -> RenderableType:
-        frame = self.advance_spinner()
+        frame = self.current_frame()
         lines: list[RenderableType] = []
         head = self.llm_status or self.current_label
         lines.append(Text(f"{frame} {head}", style=THEME["thinking"]))
@@ -103,6 +132,20 @@ class ToolTracePanel:
     def plain_log(self) -> str:
         rows = [f"- {e.name}: {e.status} {e.summary or e.args_summary}" for e in self.entries]
         return "\n".join(rows)
+
+
+def should_update_elapsed(elapsed_s: int, interval: int) -> bool:
+    """Whether an elapsed-seconds tick should repaint the live panel.
+
+    First tick yes (so the operator sees "waiting"), then only every `interval`
+    seconds. Measured: repainting on every tick (plus the spinner animation) pinned
+    the viewport to the bottom for the whole job, which is why scrolling was
+    impossible while work was in progress.
+    """
+    interval = max(1, int(interval or 1))
+    if elapsed_s <= 1:
+        return True
+    return elapsed_s % interval == 0
 
 
 def _verbose_border() -> bool:
