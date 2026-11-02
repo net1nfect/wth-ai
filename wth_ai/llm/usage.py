@@ -301,6 +301,37 @@ class UsageLedger:
             "budget": self.budget_state(),
         }
 
+    def budget_line(self, *, entries: list[UsageEntry] | None = None) -> str:
+        """The budget/caveat lines, as ONE source of wording.
+
+        Extracted so the rich-table path (a `caption`) and the plain path cannot
+        drift into saying different things about the same numbers. `entries` is
+        passed through so `format_summary(entries=...)` does not silently read a
+        different set than the one it was handed.
+        """
+        data = self.summary(entries=entries)
+        budget = data.get("budget", {})
+        lines: list[str] = []
+        if data.get("session_calls"):
+            lines.append(f"Sesi ini: {data['session_calls']} call · {data['session_tokens']} token")
+        if budget.get("active"):
+            status = "HABIS/LEWAT" if budget["over"] else "di bawah"
+            scope_label = "di sesi ini" if budget["scope"] == "session" else "seumur hidup"
+            lines.append(
+                f"Budget ({budget['mode']}, scope={budget['scope']}): "
+                f"{budget['used_tokens']}/{budget['limit_tokens']} token {scope_label} "
+                f"({status}), sisa {budget['remaining_tokens']}"
+            )
+            if budget["scope"] == "session" and data["total_tokens"] > budget["limit_tokens"]:
+                lines.append(
+                    f"Catatan: total seumur hidup {data['total_tokens']} token sudah di atas "
+                    f"batas {budget['limit_tokens']}, tapi batas ini berlaku per sesi (proses), "
+                    "bukan seumur hidup."
+                )
+        elif data["budget_tokens"]:
+            lines.append(f"Budget: {data['budget_tokens']} token (mode=off — tidak ditegakkan)")
+        return "\n".join(lines)
+
     def format_summary(self, *, entries: list[UsageEntry] | None = None) -> str:
         """Operator view. Says so plainly when nothing was measured."""
         data = self.summary(entries=entries)
@@ -322,33 +353,11 @@ class UsageLedger:
             lines.append("Per role:")
             for role, slot in sorted(data["by_role"].items(), key=lambda kv: -kv[1]["tokens"]):
                 lines.append(f"  {role}: {slot['calls']} call · {slot['tokens']} token")
-        budget = data.get("budget", {})
-        if data.get("session_calls"):
-            lines.append(
-                f"Sesi ini: {data['session_calls']} call · {data['session_tokens']} token"
-            )
-        if budget.get("active"):
-            status = "HABIS/LEWAT" if budget["over"] else "di bawah"
-            # Label the scope explicitly: with scope=session a standalone
-            # `wth usage` run legitimately shows 0 used, and an unqualified
-            # "0/1000" reads like the budget is untouched machine-wide.
-            scope_label = "di sesi ini" if budget["scope"] == "session" else "seumur hidup"
-            lines.append(
-                f"Budget ({budget['mode']}, scope={budget['scope']}): "
-                f"{budget['used_tokens']}/{budget['limit_tokens']} token {scope_label} "
-                f"({status}), sisa {budget['remaining_tokens']}"
-            )
-            # A standalone `wth usage` run has an empty session, so the line above
-            # can read "0/5000 (di bawah)" while the machine total is far past the
-            # limit. Say that out loud instead of letting it mislead.
-            if budget["scope"] == "session" and data["total_tokens"] > budget["limit_tokens"]:
-                lines.append(
-                    f"Catatan: total seumur hidup {data['total_tokens']} token sudah di atas "
-                    f"batas {budget['limit_tokens']}, tapi batas ini berlaku per sesi (proses), "
-                    "bukan seumur hidup."
-                )
-        elif data["budget_tokens"]:
-            lines.append(f"Budget: {data['budget_tokens']} token (mode=off — tidak ditegakkan)")
+        # Budget/caveat lines come from budget_line() so the plain view and the
+        # rich-table caption can never disagree about the same numbers.
+        tail = self.budget_line(entries=entries)
+        if tail:
+            lines.extend(tail.splitlines())
         return "\n".join(lines)
 
 
