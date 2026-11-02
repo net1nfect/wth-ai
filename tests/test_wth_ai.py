@@ -313,13 +313,35 @@ def test_param_ranker():
     assert ranked[0].score >= ranked[-1].score
 
 
-def test_vuln_idor_executor_blocked_without_accounts():
+def test_vuln_idor_executor_probes_without_accounts():
+    """Kontrak BERUBAH (disengaja, atas permintaan operator).
+
+    Dulu: tanpa 2 akun uji -> `blocked`, dan pengujian IDOR berhenti. Itu memblokir
+    kasus yang paling umum di dunia nyata: endpoint terbuka yang membocorkan objek
+    milik orang lain tanpa perlu login sama sekali. Sekarang executor melakukan
+    object-swap tanpa akun (id -> tetangganya) dan melaporkan berdasarkan bukti.
+    """
     from wth_ai.executor.vuln.idor import IdorExecutor
     from wth_ai.models import ExecutorTask, PermissionMode, SessionState
     state = SessionState()
     task = ExecutorTask(id="T1", goal="idor", target="https://x.com/api/1", permission_required=PermissionMode.STANDARD_TESTING)
     result = IdorExecutor(state).execute(task)
-    assert result.status == "blocked"
+    assert result.status != "blocked", "IDOR tidak boleh lagi berhenti karena tidak ada akun uji"
+    assert "tanpa akun" in result.output_summary.lower() or "object-swap" in result.output_summary.lower(), \
+        result.output_summary
+
+
+def test_vuln_idor_executor_says_so_when_there_is_no_object_to_swap():
+    """Tanpa parameter/segmen objek, jelaskan -- jangan mengarang temuan."""
+    from wth_ai.executor.vuln.idor import IdorExecutor
+    from wth_ai.models import ExecutorTask, PermissionMode, SessionState
+    state = SessionState()
+    task = ExecutorTask(id="T2", goal="idor", target="https://x.com/api/profile",
+                        permission_required=PermissionMode.STANDARD_TESTING)
+    result = IdorExecutor(state).execute(task)
+    assert result.status == "success"
+    assert result.risk == "low"
+    assert "objek" in (result.output_summary + " ".join(result.observations)).lower()
 
 
 def test_graph_command():
