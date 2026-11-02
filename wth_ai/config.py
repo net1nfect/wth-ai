@@ -84,6 +84,13 @@ class SecretsConfig:
     anthropic_base_url: str | None = None
     google_base_url: str | None = None
     custom_base_url: str | None = None
+    # Research (search) backend. Optional: without a key the researcher falls
+    # back to scraping search-engines' HTML, which on this network returns a
+    # low-fidelity page for scriptless clients (verified: a Next.js CVE query
+    # came back dominated by the fashion retailer "Next"). A keyed API returns
+    # clean JSON, so it is tried FIRST whenever it is configured.
+    search_provider: str = ""           # brave | (kosong = HTML fallback saja)
+    search_api_key: str | None = None
 
 
 @dataclass
@@ -360,6 +367,8 @@ class WTHConfig:
             anthropic_base_url=secrets_raw.get("anthropic_base_url"),
             google_base_url=secrets_raw.get("google_base_url"),
             custom_base_url=secrets_raw.get("custom_base_url"),
+            search_provider=secrets_raw.get("search_provider", ""),
+            search_api_key=_sec("search_api_key", "SEARCH_API_KEY"),
         )
 
         bots = BotConfig(
@@ -427,6 +436,8 @@ class WTHConfig:
         # Only custom_base_url used to be written, so a base URL configured for
         # openai/anthropic/google (a proxy, a gateway, a self-hosted mirror) was
         # silently dropped the next time the config was saved.
+        if self.secrets.search_provider:
+            secrets_out["search_provider"] = self.secrets.search_provider
         for field in ("custom_base_url", "openai_base_url", "anthropic_base_url", "google_base_url"):
             value = getattr(self.secrets, field, None)
             if value:
@@ -439,6 +450,7 @@ class WTHConfig:
             ("google_api_key", "google_api_key"),
             ("groq_api_key", "groq_api_key"),
             ("custom_api_key", "custom_api_key"),
+            ("search_api_key", "search_api_key"),
         ):
             if vname in present:
                 secrets_out[field] = vault_ref(vname)

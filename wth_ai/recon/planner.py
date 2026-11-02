@@ -20,12 +20,18 @@ from wth_ai.recon.model import PlannedTool, ReconPlan, SkippedTool
 from wth_ai.recon.registry import ReconToolRegistry
 
 # Max tools selected per profile.
+#
+# Raised after measuring real output: `recon-only` capped at 30 while the
+# registry holds hundreds of entries, so coverage was decided by an arbitrary
+# ceiling rather than by what is installed and allowed. `max` is the "I want
+# everything eligible" profile for a dedicated tester box.
 PROFILE_CAP: dict[str, int] = {
-    "budget": 10,
-    "recon-only": 30,
-    "default": 40,
-    "high-quality": 70,
-    "local": 30,
+    "budget": 15,
+    "recon-only": 45,
+    "default": 60,
+    "high-quality": 100,
+    "max": 160,
+    "local": 45,
 }
 
 # Category execution priority (after builtins) for good coverage within a cap.

@@ -9,6 +9,93 @@ from typing import Any
 from wth_ai.agents.supervisor_context import SupervisorContext
 from wth_ai.engagement.mode import auto_approve_enabled
 from wth_ai.models import AssessmentPhase, ExecutorTask, FindingState, PermissionMode, sort_tasks_by_dependencies
+from wth_ai.permission_presets import apply_preset
+
+
+def _dispatch_computer_use(ctx: SupervisorContext, args: dict[str, Any], *, approved: bool) -> str:
+    """Computer use, gated twice: capability tier AND human approval.
+
+    Reading the screen (screenshot/windows/screen_size/cursor) is observation and
+    runs from read-only upward. Injecting input (click/move/type/key/focus) acts
+    on whatever window the operator currently has focused, so it needs at least
+    the `ask` preset's capability AND, unless approvals are disabled
+    (`auto`/`yolo`), an explicit approval -- exactly the tiering the presets
+    describe.
+    """
+    from wth_ai.computer_use import INPUT_ACTIONS, ComputerUse
+
+    action = str(args.get("action", "")).strip().lower()
+    if not action:
+        return "computer_use: argumen 'action' wajib."
+
+    if action in INPUT_ACTIONS:
+        if not ctx.permission_mgr.mode_sufficient(PermissionMode.STANDARD_TESTING):
+            return (
+                f"DITOLAK: '{action}' menyuntik input ke desktop operator dan butuh minimal preset "
+                f"'ask' (permission standard). Sekarang: {ctx.permission_mgr.mode.value}. "
+                f"Pakai /permission ask atau /permission yolo."
+            )
+        if not approved and not auto_approve_enabled(getattr(ctx, "config", None)):
+            return (
+                f"BUTUH APPROVAL: '{action}' akan menggerakkan mouse/keyboard operator. "
+                f"Setujui aksinya, atau jalankan /permission auto (atau yolo) kalau memang mau "
+                f"tanpa konfirmasi."
+            )
+
+    kwargs = {k: v for k, v in args.items() if k != "action"}
+    result = ComputerUse().run_action(action, **kwargs)
+
+    if ctx.action_memory is not None:
+        try:
+            ctx.action_memory.record(f"computer_use:{action}", kwargs, result.describe()[:400])
+        except Exception:  # noqa: BLE001 - memory is best-effort, never fatal
+            pass
+
+    if not result.ok:
+        return f"GAGAL {result.describe()} — jalankan action=detect untuk melihat backend yang terdeteksi."
+    return result.describe()
+
+
+def _dispatch_research(ctx: SupervisorContext, args: dict[str, Any]) -> str:
+    """Public-information research. No approval gate, deliberately.
+
+    Searching the web and reading a public page is read-only and touches no
+    target asset, so prompting for it would be friction with no safety value.
+    What it DOES get is the epistemic tag: every note is a candidate, and the
+    rendered output says so on every call.
+    """
+    from wth_ai.research import get_researcher
+
+    action = str(args.get("action", "")).strip().lower()
+    session_id = getattr(getattr(ctx, "state", None), "session_id", "") or ""
+    researcher = get_researcher(session_id)
+
+    if action == "search":
+        query = str(args.get("query", "")).strip()
+        if not query:
+            return "research: argumen 'query' wajib untuk action=search."
+        limit = int(args.get("limit", 8) or 8)
+        return researcher.report(researcher.search(query, limit=limit))
+
+    if action in ("fetch", "browser"):
+        url = str(args.get("url", "")).strip()
+        if not url:
+            return f"research: argumen 'url' wajib untuk action={action}."
+        note = researcher.fetch(url) if action == "fetch" else researcher.browser_fetch(url)
+        if not note.ok and action == "browser":
+            # A browser failure is not a dead end: say so and fall back.
+            fallback = researcher.fetch(url)
+            return (
+                f"{researcher.report(note)}\n\n"
+                f"— fallback fetch biasa: {researcher.report(fallback)}"
+            )
+        return researcher.report(note)
+
+    if action == "notes":
+        block = researcher.context_block()
+        return block or "Belum ada catatan riset di sesi ini."
+
+    return f"research: aksi tidak dikenal {action!r}. Pilihan: search, fetch, browser, notes."
 
 
 def dispatch_supervisor_tool(
@@ -75,18 +162,23 @@ def _dispatch(ctx: SupervisorContext, name: str, args: dict[str, Any], *, approv
     if name == "scope_show":
         return ctx.scope_mgr.display()
 
+    if name == "research":
+        return _dispatch_research(ctx, args)
+
+    if name == "computer_use":
+        return _dispatch_computer_use(ctx, args, approved=approved)
+
     if name == "permission_set":
-        mode = args.get("mode", "read_only_recon")
+        mode = str(args.get("mode", "ask"))
         try:
-            # `set_mode()` applies PERMISSION_ALIASES (so the legacy spellings
-            # still resolve) and reports the VALID list on failure.
-            # `PermissionMode(mode)` did neither, which is why three of the four
-            # modes the tool schema advertised came back as "Invalid mode".
-            pm = ctx.permission_mgr.set_mode(mode)
+            # `apply_preset` sets the three safety dimensions TOGETHER (tool
+            # ceiling + approval), so the mode can never end up half-applied.
+            # Raw PermissionMode values still resolve through ALIASES.
+            preset = apply_preset(mode, permission_mgr=ctx.permission_mgr)
         except ValueError as exc:
             return f"Invalid mode: {mode} — {exc}"
-        ctx.state.permission_mode = pm
-        return f"Permission mode: {pm.value}"
+        ctx.state.permission_mode = ctx.permission_mgr.mode
+        return f"Permission preset: {preset.name} — {preset.summary}"
 
     if name == "session_status":
         cov = ctx.asset_graph.coverage()
