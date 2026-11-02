@@ -193,3 +193,165 @@ def test_doctor_check_ui():
     assert ui["plain_repl"] is True
     assert ui["slash_router"] is True
     assert ui["ok"] is True
+
+
+# --------------------------------------------------------------------------- #
+# palette consistency between the REPL and the TUI
+#
+# Measured before this: `theme.tcss` hardcoded GitHub dark (#0d1117, #161b22,
+# #58a6ff, #8b949e) while `cli/ui/theme.py` carried a cyan/violet identity, so
+# the REPL and the TUI looked like two different products and one colour change
+# needed two edits. The CSS is now generated from THEME.
+# --------------------------------------------------------------------------- #
+_LEGACY_GITHUB_PALETTE = ("#0d1117", "#161b22", "#010409", "#58a6ff", "#8b949e", "#21262d",
+                          "#30363d", "#484f58")
+
+
+def test_tui_css_uses_the_shared_identity_colours():
+    from wth_ai.cli.tui.theme_css import build_tui_css
+    from wth_ai.cli.ui.theme import THEME
+
+    css = build_tui_css()
+    for key in ("surface", "surface_alt", "border", "brand", "muted"):
+        assert THEME[key] in css, f"warna THEME['{key}'] tidak dipakai TUI"
+
+
+def test_every_colour_in_the_tui_css_comes_from_the_theme():
+    """The real anti-drift lock, and stronger than a spot check.
+
+    Any hex literal in the stylesheet that is not a THEME value means someone
+    reintroduced a hardcoded colour -- which is exactly how the TUI ended up
+    looking like a different product.
+    """
+    import re
+
+    from wth_ai.cli.tui.theme_css import build_tui_css
+    from wth_ai.cli.ui.theme import THEME
+
+    allowed = {value.lower() for value in THEME.values() if isinstance(value, str)}
+    stray = sorted({
+        match.lower() for match in re.findall(r"#[0-9a-fA-F]{6}", build_tui_css())
+    } - allowed)
+    assert not stray, f"warna di luar THEME: {stray}"
+
+
+def test_tui_css_drops_the_legacy_github_palette():
+    from wth_ai.cli.tui.theme_css import build_tui_css
+
+    css = build_tui_css().lower()
+    for legacy in _LEGACY_GITHUB_PALETTE:
+        assert legacy not in css, f"palet lama {legacy} masih ada di CSS TUI"
+
+
+def test_app_css_comes_from_the_shared_theme_not_a_side_file():
+    from wth_ai.cli.tui.app import WthTuiApp
+    from wth_ai.cli.ui.theme import THEME
+
+    assert not getattr(WthTuiApp, "CSS_PATH", None), "TUI masih memuat stylesheet terpisah"
+    assert THEME["surface"] in WthTuiApp.CSS
+    assert THEME["brand"] in WthTuiApp.CSS
+
+
+def _stub_orchestrator():
+    from unittest.mock import MagicMock
+
+    orch = MagicMock()
+    orch.config.ui.max_trace_lines = 20
+    orch.config.ui.mode = "tui"
+    orch.client.available.return_value = True
+    orch.state.scope.target = "example.com"
+    orch.state.session_id = "abc12345"
+    orch.state.findings = []
+    orch.state.metadata = {}
+    orch._ui_bus = None
+    return orch
+
+
+def test_tui_boots_headless_and_adopts_the_shared_palette():
+    """The app must actually MOUNT -- none of the other TUI tests boot it."""
+    pytest.importorskip("textual")
+    import asyncio
+
+    from wth_ai.cli.tui.app import WthTuiApp
+    from wth_ai.cli.ui.theme import THEME
+
+    expected = THEME["surface"].lstrip("#")
+    want = tuple(int(expected[i:i + 2], 16) for i in (0, 2, 4))
+
+    async def _boot():
+        app = WthTuiApp(_stub_orchestrator())
+        async with app.run_test(size=(120, 34)) as pilot:
+            await pilot.pause()
+            screen = app.screen.styles.background
+            rgb = (screen.r, screen.g, screen.b) if hasattr(screen, "r") else None
+            return rgb, app
+
+    rgb, _ = asyncio.run(_boot())
+    assert rgb == want, f"layar TUI {rgb} != THEME['surface'] {want}"
+
+
+def test_tui_every_tab_activates():
+    pytest.importorskip("textual")
+    import asyncio
+
+    from textual.widgets import TabbedContent
+
+    from wth_ai.cli.tui.app import WthTuiApp
+
+    async def _boot():
+        app = WthTuiApp(_stub_orchestrator())
+        async with app.run_test(size=(120, 34)) as pilot:
+            await pilot.pause()
+            tabs = app.query_one("#main-tabs", TabbedContent)
+            seen = []
+            for name in ("tab-activity", "tab-findings", "tab-tools", "tab-config", "tab-chat"):
+                tabs.active = name
+                await pilot.pause()
+                seen.append(tabs.active)
+            return seen
+
+    assert asyncio.run(_boot()) == [
+        "tab-activity", "tab-findings", "tab-tools", "tab-config", "tab-chat"
+    ]
+
+
+def test_tui_header_and_footer_are_populated():
+    """An empty header/footer is the TUI version of dead UI."""
+    pytest.importorskip("textual")
+    import asyncio
+
+    from wth_ai.cli.tui.app import WthTuiApp
+
+    async def _boot():
+        app = WthTuiApp(_stub_orchestrator())
+        async with app.run_test(size=(120, 34)) as pilot:
+            await pilot.pause()
+
+            async def _text(widget_id: str) -> str:
+                # Static-based widgets keep their content behind `render()`;
+                # `.renderable` alone reads empty and made working chrome look
+                # broken (a `or` fallback in an earlier probe hid the difference,
+                # which is why both accessors are tried explicitly here).
+                for _ in range(10):
+                    node = app.query_one(widget_id)
+                    candidates = []
+                    try:
+                        candidates.append(node.render())
+                    except Exception:  # noqa: BLE001
+                        pass
+                    candidates.append(getattr(node, "renderable", None))
+                    for raw in candidates:
+                        if raw is None:
+                            continue
+                        text = getattr(raw, "plain", None) or str(raw)
+                        if text and text.strip():
+                            return text
+                    await pilot.pause()
+                return ""
+
+            return await _text("#header"), await _text("#footer")
+
+    header, footer = asyncio.run(_boot())
+    assert "WTH-AI" in header
+    assert "example.com" in header, header
+    assert "ctrl+p" in footer.lower() or "palette" in footer.lower(), footer

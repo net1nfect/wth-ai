@@ -25,7 +25,12 @@ THEME = {
     "warn": "#fbbf24",
     "brand": "#22d3ee",
     "brand_alt": "#a78bfa",
+    # Surfaces are one family (Tailwind gray-900/800/700) so the REPL and the
+    # textual TUI stop looking like two different products: the TUI palette used
+    # to be hardcoded GitHub dark (#0d1117 / #58a6ff) in theme.tcss while this
+    # dict carried a cyan/violet identity.
     "surface": "#111827",
+    "surface_alt": "#1f2937",
 }
 
 #: Wordmark mark only -- the name and version are rendered as styled text next
