@@ -733,3 +733,45 @@ def test_wheel_delta_parses_both_terminal_encodings():
     assert wheel_delta("\x1b[M`*\"") == -1             # X10 up
     assert wheel_delta("\x1b[Ma*\"") == 1              # X10 down
     assert wheel_delta("") == 0 and wheel_delta("sampah") == 0
+
+
+# --------------------------------------------------------------------------- #
+# mouse capture at the PROMPT must be transient
+#
+# Reported: after a recon printed a long result, the operator could no longer
+# scroll it. Cause: `mouse_support=True` on the PromptSession captures the wheel
+# for the whole prompt, so the terminal sends events to the app instead of
+# scrolling its own buffer -- and with no menu open the app drops them.
+# --------------------------------------------------------------------------- #
+def test_prompt_mouse_capture_is_gated_on_the_completion_menu():
+    import inspect
+
+    from wth_ai.cli import repl as repl_mod
+
+    source = inspect.getsource(repl_mod.WTHRepl.__init__)
+    assert "mouse_support=Condition(self._completion_menu_open)" in source, (
+        "prompt menangkap mouse terus-menerus -> roda tidak bisa scroll output"
+    )
+
+
+def test_completion_menu_filter_is_false_without_a_running_app():
+    from wth_ai.cli.repl import WTHRepl
+
+    assert WTHRepl._completion_menu_open() is False
+
+
+def test_completion_menu_filter_follows_the_buffer_state(monkeypatch):
+    import wth_ai.cli.repl as repl_mod
+
+    class _Buffer:
+        def __init__(self, state):
+            self.complete_state = state
+
+    class _App:
+        def __init__(self, state):
+            self.current_buffer = _Buffer(state)
+
+    monkeypatch.setattr(repl_mod, "get_app", lambda: _App(None), raising=False)
+    assert repl_mod.WTHRepl._completion_menu_open() is False
+    monkeypatch.setattr(repl_mod, "get_app", lambda: _App(object()), raising=False)
+    assert repl_mod.WTHRepl._completion_menu_open() is True

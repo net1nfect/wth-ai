@@ -9,6 +9,8 @@ import time
 from typing import TYPE_CHECKING, Any, Callable
 
 from prompt_toolkit import PromptSession
+from prompt_toolkit.application.current import get_app
+from prompt_toolkit.filters import Condition
 from prompt_toolkit.formatted_text import FormattedText
 from prompt_toolkit.auto_suggest import AutoSuggestFromHistory
 from prompt_toolkit.history import FileHistory
@@ -89,9 +91,14 @@ class WTHRepl:
             multiline=False,
             completer=build_completer(),
             auto_suggest=AutoSuggestFromHistory(),
-            # Mouse enabled so the completion menu can be scrolled with the wheel
-            # and a row clicked instead of only typed.
-            mouse_support=True,
+            # Mouse is captured ONLY while the completion menu is open.
+            #
+            # Measured: capturing it permanently (mouse_support=True) makes the
+            # terminal send wheel events to the app instead of scrolling its own
+            # buffer, and with no menu open the app drops them -- so after a recon
+            # printed a long result, the operator could no longer scroll it. With the
+            # filter, the wheel is the terminal's again the moment the menu closes.
+            mouse_support=Condition(self._completion_menu_open),
             complete_while_typing=True,
             complete_style=CompleteStyle.COLUMN,
             reserve_space_for_menu=8,
@@ -391,6 +398,19 @@ class WTHRepl:
             pass
 
         return out
+
+    @staticmethod
+    def _completion_menu_open() -> bool:
+        """True only while the completion menu is showing.
+
+        Used as the `mouse_support` filter so the wheel keeps scrolling the
+        terminal's own output at rest, and can still click the menu when it exists.
+        """
+        try:
+            buffer = get_app().current_buffer
+        except Exception:  # noqa: BLE001 - no running app
+            return False
+        return bool(buffer is not None and buffer.complete_state)
 
     @staticmethod
     def _needs_more_input(selected: str, original: str) -> bool:
