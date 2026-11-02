@@ -119,6 +119,11 @@ class MenuItem:
     description: str = ""
     action: str = ""
     children: list["MenuItem"] = field(default_factory=list)
+    #: True when the usage entry needs an argument (`use N`, `graph query`,
+    #: `config set key=val`). Measured: offering those as if they were complete
+    #: commands made the menu submit half a command -- one of them persisted a
+    #: model named after the verb. The REPL pre-fills the prompt instead.
+    needs_args: bool = False
 
     @property
     def is_submenu(self) -> bool:
@@ -240,6 +245,44 @@ class MenuState:
 # --------------------------------------------------------------------------- #
 # building the command tree from the registry
 # --------------------------------------------------------------------------- #
+#: Verbs MEASURED to need an argument, taken from running each command with no
+#: argument and watching what happened (see the verification pass in the commit
+#: message). Static rules cannot tell `/help topic` (needs a topic) from
+#: `/help full` (a complete command), so the exceptions are listed rather than
+#: guessed -- and the menu pre-fills instead of submitting them.
+NEEDS_ARGS_VERBS = frozenset({
+    "query", "goal", "domain", "topic", "task_id", "edit", "run", "search",
+    "install", "remove", "add", "set", "use", "plan", "replay", "ask", "attach",
+})
+
+
+def _subcommand_entries(usage: str) -> list[tuple[str, str, bool]]:
+    """[(verb, full_entry, needs_args)] from the first bracket group."""
+    start = usage.find("[")
+    if start == -1:
+        return []
+    end = usage.find("]", start)
+    if end <= start:
+        return []
+    entries: list[tuple[str, str, bool]] = []
+    seen: set[str] = set()
+    for part in usage[start + 1:end].split("|"):
+        part = part.strip()
+        if not part:
+            continue
+        tokens = part.split()
+        head = tokens[0]
+        if head.startswith("<") or head.endswith(">"):
+            continue
+        if head in seen:
+            continue
+        seen.add(head)
+        # More than one token means the entry itself carries arguments; a single
+        # token may still be a bare verb whose argument is implicit (`query`, `goal`).
+        entries.append((head, part, len(tokens) > 1 or head.lstrip("-") in NEEDS_ARGS_VERBS))
+    return entries
+
+
 def _subcommands_from_usage(usage: str) -> list[str]:
     """`/config [show|set key=val]` -> ["show", "set"].
 
@@ -282,8 +325,14 @@ def build_command_menu(*, predicate: Callable[[Any], bool] | None = None) -> lis
     by_category: "OrderedDict[str, list[MenuItem]]" = OrderedDict()
     for cmd in sorted(commands, key=lambda c: (c.category, c.name)):
         children = [
-            MenuItem(label=sub, description=f"{cmd.name} {sub}", action=f"{cmd.name} {sub}")
-            for sub in _subcommands_from_usage(getattr(cmd, "usage", "") or "")
+            MenuItem(
+                label=verb,
+                description=f"{cmd.name} {entry}" + ("  (butuh argumen)" if needs_args else ""),
+                # Trailing space = "the REPL must let me finish typing".
+                action=f"{cmd.name} {verb} " if needs_args else f"{cmd.name} {verb}",
+                needs_args=needs_args,
+            )
+            for verb, entry, needs_args in _subcommand_entries(getattr(cmd, "usage", "") or "")
         ]
         item = MenuItem(
             label=cmd.name,
@@ -324,7 +373,7 @@ def format_menu_rows(state: MenuState, *, width: int = 96) -> list[tuple[str, st
         else:
             text = label
         style = "class:menu-sel" if selected else "class:menu-item"
-        suffix = " …" if item.is_submenu else ""
+        suffix = " …" if item.is_submenu else ("  ⟨argumen⟩" if item.needs_args else "")
         rows.append((style, f" {marker} {text}{suffix}"))
     return rows
 

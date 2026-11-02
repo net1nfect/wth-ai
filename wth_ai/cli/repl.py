@@ -392,6 +392,17 @@ class WTHRepl:
 
         return out
 
+    @staticmethod
+    def _needs_more_input(selected: str, original: str) -> bool:
+        """True when a menu choice must be finished by the operator first.
+
+        The menu marks a choice that needs an argument with a trailing space, so the
+        REPL pre-fills the prompt instead of submitting half a command. Measured
+        consequence of NOT doing this: `/model use` (verb without its argument)
+        persisted a model literally named "use" into the operator's config.
+        """
+        return selected.endswith(" ") and not original.endswith(" ")
+
     def _maybe_open_menu(self, text: str) -> str | None:
         """Open the interactive menu when the input asks for one.
 
@@ -575,6 +586,19 @@ class WTHRepl:
             selected = self._maybe_open_menu(text)
             if selected is None:
                 continue
+            if self._needs_more_input(selected, text):
+                # Menu memilih command yang butuh argumen: isi ke prompt supaya
+                # operator melihat persis apa yang akan jalan lalu menambah argumen.
+                # Mengirimnya apa adanya pernah membuat '/model use' menyimpan model
+                # bernama "use" ke config.
+                try:
+                    lanjut = self.session.prompt(self._prompt_text(), default=selected)
+                except (EOFError, KeyboardInterrupt):
+                    self.console.print(f"[{THEME['muted']}]dibatalkan[/]")
+                    continue
+                selected = lanjut
+                if not selected.strip():
+                    continue
             text = selected.strip()
 
             use_live = self._use_live_panel() and not is_quick_command(text)

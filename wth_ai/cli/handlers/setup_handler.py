@@ -43,6 +43,14 @@ def handle_target(orch: Any, args: list[str]) -> str:
     return _apply_scope_intent(orch, intent)
 
 
+#: Everything `/model` treats as a subcommand. Kept next to the dispatcher so the
+#: two cannot drift: a verb added below must be listed here, or it can be stored as
+#: a model name by the "treat a single token as a model id" fallback.
+_MODEL_VERBS = frozenset({
+    "show", "current", "list", "fix", "use", "set", "test", "try", "pick", "pilih",
+})
+
+
 def handle_model(orch: Any, args: list[str]) -> str:
     """List or switch LLM models from the active provider."""
     # Bare `/model` opens the interactive picker on a real terminal: choosing from
@@ -102,6 +110,22 @@ def handle_model(orch: Any, args: list[str]) -> str:
 
     if len(args) == 2 and args[0] in ROLE_NAMES:
         return _model_set_role(orch, args[0], args[1])
+
+    # A bare VERB is not a model id. Measured: `/model use` (the verb, without its
+    # argument) fell through to this branch and PERSISTED a model literally named
+    # "use", breaking the operator's config. Anything this handler already treats
+    # as a verb must ask for usage instead of being stored as a model name.
+    if sub in _MODEL_VERBS:
+        return (
+            f"`{sub}` butuh argumen.\n"
+            "Usage:\n"
+            "  `/model list [kata]` — daftar/cari model\n"
+            "  `/model pick` — pilih interaktif (panah + enter)\n"
+            "  `/model use <nomor>` — pilih dari daftar terakhir\n"
+            "  `/model set <role|all> <id>` — set role\n"
+            "  `/model test <nomor|id>` — uji tanpa mengubah config\n"
+            "  `/model show` — lihat konfigurasi sekarang"
+        )
 
     if len(args) == 1 and sub not in ROLE_NAMES:
         return _model_set_role(orch, "planner", sub)
