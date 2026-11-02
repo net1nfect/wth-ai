@@ -132,6 +132,17 @@ def eval_run() -> None:
     click.echo(f"\nLaporan disimpan: {path}")
 
 
+@eval_group.command("act")
+def eval_act() -> None:
+    """Jalankan aksi self-improvement dari hasil pengukuran (bobot + backfill)."""
+    from wth_ai.eval import act as act_mod
+    from wth_ai.findings_db import FindingsDB
+    from wth_ai.memory.learning import HuntMemoryLearning
+
+    actions = act_mod.act_on_report(None, learning=HuntMemoryLearning(), findings_db=FindingsDB())
+    click.echo(act_mod.format_actions(actions))
+
+
 @eval_group.command("history")
 def eval_history() -> None:
     """List stored reports, newest last."""
