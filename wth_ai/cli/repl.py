@@ -3,12 +3,16 @@
 from __future__ import annotations
 
 import itertools
+import sys
 import threading
-from typing import TYPE_CHECKING, Callable
+import time
+from typing import TYPE_CHECKING, Any, Callable
 
 from prompt_toolkit import PromptSession
+from prompt_toolkit.auto_suggest import AutoSuggestFromHistory
 from prompt_toolkit.history import FileHistory
 from prompt_toolkit.key_binding import KeyBindings
+from prompt_toolkit.shortcuts import CompleteStyle
 from prompt_toolkit.styles import Style
 
 from rich.console import Console
@@ -29,6 +33,13 @@ if TYPE_CHECKING:
 
 PROMPT_STYLE = Style.from_dict({
     "prompt": f"bold {THEME['prompt']}",
+    # Bottom toolbar styles. prompt_toolkit only renders colours it knows about,
+    # so every colour used in the toolbar has to be registered here.
+    "status": THEME["muted"],
+    "status-accent": THEME["accent"],
+    "status-warn": THEME["warn"],
+    "status-brand": THEME["brand"],
+    "status-plan": THEME["plan"],
 })
 
 
@@ -59,12 +70,26 @@ class WTHRepl:
         self._live: Live | None = None
         self._job_activity_handler = None
         self.bindings = self._make_bindings()
+        # The status used to be PRINTED after every heavy turn, so it scrolled
+        # away exactly when it became useful ("am I near the budget? which model
+        # answered?"). On a real terminal it now lives in a persistent bottom
+        # toolbar; the printed card remains for non-tty/plain runs.
+        self.live_status = bool(getattr(sys.stdout, "isatty", lambda: False)())
+        self._toolbar_cache = ""
+        self._toolbar_at = 0.0
+        from wth_ai.cli.tui.widgets.slash_completer import build_completer
+
         self.session: PromptSession = PromptSession(
             history=FileHistory(history_path),
             key_bindings=self.bindings,
             style=PROMPT_STYLE,
             multiline=False,
-            completer=SlashCompleter(),
+            completer=build_completer(),
+            auto_suggest=AutoSuggestFromHistory(),
+            complete_while_typing=True,
+            complete_style=CompleteStyle.COLUMN,
+            reserve_space_for_menu=8,
+            bottom_toolbar=self._toolbar if self.live_status else None,
         )
 
     def _make_bindings(self) -> KeyBindings:
@@ -78,7 +103,52 @@ class WTHRepl:
         def _exit(event):
             event.app.exit(exception=EOFError)
 
+        @kb.add("c-c")
+        def _cancel(event):
+            """Ctrl+C clears what you typed; only an EMPTY prompt exits.
+
+            Previously a stray Ctrl+C mid-line killed the whole session and lost
+            the draft, which is the single most annoying thing about a chat CLI.
+            """
+            buf = event.app.current_buffer
+            if buf.text:
+                buf.reset()
+            else:
+                event.app.exit(exception=KeyboardInterrupt)
+
+        # Ctrl+R (reverse history search) is deliberately NOT bound here: the
+        # default emacs binding already does it correctly, and an earlier
+        # hand-rolled version of this override broke it.
+
         return kb
+
+    def _banner_extra(self) -> dict[str, Any]:
+        """Live facts for the masthead: target, permission, tools, results dir."""
+        extra: dict[str, Any] = {}
+        state = getattr(self.orch, "state", None) if self.orch else None
+        if state is not None:
+            scope = getattr(state, "scope", None)
+            if getattr(scope, "target", ""):
+                extra["target"] = scope.target
+            perm = getattr(getattr(state, "permission_mode", None), "value", "")
+            if perm:
+                extra["permission"] = perm
+        try:
+            from wth_ai.recon.registry import ReconToolRegistry
+
+            registry = ReconToolRegistry()
+            extra["tools_total"] = len(registry.tools)
+            # `registry.available()` is the real availability check (PATH lookup /
+            # vault key). An earlier version read a nonexistent `spec.available`
+            # attribute, so the masthead confidently announced "tools 0/346"
+            # while the status bar next to it said 109 available.
+            extra["tools_installed"] = len(registry.available())
+        except Exception:  # noqa: BLE001
+            pass
+        results = getattr(self.orch, "results_root", None) if self.orch else None
+        if results:
+            extra["results_dir"] = str(results)
+        return extra
 
     def _attach_orchestrator(self) -> None:
         if self.orch is None:
@@ -92,6 +162,71 @@ class WTHRepl:
             from wth_ai.cli.ui.job_activity_bridge import unwire_job_activity
             unwire_job_activity(self._job_activity_handler)
         self._job_activity_handler = wire_job_activity(self.orch)
+
+    def _toolbar(self) -> list[tuple[str, str]]:
+        """Live status for the bottom bar. Cheap, and never raises.
+
+        Cached for a second: prompt_toolkit calls this on every keystroke, and a
+        toolbar that walks the registry or the filesystem per keypress would make
+        typing feel heavy. Never does network I/O -- a status bar must not block
+        the prompt.
+        """
+        now = time.monotonic()
+        if self._toolbar_cache and now - self._toolbar_at < 1.0:
+            return self._toolbar_cache
+        try:
+            self._toolbar_cache = self._build_toolbar()
+        except Exception:  # noqa: BLE001 - a broken toolbar must not break input
+            self._toolbar_cache = [("class:status", "wth-ai")]
+        self._toolbar_at = now
+        return self._toolbar_cache
+
+    def _build_toolbar(self) -> list[tuple[str, str]]:
+        from wth_ai.cli.ui.context_bar import render_context_bar
+        from wth_ai.llm.usage import get_ledger
+        from wth_ai.cli.ui.theme import budget_bar
+
+        # Stable left anchor: the bar identifies itself even when there is no
+        # budget, no target and no orchestrator yet.
+        out: list[tuple[str, str]] = [("class:status-brand", " wth-ai")]
+        state = getattr(self.orch, "state", None) if self.orch else None
+        target = ""
+        if state is not None:
+            scope = getattr(state, "scope", None)
+            target = str(getattr(scope, "target", "") or "")
+        if target:
+            out.append(("class:status-warn", f" ◎ {target}"))
+        perm = ""
+        if state is not None:
+            perm = getattr(getattr(state, "permission_mode", None), "value", "") or ""
+        if perm:
+            out.append(("class:status-plan", f"  {perm}"))
+
+        if self.orch is not None and hasattr(self.orch, "client"):
+            try:
+                ctx = render_context_bar(self.orch)
+            except Exception:  # noqa: BLE001
+                ctx = ""
+            if ctx:
+                out.append(("class:status", f"  {ctx}"))
+
+        # Budget + spend. `check_budget` reports against the SESSION scope, which
+        # is what a running CLI can actually be held to.
+        try:
+            ledger = get_ledger()
+            data = ledger.summary()
+            tokens = data["total_tokens"]
+            budget = data.get("budget", {})
+            if tokens:
+                out.append(("class:status", f"  {tokens} tok"))
+            bar = budget_bar(data.get("session_tokens", 0), budget.get("limit_tokens", 0))
+            if bar:
+                style = "class:status-warn" if budget.get("over") else "class:status-accent"
+                out.append((style, f"  {bar}"))
+        except Exception:  # noqa: BLE001
+            pass
+
+        return out
 
     def _print_status(self) -> None:
         if self.status_fn:
@@ -179,7 +314,7 @@ class WTHRepl:
         if self.banner:
             self.console.print(self.banner, markup=True)
         else:
-            render_banner(self.console, config=self.config)
+            render_banner(self.console, config=self.config, extra=self._banner_extra())
         hint = HINT_LINE
         if verbose_enabled(self.config):
             hint += " · verbose on"
@@ -228,7 +363,9 @@ class WTHRepl:
             if not use_live:
                 self._show_tool_trace_plain()
             kind = classify_command(text)
-            if kind in {"heavy", "chat"}:
+            if kind in {"heavy", "chat"} and not self.live_status:
+                # On a tty the toolbar already carries this, live. Printing the
+                # card as well would just push the answer off screen.
                 self._print_status()
             if kind != "quick":
                 self.console.print()
