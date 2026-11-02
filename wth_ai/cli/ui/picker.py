@@ -157,6 +157,32 @@ def format_rows(
     return rows
 
 
+def wheel_delta(event_data: str) -> int:
+    """-1 (up) / +1 (down) / 0 (not a wheel event) for a `Vt100MouseEvent` payload.
+
+    Handles both encodings terminals use:
+      SGR : ``\x1b[<64;Cb;CcM`` (64 = up, 65 = down)
+      X10 : ``\x1b[M`` + 3 bytes, where the first byte minus 32 is the button code.
+
+    Needed because an INLINE (non-fullscreen) app only receives the wheel on the
+    cell under the pointer: the terminal reports the event at the cursor position
+    and prompt_toolkit dispatches it to the control that owns that cell. So the
+    wheel "did not work" unless the pointer happened to sit on the list.
+    """
+    if not event_data:
+        return 0
+    if event_data.startswith("\x1b[<"):
+        try:
+            button = int(event_data[3:].split(";", 1)[0])
+        except (ValueError, IndexError):
+            return 0
+        return -1 if button == 64 else (1 if button == 65 else 0)
+    if event_data.startswith("\x1b[M") and len(event_data) >= 4:
+        code = ord(event_data[3]) - 32
+        return -1 if code == 64 else (1 if code == 65 else 0)
+    return 0
+
+
 def item_click_handler(state: "ListPickerState", result: dict, index: int):
     """Closure bound to ONE row: select it, or activate it when already selected.
 
@@ -243,8 +269,22 @@ def build_picker_bindings(state: "ListPickerState", result: dict) -> Any:
     bindings the REPL uses (a test with an empty KeyBindings() proved nothing about
     arrow keys)."""
     from prompt_toolkit.key_binding import KeyBindings
+    from prompt_toolkit.keys import Keys
 
     bindings = KeyBindings()
+
+    # Registered EAGER so it runs before the default mouse dispatch: a wheel event
+    # anywhere in the app scrolls the list, instead of only when the pointer sits
+    # on a list row. Returning NotImplemented for anything that is not a wheel keeps
+    # clicks and drags on the normal path.
+    @bindings.add(Keys.Vt100MouseEvent, eager=True)
+    def _wheel_anywhere(event):
+        delta = wheel_delta(event.data)
+        if not delta:
+            return NotImplemented
+        state.move(delta * 3)
+        event.app.invalidate()
+        return None
 
     @bindings.add("up")
     @bindings.add("c-p")
@@ -309,7 +349,12 @@ def build_picker_app(state: "ListPickerState", result: dict, *, bindings, style,
         layout=Layout(Window(control)),
         key_bindings=bindings,
         style=style,
-        full_screen=False,
+        # Alternate screen ON (full_screen=True): terminals such as VTE
+        # (GNOME Terminal / Kali's default) only forward wheel events to the app in
+        # the alternate screen -- inline, the wheel scrolls the terminal's own
+        # scrollback and the app never sees it. Measured symptom: the wheel worked
+        # in tests (events injected directly) but not in the operator's terminal.
+        full_screen=True,
         # Wheel/touchpad scrolling and clicking, same as the command menu.
         mouse_support=True,
         **kwargs,
