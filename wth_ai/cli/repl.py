@@ -9,6 +9,7 @@ import time
 from typing import TYPE_CHECKING, Any, Callable
 
 from prompt_toolkit import PromptSession
+from prompt_toolkit.formatted_text import FormattedText
 from prompt_toolkit.auto_suggest import AutoSuggestFromHistory
 from prompt_toolkit.history import FileHistory
 from prompt_toolkit.key_binding import KeyBindings
@@ -40,6 +41,7 @@ PROMPT_STYLE = Style.from_dict({
     "status-warn": THEME["warn"],
     "status-brand": THEME["brand"],
     "status-plan": THEME["plan"],
+    "placeholder": THEME["muted"],
 })
 
 
@@ -90,6 +92,12 @@ class WTHRepl:
             complete_style=CompleteStyle.COLUMN,
             reserve_space_for_menu=8,
             bottom_toolbar=self._toolbar if self.live_status else None,
+            # Dim placeholder while the line is empty, so the input explains itself
+            # instead of showing a bare cursor.
+            placeholder=(
+                FormattedText([("class:placeholder", "Kirim perintah, atau ketik / untuk command…")])
+                if self.live_status else None
+            ),
         )
 
     def _make_bindings(self) -> KeyBindings:
@@ -102,6 +110,28 @@ class WTHRepl:
         @kb.add("c-d")
         def _exit(event):
             event.app.exit(exception=EOFError)
+
+        @kb.add("?")
+        def _shortcuts(event):
+            """`?` on an empty line opens shortcuts; typing `?` still works."""
+            buf = event.app.current_buffer
+            if buf.text:
+                buf.insert_text("?")
+                return
+            from prompt_toolkit.application import run_in_terminal
+
+            run_in_terminal(lambda: self._print_shortcuts())
+
+        @kb.add("left")
+        def _agents(event):
+            """`←` on an empty line shows the agent roster; otherwise it moves the cursor."""
+            buf = event.app.current_buffer
+            if buf.text:
+                buf.cursor_left()
+                return
+            from prompt_toolkit.application import run_in_terminal
+
+            run_in_terminal(lambda: self._print_agents())
 
         @kb.add("c-c")
         def _cancel(event):
@@ -163,6 +193,110 @@ class WTHRepl:
             unwire_job_activity(self._job_activity_handler)
         self._job_activity_handler = wire_job_activity(self.orch)
 
+    def _status_line(self) -> list[tuple[str, str]]:
+        """`model · target · permission · profile` — the line under the input.
+
+        Shape follows the CLI the operator already knows (model, working context,
+        access level, effort), because that line is where the eye lands before
+        typing, not a place for a dashboard.
+        """
+        from wth_ai.cli.ui.theme import SEP
+
+        # Every read below can fail (no orchestrator, a stub, a broken state object).
+        # The status line sits under the input: if it raises, the operator loses the
+        # prompt itself, which is a far worse failure than a dim status line.
+        try:
+            return self._status_line_inner()
+        except Exception:  # noqa: BLE001
+            return [("class:status", " wth-ai · (status tidak tersedia)")]
+
+    def _status_line_inner(self) -> list[tuple[str, str]]:
+        """`model · target · permission · profile` — the line under the input.
+
+        Shape follows the CLI the operator already knows (model, working context,
+        access level, effort), because that line is where the eye lands before
+        typing, not a place for a dashboard.
+
+        Parts are collected first and joined with separators BETWEEN them: an
+        earlier version prefixed each segment with its own separator, which left a
+        stray leading " · " whenever the first part was missing.
+        """
+        from wth_ai.cli.ui.theme import SEP
+
+        parts: list[tuple[str, str]] = []          # (style, text)
+
+        model = ""
+        try:
+            if self.orch is not None and hasattr(self.orch, "client"):
+                model, _ = self.orch.client.model_for_role("planner")
+        except Exception:  # noqa: BLE001
+            model = ""
+        if model:
+            parts.append(("class:status-plan", model))
+
+        state = getattr(self.orch, "state", None) if self.orch else None
+        target = ""
+        if state is not None:
+            target = str(getattr(getattr(state, "scope", None), "target", "") or "")
+        # `~` when no target is set (no project dir in an offensive CLI; the target
+        # is the working context).
+        parts.append(("class:status", target or "~"))
+
+        perm = ""
+        if state is not None:
+            perm = getattr(getattr(state, "permission_mode", None), "value", "") or ""
+        if perm:
+            parts.append(("class:status-warn", perm))
+
+        ui = getattr(self.config, "ui", None) if self.config else None
+        mode = getattr(getattr(self.config, "agent", None), "mode", "") if self.config else ""
+        activity = getattr(ui, "activity_mode", "") if ui else ""
+        profile = "/".join(x for x in (mode, activity) if x)
+        if profile:
+            parts.append(("class:status-brand", profile))
+
+        # Spend stays visible but dim: context, not headline.
+        try:
+            from wth_ai.llm.usage import get_ledger
+
+            tokens = get_ledger().summary().get("total_tokens", 0)
+            if tokens:
+                parts.append(("class:status", f"{tokens} tok"))
+        except Exception:  # noqa: BLE001
+            pass
+
+        out: list[tuple[str, str]] = []
+        for index, (style, text) in enumerate(parts):
+            prefix = " " if index == 0 else SEP
+            out.append((style, f"{prefix}{text}"))
+        return out or [("class:status-brand", " wth-ai")]
+
+    def _help_line(self) -> list[tuple[str, str]]:
+        return [("class:status", " ← for agents · ? for shortcuts · /help")]
+
+    def _agents_lines(self) -> list[str]:
+        """The `←` view: which agent is running which model right now."""
+        from wth_ai.config import ROLE_NAMES
+
+        lines: list[str] = []
+        state = getattr(self.orch, "state", None) if self.orch else None
+        phase = ""
+        if state is not None:
+            phase = str(getattr(state, "current_phase", "") or "")
+            phase = getattr(phase, "value", phase)
+        lines.append(f"fase: {phase or 'idle'}")
+        lines.append("")
+        for role in ROLE_NAMES:
+            model = ""
+            ptype = ""
+            try:
+                model, _ = self.orch.client.model_for_role(role)
+                ptype = self.orch.client.provider_for_role(role).name
+            except Exception:  # noqa: BLE001
+                pass
+            lines.append(f"  {role:<9} {model or '—':<28} {ptype or ''}".rstrip())
+        return lines
+
     def _toolbar(self) -> list[tuple[str, str]]:
         """Live status for the bottom bar. Cheap, and never raises.
 
@@ -175,7 +309,8 @@ class WTHRepl:
         if self._toolbar_cache and now - self._toolbar_at < 1.0:
             return self._toolbar_cache
         try:
-            self._toolbar_cache = self._build_toolbar()
+            status = self._status_line()
+            self._toolbar_cache = status + [("class:status", "\n")] + self._help_line()
         except Exception:  # noqa: BLE001 - a broken toolbar must not break input
             self._toolbar_cache = [("class:status", "wth-ai")]
         self._toolbar_at = now
@@ -227,6 +362,29 @@ class WTHRepl:
             pass
 
         return out
+
+    def _print_shortcuts(self) -> None:
+        from wth_ai.cli.ui.picker import show_panel
+
+        show_panel("Shortcuts", [
+            "  enter          kirim perintah",
+            "  /              menu command (tab melengkapi)",
+            "  ↑ / ↓          riwayat perintah",
+            "  ←  (kosong)    daftar agent + model aktif",
+            "  ?  (kosong)    panel ini",
+            "  ctrl+p         palet command (mode TUI)",
+            "  ctrl+r         cari di riwayat",
+            "  ctrl+c         bersihkan baris (kosong = keluar)",
+            "  ctrl+d         keluar",
+            "  ctrl+l         bersihkan layar",
+            "",
+            "  Ketik tanpa / untuk mengobrol biasa.",
+        ])
+
+    def _print_agents(self) -> None:
+        from wth_ai.cli.ui.picker import show_panel
+
+        show_panel("Agents", self._agents_lines())
 
     def _print_status(self) -> None:
         if self.status_fn:

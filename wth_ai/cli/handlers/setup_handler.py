@@ -45,7 +45,20 @@ def handle_target(orch: Any, args: list[str]) -> str:
 
 def handle_model(orch: Any, args: list[str]) -> str:
     """List or switch LLM models from the active provider."""
-    sub = args[0] if args else "show"
+    # Bare `/model` opens the interactive picker on a real terminal: choosing from
+    # 268 models should not require reading a numbered wall of text and retyping a
+    # number. Piped/CI runs keep the text summary so nothing can block on a picker.
+    if not args:
+        from wth_ai.cli.ui.picker import interactive_available
+
+        if interactive_available():
+            return _model_picker_flow(orch)
+        return _model_show(orch) + (
+            "\n\nPilih interaktif: `/model pick` (butuh terminal). "
+            "Non-interaktif: `/model list` lalu `/model <nomor>`."
+        )
+
+    sub = args[0]
 
     if sub in {"show", "current"}:
         return _model_show(orch)
@@ -66,6 +79,9 @@ def handle_model(orch: Any, args: list[str]) -> str:
 
     if sub in {"test", "try"} and len(args) >= 2:
         return _model_test(orch, " ".join(args[1:]).strip())
+
+    if sub in {"pick", "pilih"}:
+        return _model_picker_flow(orch, needle=" ".join(args[1:]).strip())
 
     if sub == "fix":
         return _model_fix(orch)
@@ -311,7 +327,19 @@ def _model_list(orch: Any, provider: str, *, store_picker: bool = False, needle:
     except Exception as exc:
         return f"Tidak bisa list model `{provider}`: {exc}"
     if not models:
-        return f"Tidak ada model dari `{provider}`."
+        # Say WHERE the request went. Without this the operator sees an empty list
+        # and no reason, which is exactly how "kenapa gabisa milih model" happens.
+        endpoint = ""
+        try:
+            endpoint = getattr(orch.client.provider_for_role("planner"), "base_url", "") or ""
+        except Exception:  # noqa: BLE001
+            endpoint = ""
+        return (
+            f"Tidak ada model dari `{provider}`.\n"
+            f"  Endpoint yang dipakai: {endpoint or '(base URL belum diset)'}\n"
+            "  Kalau itu bukan gateway yang lu maksud, perbaiki base URL-nya "
+            "(`wth setup`, atau `/provider`)."
+        )
 
     needle = (needle or "").strip().lower()
     matches = [m for m in models if needle in m.lower()] if needle else list(models)
@@ -345,6 +373,58 @@ def _model_list(orch: Any, provider: str, *, store_picker: bool = False, needle:
         lines.append("Persempit: `/model list <kata>` (mis. `/model list glm`)")
         lines.append("Pilih: `/model <nomor>` · uji tanpa ganti: `/model test <nomor|id>`")
     return "\n".join(lines)
+
+
+def _model_picker_flow(orch: Any, *, needle: str = "", role: str = "planner") -> str:
+    """Interactive picker (arrows + Enter). Degrades to the text listing off-tty."""
+    from wth_ai.cli.ui.picker import interactive_available, pick_from_list
+
+    provider = _primary_provider(orch)
+    try:
+        models = orch.client.list_models(provider)
+    except Exception as exc:
+        return f"Tidak bisa list model `{provider}`: {exc}"
+    if not models:
+        endpoint = ""
+        try:
+            endpoint = getattr(orch.client.provider_for_role("planner"), "base_url", "") or ""
+        except Exception:  # noqa: BLE001
+            endpoint = ""
+        return (
+            f"Tidak ada model dari `{provider}`.\n"
+            f"  Endpoint yang dipakai: {endpoint or '(base URL belum diset)'}\n"
+            "  Kalau itu bukan gateway yang lu maksud, perbaiki base URL-nya "
+            "(`wth setup`, atau `/provider`)."
+        )
+
+    needle = (needle or "").strip().lower()
+    candidates = [m for m in models if needle in m.lower()] if needle else list(models)
+    if not candidates:
+        return (
+            f"Tidak ada model cocok `{needle}` di `{provider}` ({len(models)} total). "
+            "Coba kata lain."
+        )
+    if not interactive_available():
+        return _model_list(orch, provider, store_picker=True, needle=needle)
+
+    current = ""
+    try:
+        current = orch.config.providers[role].model
+    except Exception:  # noqa: BLE001
+        current = ""
+
+    from wth_ai.cli.ui.picker import describe_model
+
+    choice = pick_from_list(
+        f"Pilih model · {provider}",
+        candidates,
+        subtitle=f"{len(candidates)} kandidat · dipasang ke role {role}",
+        describe=lambda m: describe_model(m, current=current),
+    )
+    if not choice:
+        return "Dibatalkan — tidak ada yang diubah."
+    result = _model_set_role(orch, role, choice)
+    return f"{result}\n  Pasang ke semua role: `/model set all {choice}`"
 
 
 def _model_test(orch: Any, spec: str) -> str:
