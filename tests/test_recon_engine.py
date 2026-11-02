@@ -33,7 +33,11 @@ def test_planner_default_profile():
 
     assert plan.target == "example.com"
     assert len(plan.selected) > 0
-    assert len(plan.selected) <= 40
+    # Assert against the constant rather than a literal: the capability was
+    # loosened on request, and a hardcoded 40 locked the old ceiling in place.
+    from wth_ai.recon.planner import PROFILE_CAP
+
+    assert len(plan.selected) <= PROFILE_CAP["default"]
 
 
 def test_planner_budget_profile():

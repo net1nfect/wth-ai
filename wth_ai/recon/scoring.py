@@ -63,9 +63,22 @@ def score(normalizer: "ReconNormalizer") -> list[PriorityTarget]:
             bump(_asset_for_url(p.url), 3, f"interesting-param:{p.name}")
 
     # exposed docs/api endpoints
+    #
+    # `ep.kind` is decided by `js.classify_endpoint()`, which reads a PATH
+    # PATTERN inside a javascript bundle. Nothing has actually fetched that
+    # path, so calling the result "exposed" is an unverified claim. Verified on
+    # the live target: `/openapi.json` was scored `exposed-docs (+3)` while its
+    # real response is a 404 HTML page. A path only earns the "exposed" bump
+    # once an HTTP probe confirms it serves something; otherwise it is recorded
+    # as an explicitly unverified JS path.
+    probed = {p.url: p.status for p in normalizer.http_probes.values()}
     for ep in normalizer.endpoints.values():
         if ep.kind in ("docs", "graphql", "api"):
-            bump(_asset_for_url(ep.url), 3, f"exposed-{ep.kind}")
+            status = probed.get(ep.url)
+            if status is None:
+                bump(_asset_for_url(ep.url), 1, f"js-path-{ep.kind}-unverified")
+            elif status < 400:
+                bump(_asset_for_url(ep.url), 3, f"exposed-{ep.kind}")
 
     # JS intel + secret candidates
     for js in normalizer.js_intel.values():

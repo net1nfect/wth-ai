@@ -14,7 +14,12 @@ class BrowserSession:
     url: str
     title: str = ""
     cookies: list[dict[str, Any]] = field(default_factory=list)
-    page_text: str = ""
+    page_text: str = ""       # RAW HTML, truncated to 50k -- see navigate()
+    # Rendered, hydrated text of the page. Measured: a docs page had 1.27 MB of
+    # HTML (so `page_text` kept only the first 5%, i.e. head/nav/scripts) while
+    # `document.body.innerText` held 23k characters of the actual article. Prose
+    # consumers must read THIS field, not parsed slices of the truncated HTML.
+    visible_text: str = ""
     cloudflare_detected: bool = False
     cloudflare_bypassed: bool = False
     forms: list[dict[str, Any]] = field(default_factory=list)
@@ -44,21 +49,40 @@ class BrowserController:
         self._browser = None
         self._tab = None
 
-    async def navigate(self, url: str, *, wait_seconds: float = 5.0, bypass_cloudflare: bool = True) -> BrowserSession:
+    async def navigate(
+        self,
+        url: str,
+        *,
+        wait_seconds: float = 5.0,
+        bypass_cloudflare: bool = True,
+        wait_for: str = "",
+    ) -> BrowserSession:
+        """Open `url` and capture the page.
+
+        `wait_for` is a CSS selector to AWAIT before capturing. Measured: on a
+        client-rendered docs page (nextjs.org) a fixed `wait_seconds` captured
+        the site chrome ("Frameworks / Svelte / Nuxt …") with the article body
+        absent -- 545 characters of menu, because the DOM had not hydrated. A
+        selector wait is what turns "the browser opened it" into "we read it".
+        """
         await self.start()
         session = BrowserSession(url=url)
         try:
             self._tab = await self._browser.get(url)
             await asyncio.sleep(wait_seconds)
+            if wait_for:
+                await self._await_selector(session, wait_for)
 
             html = await self._tab.get_content() or ""
             session.page_text = html[:50000]
+            session.visible_text = await self._capture_visible_text()
             session.cloudflare_detected = self._detect_cloudflare(session.page_text)
 
             if session.cloudflare_detected and bypass_cloudflare:
                 await asyncio.sleep(8)
                 html = await self._tab.get_content() or ""
                 session.page_text = html[:50000]
+                session.visible_text = await self._capture_visible_text()
                 session.cloudflare_bypassed = not self._detect_cloudflare(session.page_text)
 
             try:
@@ -71,6 +95,32 @@ class BrowserController:
         except Exception as exc:
             session.errors.append(str(exc))
         return session
+
+    async def _capture_visible_text(self) -> str:
+        """Rendered text of the page (`document.body.innerText`).
+
+        This is the content channel: parsing `get_content()` gives HTML that the
+        controller truncates to 50k, and on a 1.27 MB docs page the article lives
+        far beyond that cut -- measured 545 characters of navigation chrome from
+        the HTML versus 23,357 characters of real article from innerText.
+        """
+        try:
+            text = await self._tab.evaluate("document.body.innerText")
+            return (text or "")[:200_000]
+        except Exception as exc:  # noqa: BLE001 - fall back to the HTML channel
+            return ""
+
+    async def _await_selector(self, session: BrowserSession, selector: str) -> None:
+        """Wait for `selector`, recording (not raising) when it never appears.
+
+        A timeout here is informational: the page may legitimately have no
+        `<article>`/`<main>`, and the caller still gets whatever rendered. What
+        must NOT happen is a silent fixed sleep being reported as a page read.
+        """
+        try:
+            await self._tab.select(selector, timeout=15)
+        except Exception as exc:  # noqa: BLE001
+            session.errors.append(f"wait_for {selector!r} gagal: {type(exc).__name__}")
 
     def _detect_cloudflare(self, html: str) -> bool:
         markers = ["cf-browser-verification", "challenge-platform", "Just a moment",

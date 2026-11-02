@@ -306,6 +306,14 @@ def _spec_for(name: str, category: str) -> ToolSpec:
         if name in SUPPORTED_EXTERNAL or category in {"subdomain", "http_probe", "archive"}:
             allowed = ["budget", *allowed]
 
+    # `max` is the "everything eligible" profile: it grants no permission of its
+    # own, it mirrors `high-quality` so a tool that is allowed in high-quality is
+    # also allowed under max. Without this, `profile="max"` validated against
+    # PROFILE_CAP but every tool was then rejected by the allowed_profiles check,
+    # so the profile silently selected nothing.
+    if "high-quality" in allowed and "max" not in allowed:
+        allowed.append("max")
+
     return ToolSpec(
         name=name,
         category=category,

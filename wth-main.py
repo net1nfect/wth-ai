@@ -79,6 +79,36 @@ def doctor(config_path: str) -> None:
     click.echo(ToolDoctor(_load_config(config_path)).full_report())
 
 
+@cli.group(name="eval")
+def eval_group() -> None:
+    """Measure the self-improvement loop (offline: no LLM, no network)."""
+    from wth_ai.workspace import init_workspace
+    init_workspace()
+
+
+@eval_group.command("run")
+def eval_run() -> None:
+    """Collect one measurement report and compare it with the previous run."""
+    from wth_ai.eval import compare, format_report, load_latest, run
+    report, path = run()
+    previous = load_latest(exclude=path.name)
+    click.echo(format_report(report, comparison=compare(report, previous)))
+    click.echo(f"\nLaporan disimpan: {path}")
+
+
+@eval_group.command("history")
+def eval_history() -> None:
+    """List stored reports, newest last."""
+    from wth_ai.eval import eval_dir
+    directory = eval_dir()
+    files = sorted(directory.glob("eval-*.json")) if directory.exists() else []
+    if not files:
+        click.echo("Belum ada laporan eval.")
+        return
+    for path in files[-10:]:
+        click.echo(f"  {path.name} ({path.stat().st_size} byte)")
+
+
 @cli.group()
 def vault() -> None:
     """Manage the encrypted secret vault (~/.wth-ai/vault.enc)."""

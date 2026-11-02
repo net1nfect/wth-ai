@@ -101,7 +101,7 @@ class WTHOrchestrator:
         self.planner = PlannerAgent(self.config, self.client, self.skill_router, self.tool_registry)
         self.verifier = VerifierAgent(self.config, self.client)
         self.reporter = ReportBuilderAgent(self.config, self.client)
-        self.chat = ChatAgent(self.config, self.client, self.skills)
+        self.chat = ChatAgent(self.config, self.client, self.skills, context_builder=self._chat_context_builder)
         self.supervisor = SupervisorAgent(self.config, self.client)
         self.browser = BrowserController(headless=self.config.browser.headless)
         self.asset_graph = AssetGraph(self.state.session_id)
@@ -258,6 +258,53 @@ class WTHOrchestrator:
         self._init_supervisor_ctx()
         self._persist()
         return self.state.session_id
+
+    def _chat_context_builder(self):
+        """ContextBuilder for ChatAgent, resolved lazily on every call.
+
+        `ChatAgent` is constructed BEFORE `asset_graph`/`learning` wiring in
+        `__init__`, so passing a ready-made builder would hand chat a
+        half-built graph. Building on demand also means a `new_session()`
+        swap is picked up without rewiring the agent.
+        """
+        from wth_ai.context.builder import ContextBuilder
+
+        return ContextBuilder(
+            action_memory=getattr(self, "action_memory", None),
+            asset_graph=getattr(self, "asset_graph", None),
+            learning=getattr(self, "learning", None),
+            skill_router=getattr(self, "skill_router", None),
+            jobs=self._jobs_recall_block,
+        )
+
+    def _jobs_recall_block(self, target: str) -> str:
+        """Recent job activity for `target`, for injection into agent context.
+
+        Read from the job store, so a brand-new session still knows that recon
+        already ran against this host in a previous one.
+        """
+        from wth_ai.jobs.recall import recall_block
+
+        return recall_block(limit=5, target=target)
+
+    def _handle_eval(self, args: list[str]) -> str:
+        """`/eval` — jalankan harness pengukuran self-improvement (offline).
+
+        Reports honestly when there is nothing to measure: an empty learning
+        store means "self-improvement" is an aspiration, not a demonstrated fact.
+        """
+        from wth_ai.eval import compare, format_report, load_latest, run
+
+        report, path = run()
+        previous = load_latest(exclude=path.name)
+        return format_report(report, comparison=compare(report, previous)) + f"\n\nLaporan: {path}"
+
+    def _handle_jobs(self, args: list[str]) -> str:
+        """`/jobs [target]` — riwayat job dari job store (bukan asset graph sesi)."""
+        from wth_ai.jobs.recall import agent_report, recent_jobs
+
+        target = " ".join(args).strip()
+        return agent_report(recent_jobs(limit=10, target=target))
 
     def _rewire_session_services(self) -> None:
         """Point every long-lived service at the CURRENT session's objects.
@@ -788,16 +835,125 @@ class WTHOrchestrator:
         self._persist()
         return self.scope_mgr.display()
 
+    def _record_learning_outcome(self, finding: Any, *, verified: bool) -> None:
+        """Record BOTH outcomes into the learning store.
+
+        Found by the eval harness: `record_from_finding` was called from exactly
+        one place in the codebase -- the `verified` branch. False positives went
+        only to `FindingsDB`, so the learning store could never contain a
+        failure and `success_rate()` was structurally incapable of reflecting
+        one: it was a tally of wins dressed up as a precision. Every downstream
+        consumer (`top_patterns`, `build_planner_context`, `engagement_nudge`)
+        inherited that bias.
+
+        `finding.cwe` is often empty and `title` can legitimately be empty (the
+        FINDING_CANDIDATE parser accepts `- title:` with no value), so the label
+        is derived defensively -- a bare `finding.title.split()[0]` used to
+        raise IndexError here and abort the whole `/verify` run.
+        """
+        tech = self.state.metadata.get("tech_profile", "generic_web")
+        self.learning.record_from_finding(
+            tech,
+            _finding_learning_label(finding),
+            verified=verified,
+            session_id=self.state.session_id,
+        )
+
     def _handle_permission(self, args: list[str]) -> str:
+        """`/permission [mode]` — one word sets the whole safety policy.
+
+        Accepts the presets (`plan`, `read-only`, `ask`, `auto`, `yolo`) and the
+        raw `PermissionMode` values via aliases, so muscle memory from the old
+        spelling keeps working.
+        """
+        from wth_ai.permission_presets import apply_preset, describe_all
+
         if not args:
-            return self.permission_mgr.display()
+            return f"{self.permission_mgr.display()}\n\n{describe_all()}"
         try:
-            self.permission_mgr.set_mode(args[0].lower())
-            self.state.permission_mode = self.permission_mgr.mode
-            self._persist()
-            return self.permission_mgr.display()
+            preset = apply_preset(args[0].lower(), permission_mgr=self.permission_mgr)
         except ValueError as exc:
             return f"Error: {exc}"
+        self.state.permission_mode = self.permission_mgr.mode
+        self._persist()
+        return f"✓ Preset aktif: {preset.name} — {preset.summary}"
+
+    def _handle_research(self, args: list[str]) -> str:
+        """`/research <query>` · `/research url <URL>` · `/research notes`.
+
+        Research never needs approval (it reads public pages and touches no target
+        asset) but every result is rendered with its epistemic status attached,
+        so a search hit can never be mistaken for a confirmed finding.
+        """
+        from wth_ai.research import get_researcher
+
+        usage = (
+            "Pakai: /research <kata kunci>  |  /research url <URL>  |  /research browser <URL>  |  /research notes\n"
+            "Status hasil: KANDIDAT — informasi publik bukan bukti tentang target ini."
+        )
+        if not args:
+            return usage
+        researcher = get_researcher(self.state.session_id)
+        head = args[0].lower()
+        if head in ("url", "fetch") and len(args) > 1:
+            return researcher.report(researcher.fetch(args[1]))
+        if head == "browser" and len(args) > 1:
+            return researcher.report(researcher.browser_fetch(args[1]))
+        if head == "notes":
+            return researcher.context_block() or "Belum ada catatan riset di sesi ini."
+        return researcher.report(researcher.search(" ".join(args)))
+
+    def _handle_computer(self, args: list[str]) -> str:
+        """`/computer <action> [arg...]` — drive the real desktop.
+
+        Capability gating matches the agent path, but the APPROVAL dimension is
+        deliberately not re-asked here: an operator typing the command into the
+        REPL has already expressed intent, and prompting again is the kind of
+        friction that gets a guardrail switched off entirely. The agent path
+        (`computer_use` tool) still requires approval in `ask` mode.
+        """
+        from wth_ai.computer_use import INPUT_ACTIONS, ComputerUse
+        from wth_ai.models import PermissionMode
+
+        usage = (
+            "Pakai: /computer <aksi> [arg]\n"
+            "  observasi (read-only): detect · screenshot [path] · windows · screen_size · cursor\n"
+            "  input (butuh minimal preset 'ask'): click X Y · move X Y · type <teks> · key <combo> · focus <window>"
+        )
+        if not args or args[0] in ("help", "-h", "--help"):
+            return usage
+
+        action = args[0].lower()
+        rest = args[1:]
+
+        if action in INPUT_ACTIONS and not self.permission_mgr.mode_sufficient(
+            PermissionMode.STANDARD_TESTING
+        ):
+            return (
+                f"DITOLAK: '{action}' menyuntik input ke desktop. Sekarang mode "
+                f"{self.permission_mgr.mode.value}. Jalankan /permission ask (atau yolo) dulu."
+            )
+
+        kwargs: dict[str, Any] = {}
+        try:
+            if action in ("click", "move"):
+                kwargs = {"x": int(rest[0]), "y": int(rest[1])}
+            elif action == "type":
+                kwargs = {"text": " ".join(rest)}
+            elif action == "key":
+                kwargs = {"combo": rest[0]}
+            elif action == "focus":
+                kwargs = {"window": " ".join(rest)}
+            elif action == "screenshot" and rest:
+                kwargs = {"path": rest[0]}
+        except (IndexError, ValueError):
+            return f"Argumen tidak lengkap untuk '{action}'.\n{usage}"
+
+        result = ComputerUse().run_action(action, **kwargs)
+        note = ""
+        if action in INPUT_ACTIONS:
+            note = "  [input desktop — dijalankan atas perintah langsung operator]"
+        return result.describe() + note
 
     def _handle_approve(self, args: list[str]) -> str:
         if not args:
@@ -890,18 +1046,10 @@ class WTHOrchestrator:
             verdict = v.get("verdict", "needs_more_evidence")
             if verdict == "verified":
                 self.findings_db.update_finding_state(finding.id, FindingState.VERIFIED)
-                tech = self.state.metadata.get("tech_profile", "generic_web")
-                # `finding.cwe` is often empty and `title` can legitimately be
-                # empty (the FINDING_CANDIDATE block parser accepts `- title:`
-                # with no value), so a bare `finding.title.split()[0]` used to
-                # raise IndexError here -- which aborted the whole /verify run,
-                # not just this one finding's learning record.
-                self.learning.record_from_finding(
-                    tech, _finding_learning_label(finding),
-                    verified=True, session_id=self.state.session_id,
-                )
+                self._record_learning_outcome(finding, verified=True)
             elif verdict == "false_positive":
                 self.findings_db.update_finding_state(finding.id, FindingState.FALSE_POSITIVE)
+                self._record_learning_outcome(finding, verified=False)
             outputs.append(self.verifier.format_verification(v))
 
         self._sync_state_from_db()
