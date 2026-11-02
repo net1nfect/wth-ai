@@ -112,7 +112,26 @@ def raise_for_status(provider_name: str, model: str, url: str, response: request
     raise LLMError(http_error_message(provider_name, model, url, response.status_code, body))
 
 
+def normalize_provider_usage(payload: Any) -> dict[str, Any]:
+    """Thin alias so providers import one name for usage normalisation."""
+    from wth_ai.llm.usage import normalize_usage
+
+    return normalize_usage(payload)
+
+
 class BaseLLMProvider(ABC):
+    #: Usage block of the MOST RECENT call, in the canonical shape. Read by the
+    #: router right after a successful call -- providers return plain text, so
+    #: this side channel is how token accounting reaches the ledger.
+    last_usage: dict[str, Any] = {}
+
+    def _record_usage(self, payload: Any) -> dict[str, Any]:
+        """Store the usage block of this call (no-op for unusable payloads)."""
+        from wth_ai.llm.usage import normalize_usage
+
+        self.last_usage = normalize_usage(payload)
+        return self.last_usage
+
     provider_type: str = "base"
     # Capability defaults; subclasses override as appropriate.
     tool_calling: bool = False
@@ -200,7 +219,7 @@ class BaseLLMProvider(ABC):
             "role": role,
             "status": "error",
             "content": "",
-            "usage": {},
+            "usage": getattr(self, "last_usage", None) or {},
             "tool_calls": [],
             "error": None,
         }

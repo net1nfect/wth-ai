@@ -87,7 +87,9 @@ class OllamaProvider(BaseLLMProvider):
             return "".join(full)
         r = requests.post(url, json=payload, timeout=req_timeout)
         raise_for_status(self.name, model, url, r)
-        return r.json()["message"]["content"]
+        data = r.json()
+        self._record_usage(data)
+        return data["message"]["content"]
 
     def chat_with_tools(
         self,
