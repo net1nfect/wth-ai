@@ -36,7 +36,9 @@ def handle_target(orch: Any, args: list[str]) -> str:
     raw = " ".join(args).strip()
     intent = parse_scope_intent(f"set target {raw}") or parse_scope_intent(raw)
     if not intent:
-        intent = {"target": raw.split()[0], "authorized": True, "in_scope": [raw.split()[0]]}
+        # WU-011 (AGENT-01): default False, bukan True -- konsisten dengan
+        # parse_scope_intent() sendiri (fail-closed law: MISSING -> DENY).
+        intent = {"target": raw.split()[0], "authorized": False, "in_scope": [raw.split()[0]]}
 
     return _apply_scope_intent(orch, intent)
 
@@ -49,8 +51,21 @@ def handle_model(orch: Any, args: list[str]) -> str:
         return _model_show(orch)
 
     if sub == "list":
-        provider = args[1] if len(args) > 1 else _primary_provider(orch)
-        return _model_list(orch, provider, store_picker=True)
+        # `/model list [provider] [kata]`. A known provider name still selects the
+        # provider (`/model list 9router`, as before); anything else is a search
+        # needle. Without search, 268 ids print as a wall of text and the operator
+        # has no way to find theirs.
+        first = (args[1] if len(args) > 1 else "").strip()
+        if first and first.lower() in {name.lower() for name in PROVIDER_NAMES}:
+            provider = first
+            needle = " ".join(args[2:]).strip()
+        else:
+            provider = _primary_provider(orch)
+            needle = " ".join(args[1:]).strip()
+        return _model_list(orch, provider, store_picker=True, needle=needle)
+
+    if sub in {"test", "try"} and len(args) >= 2:
+        return _model_test(orch, " ".join(args[1:]).strip())
 
     if sub == "fix":
         return _model_fix(orch)
@@ -78,7 +93,8 @@ def handle_model(orch: Any, args: list[str]) -> str:
     return (
         _model_show(orch)
         + "\n\nUsage:\n"
-        "  `/model list` — daftar model provider\n"
+        "  `/model list [kata]` — daftar/cari model provider\n"
+        "  `/model test <nomor|id>` — uji model tanpa mengubah config\n"
         "  `/model 4` atau `/model use 4` — pilih by nomor\n"
         "  `/model set planner Hacker` — set role\n"
         "  `/model set all cu/default` — semua role\n"
@@ -200,6 +216,69 @@ def _apply_scope_intent(orch: Any, intent: dict[str, Any]) -> str:
     return f"✓ target `{target}`{extra} · authorized={'yes' if intent.get('authorized') else 'no'}"
 
 
+#: Verification makes one tiny call, so it needs a bound. Long enough for a slow
+#: gateway, short enough that a hung model cannot freeze the REPL.
+VERIFY_TIMEOUT = 20
+
+#: Escape hatch for scripts/tests that must not spend a call per selection.
+VERIFY_ENV = "WTH_SKIP_MODEL_VERIFY"
+
+
+def _verify_enabled() -> bool:
+    import os
+
+    return os.environ.get(VERIFY_ENV, "").strip() not in {"1", "true", "yes"}
+
+
+def _probe_model(orch: Any, model_id: str, *, role: str = "planner") -> tuple[bool, str]:
+    """Try ONE short call with `model_id` WITHOUT changing any config.
+
+    (ok, human explanation). Two reasons this is the feature that makes 268 models
+    usable: a gateway can list hundreds of ids while only some actually answer,
+    and a list you cannot test is a list you cannot choose from.
+    """
+    try:
+        provider = orch.client.provider_for_role(role)
+    except Exception as exc:  # noqa: BLE001
+        return False, f"provider tidak bisa dipakai: {type(exc).__name__}: {str(exc)[:120]}"
+    try:
+        env = provider.complete(
+            model_id,
+            [{"role": "user", "content": "ping"}],
+            role=role,
+            timeout=VERIFY_TIMEOUT,
+            max_tokens=8,
+        )
+    except Exception as exc:  # noqa: BLE001 - never let a probe kill the REPL
+        return False, f"{type(exc).__name__}: {str(exc)[:140]}"
+    if str(env.get("status", "")) == "success":
+        return True, f"dijawab model `{env.get('model') or model_id}`"
+    err = env.get("error")
+    if isinstance(err, dict):
+        detail = err.get("message") or err.get("code") or str(err)
+    else:
+        detail = str(err or env.get("content") or "tanpa keterangan")
+    return False, f"{str(env.get('status') or 'error')}: {str(detail)[:140]}"
+
+
+def _verify_role_model(orch: Any, role: str) -> str:
+    """Line appended after a selection so the operator learns whether it WORKS."""
+    if not _verify_enabled():
+        return "  [verifikasi dilewati: WTH_SKIP_MODEL_VERIFY=1]"
+    try:
+        model_id = orch.config.providers[role].model
+    except Exception:  # noqa: BLE001
+        return ""
+    ok, detail = _probe_model(orch, model_id, role=role)
+    if ok:
+        return f"  ✓ terverifikasi — {detail}"
+    return (
+        f"  ⚠ terpasang TAPI belum merespons — {detail}\n"
+        "    Uji kandidat lain tanpa mengubah config: `/model test <nomor|id>`\n"
+        "    Cari model: `/model list <kata>`"
+    )
+
+
 def _primary_provider(orch: Any) -> str:
     spec = orch.config.providers.get("planner")
     return spec.type if spec else "openrouter"
@@ -220,23 +299,73 @@ def _model_show(orch: Any) -> str:
     return "\n".join(lines)
 
 
-def _model_list(orch: Any, provider: str, *, store_picker: bool = False) -> str:
+#: How many rows to print when browsing. A search shows its full match set (it is
+#: already narrowed); browsing a 268-model catalog must not flood the chat.
+BROWSE_LIMIT = 25
+SEARCH_LIMIT = 60
+
+
+def _model_list(orch: Any, provider: str, *, store_picker: bool = False, needle: str = "") -> str:
     try:
         models = orch.client.list_models(provider)
     except Exception as exc:
         return f"Tidak bisa list model `{provider}`: {exc}"
     if not models:
         return f"Tidak ada model dari `{provider}`."
+
+    needle = (needle or "").strip().lower()
+    matches = [m for m in models if needle in m.lower()] if needle else list(models)
+    if not matches:
+        return (
+            f"Tidak ada model cocok `{needle}` di `{provider}` ({len(models)} total).\n"
+            "Coba kata yang lebih pendek, atau `/model list` untuk melihat semuanya."
+        )
+
+    limit = SEARCH_LIMIT if needle else BROWSE_LIMIT
+    shown = matches[:limit]
     if store_picker:
-        # store full catalog so `/model <n>` works beyond 50
-        orch.state.metadata["model_picker"] = {"provider": provider, "models": models}
+        # Store what was SHOWN (not the whole catalog) so the numbers the operator
+        # reads are exactly the numbers `/model <n>` accepts.
+        orch.state.metadata["model_picker"] = {"provider": provider, "models": shown}
         orch._persist()
-    lines = [f"## Models — {provider} ({len(models)} total)", ""]
-    for i, m in enumerate(models, 1):
+
+    if needle:
+        title = f"## Models — {provider} · cocok `{needle}`: {len(matches)}"
+    else:
+        title = f"## Models — {provider} · {len(models)} total (menampilkan {len(shown)})"
+    lines = [title, ""]
+    for i, m in enumerate(shown, 1):
         lines.append(f"  {i}. {m}")
+    if len(matches) > limit:
+        lines.append(f"  … dan {len(matches) - limit} lain lagi")
     lines.append("")
-    lines.append("Pilih: `/model 4` · set role: `/model set planner Hacker`")
+    if needle:
+        lines.append(f"Pilih: `/model <nomor>` · uji dulu: `/model test <nomor>`")
+    else:
+        lines.append("Persempit: `/model list <kata>` (mis. `/model list glm`)")
+        lines.append("Pilih: `/model <nomor>` · uji tanpa ganti: `/model test <nomor|id>`")
     return "\n".join(lines)
+
+
+def _model_test(orch: Any, spec: str) -> str:
+    """Try a model by number (from the last listing) or by id. Changes NOTHING."""
+    if not spec:
+        return "Usage: `/model test <nomor|id>` (mis. `/model test 3` atau `/model test glm-5.3-flash-rr`)"
+    picker = orch.state.metadata.get("model_picker", {})
+    models: list[str] = picker.get("models") or []
+    if spec.isdigit():
+        idx = int(spec) - 1
+        if not models:
+            return "Belum ada daftar model. Jalankan `/model list` dulu."
+        if idx < 0 or idx >= len(models):
+            return f"Nomor di luar range 1-{len(models)}"
+        model_id = models[idx]
+    else:
+        model_id = spec
+    ok, detail = _probe_model(orch, model_id)
+    if ok:
+        return f"✓ `{model_id}` merespons — {detail}\nPasang: `/model set planner {model_id}`"
+    return f"✗ `{model_id}` TIDAK merespons — {detail}"
 
 
 def _model_pick_index(orch: Any, index: str, *, role: str = "planner") -> str:
@@ -269,8 +398,14 @@ def _model_set_role(orch: Any, role: str, model: str) -> str:
     resolved = resolve_model_choice(model, catalog) if catalog else model
     backup = spec.backup_model if spec else ""
     orch.config.providers[role] = ProviderRoleConfig(type=ptype, model=resolved, backup_model=backup)
+    # Invalidate through the canonical router API as well, so any per-role cache
+    # is dropped rather than relying on the handler writing config directly.
+    try:
+        orch.client.set_role(role, ptype, resolved, backup_model=backup)
+    except Exception:  # noqa: BLE001 - a stub client in tests may not implement it
+        pass
     orch.config.save_user_config()
-    return f"✓ {role} → `{resolved}` ({ptype})"
+    return f"✓ {role} → `{resolved}` ({ptype})\n{_verify_role_model(orch, role)}"
 
 
 def _model_set_all(orch: Any, model: str) -> str:
