@@ -519,6 +519,31 @@ class WTHConfig:
             "bots": bots_out,
             "integrations": integrations_out,
         }
+        # MERGE into what is already on disk rather than replacing the file.
+        #
+        # This file is written from an in-memory config, and anything that object
+        # does not carry disappears with a full overwrite. Measured consequence:
+        # `custom_base_url` was dropped while the vault REFERENCE for the key
+        # survived, so the custom provider fell back to https://api.openai.com/v1
+        # and sent the operator's LAN gateway key to OpenAI (HTTP 401 from their
+        # servers). A missing endpoint is not a cosmetic loss -- it silently
+        # redirects traffic to a different company.
+        existing: dict[str, Any] = {}
+        if USER_CONFIG_PATH.exists():
+            try:
+                existing = yaml.safe_load(USER_CONFIG_PATH.read_text(encoding="utf-8")) or {}
+            except yaml.YAMLError:
+                existing = {}
+        if isinstance(existing, dict):
+            data = _deep_merge(existing, data)
+            # An EMPTY value in memory must not erase a value on disk: the wizard
+            # leaves a field untouched (rather than cleared) when the operator just
+            # presses Enter, and that intent has to survive the save.
+            merged_secrets = dict(existing.get("secrets") or {})
+            for key, value in secrets_out.items():
+                if value or key not in merged_secrets:
+                    merged_secrets[key] = value
+            data["secrets"] = merged_secrets
         USER_CONFIG_PATH.write_text(yaml.safe_dump(data, default_flow_style=False), encoding="utf-8")
         from wth_ai.workspace import secure_file
         secure_file(USER_CONFIG_PATH)

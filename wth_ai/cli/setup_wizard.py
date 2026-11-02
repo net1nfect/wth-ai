@@ -91,12 +91,25 @@ def _collect_api_key(provider_type: str, existing: WTHConfig) -> WTHConfig:
         # URL first: for a self-hosted OpenAI-compatible endpoint this is the
         # part that identifies where to talk to, and many such endpoints need
         # no API key at all.
-        url = Prompt.ask(
-            "Custom base URL (OpenAI-compatible, mis. http://host:20128/v1)",
-            default=existing.secrets.custom_base_url or "",
-        ).strip()
-        if url:
-            existing.secrets.custom_base_url = url
+        # Loop, because an EMPTY base URL for `custom` is not a harmless default:
+        # it makes the provider talk to whatever endpoint the code falls back to,
+        # which is how a LAN gateway key ended up being sent to api.openai.com.
+        for _attempt in range(3):
+            url = Prompt.ask(
+                "Custom base URL (OpenAI-compatible, mis. http://host:20128/v1)",
+                default=existing.secrets.custom_base_url or "",
+            ).strip()
+            if url:
+                existing.secrets.custom_base_url = url
+                break
+            console.print(
+                "  [yellow]Base URL kosong: tanpa ini provider `custom` tidak tahu harus "
+                "bicara ke mana, dan TIDAK akan dipakai (sebelumnya ia diam-diam jatuh ke "
+                "api.openai.com dan mengirim key lu ke sana).[/]"
+            )
+            if not Prompt.ask("  Lanjut tanpa base URL?", choices=["y", "n"], default="n") == "y":
+                continue
+            break
         key = Prompt.ask(
             "Custom API key (kosongkan kalau endpoint tidak butuh key)",
             password=True,

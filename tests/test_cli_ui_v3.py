@@ -164,7 +164,12 @@ def test_toolbar_renders_without_an_orchestrator():
     repl = WTHRepl(lambda t: t)
     segments = repl._toolbar()
     assert segments and all(isinstance(s, tuple) for s in segments)
-    assert "wth-ai" in "".join(text for _, text in segments)
+    text = "".join(seg for _, seg in segments)
+    status, _, help_line = text.partition("\n")
+    # No orchestrator: the bar still shows a working context (`~`) and controls,
+    # and must not start with a stray separator.
+    assert "~" in status and not status.startswith(" ·")
+    assert "for agents" in help_line
 
 
 def test_toolbar_never_raises_even_if_the_orchestrator_is_broken():
@@ -189,7 +194,9 @@ def test_toolbar_caches_between_keystrokes(monkeypatch):
         calls["n"] += 1
         return [("class:status", "x")]
 
-    monkeypatch.setattr(repl, "_build_toolbar", _counting)
+    # The cache moved with the redesign: the per-keystroke callable now builds the
+    # status line, so that is what must be counted.
+    monkeypatch.setattr(repl, "_status_line", _counting)
     repl._toolbar()
     repl._toolbar()
     repl._toolbar()
