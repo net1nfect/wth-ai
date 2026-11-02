@@ -62,6 +62,17 @@ class CronScheduler:
         return (now - last) >= timedelta(seconds=interval + jitter)
 
     def _enqueue(self, entry: CronEntry):
+        if entry.job_type == "autopilot":
+            # Operasi otonom berkala: langkah uji berbatas disusun dari temuan +
+            # sinyal, dijalankan, lalu belajar. Opt-in destruktif TIDAK diambil dari
+            # cron -- ia dibaca dari scope saat job berjalan, sehingga cron tidak
+            # pernah menjadi jalur pintas untuk membuka gate.
+            return self.jobs.create_job(
+                "autopilot",
+                target=entry.target,
+                created_by="cron",
+                metadata={"authorized": True, "profile": entry.profile, "steps": 6, "cycles": 2},
+            )
         if entry.job_type == "recon":
             return self.jobs.create_job(
                 "recon",

@@ -259,6 +259,44 @@ def _dispatch(ctx: SupervisorContext, name: str, args: dict[str, Any], *, approv
                 return f"Stored evidence [EV linked to TX:{tid}]"
         return "No vault or transcript"
 
+    if name == "propose_payload":
+        from wth_ai.hunt.generator import save_generated, validate_generated
+
+        payload, error = validate_generated(args)
+        if payload is None:
+            return f"PAYLOAD DITOLAK: {error}"
+        saved = save_generated([payload])
+        notes = [f"Payload `{payload.id}` diterima (blast={payload.blast_radius})."]
+        if saved:
+            notes.append(f"Tersimpan di {saved}.")
+        # Batas yang tidak bisa dilewati model: massal tidak pernah dijalankan.
+        if payload.blast_radius == "mass" or not payload.auto_runnable:
+            notes.append(
+                "TIDAK dijalankan: berdampak massal (dokumentasi saja). "
+                f"Padanan berbatas: {payload.bounded_alternative or 'belum dinyatakan'}"
+            )
+            return "\n".join(notes)
+        destructive_allowed = bool(getattr(getattr(ctx.state, "scope", None), "destructive_allowed", False))
+        if payload.requires_destructive and not destructive_allowed:
+            notes.append("TIDAK dijalankan: destruktif tapi engagement belum membuka opt-in "
+                         "(`/scope set destructive=yes`).")
+            return "\n".join(notes)
+        if not args.get("run_now", True):
+            notes.append("Tidak dijalankan atas permintaan (run_now=false).")
+            return "\n".join(notes)
+        auto = auto_approve_enabled(ctx.config)
+        method = str(payload.probe.get("method", "GET")).upper()
+        actor = "recon" if method in {"GET", "HEAD", "OPTIONS"} else "executor"
+        result = ctx.terminal.dispatch_tool("http_probe", dict(payload.probe),
+                                            actor=actor, approved=approved or auto)
+        if result.blocked:
+            notes.append(f"Diblokir: {result.block_reason}")
+            return "\n".join(notes)
+        notes.append(f"Dijalankan: {result.summary()}")
+        if result.analysis:
+            notes.append(result.analysis)
+        return "\n".join(notes)
+
     if name in ("http_probe", "run_shell"):
         auto = auto_approve_enabled(ctx.config)
         result = ctx.terminal.dispatch_tool(name, args, actor="supervisor", approved=approved or auto)
