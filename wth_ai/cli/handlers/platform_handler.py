@@ -55,7 +55,10 @@ def handle_cron(orch: Any, args: list[str]) -> str:
         job_type = args[1]
         target = args[2]
         schedule = " ".join(args[3:])
-        entry = store.add(job_type, target, schedule)
+        try:
+            entry = store.add(job_type, target, schedule)
+        except ValueError as exc:
+            return f"Ditolak: {exc}"
         return f"Cron added: `{entry.cron_id}` {job_type} {target} ({schedule})"
     if args[0] == "remove" and len(args) >= 2:
         ok = store.remove(args[1])

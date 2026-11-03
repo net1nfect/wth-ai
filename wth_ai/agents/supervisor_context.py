@@ -55,6 +55,13 @@ class SupervisorContext:
     tool_count: int = 0
     persist_fn: Callable[[], None] | None = None
     orchestrator: Any = None
+    # WU-106: interrupt signal shared across every AgentToolLoop instance
+    # bound to this context (there are multiple independent instantiation
+    # points -- SupervisorAgent._run_loop(), ExecutorAgent._execute_with_tools()
+    # -- that don't know about each other, so the flag lives on the shared
+    # context, not on any one loop instance). Set by SupervisorAgent.stop()
+    # (the /stop command), read at the top of every AgentToolLoop iteration.
+    stopped: bool = False
 
     def notify_phase(self, phase: str, pct: int) -> None:
         self.current_phase = phase

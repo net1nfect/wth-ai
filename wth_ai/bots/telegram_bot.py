@@ -11,6 +11,7 @@ from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandl
 from wth_ai.bots.auth import telegram_allowed
 from wth_ai.bots.base import BotSessionManager
 from wth_ai.config import WTHConfig
+from wth_ai.integrations.base import resolve_telegram_role
 from wth_ai.integrations.commands import BotCommandService
 from wth_ai.vault import SecretVault
 
@@ -43,14 +44,20 @@ class WTHTelegramBot:
             return str(chat_id) in tg.allowed_chat_ids
         return telegram_allowed(self.config.bots, chat_id)
 
+    def _user_role(self, user_id: str | int) -> str:
+        return resolve_telegram_role(user_id, self.config.integrations.telegram.owner_user_ids)
+
     async def _svc_cmd(self, update: Update, context: ContextTypes.DEFAULT_TYPE, name: str) -> None:
-        if not update.effective_chat:
+        if not update.effective_chat or not update.effective_user:
             return
         if not self._chat_allowed(update.effective_chat.id):
             await update.message.reply_text("Chat tidak diizinkan.")  # type: ignore[union-attr]
             return
         args = list(context.args) if context.args else []
-        text = self.commands.handle(name, args, role="owner")
+        # WU-009 (NET-01): sebelumnya role="owner" di-hardcode untuk SEMUA user
+        # di chat yang diizinkan -- /approve /deny /stop bisa dipanggil siapa pun.
+        role = self._user_role(update.effective_user.id)
+        text = self.commands.handle(name, args, role=role, enforce_role=True)
         for chunk in _chunk(text):
             await update.message.reply_text(chunk)  # type: ignore[union-attr]
 
@@ -59,6 +66,15 @@ class WTHTelegramBot:
             return
         if not self._chat_allowed(update.effective_chat.id):
             await update.message.reply_text("Chat tidak diizinkan.")  # type: ignore[union-attr]
+            return
+        # WU-009 (NET-01): /doctor, /recon, /plan, /graph, /hunt, free-text
+        # memberi akses sesi orchestrator PENUH -- sebelumnya tanpa role-check
+        # sama sekali. Hanya role "owner" yang boleh.
+        role = self._user_role(update.effective_user.id)
+        if role != "owner":
+            await update.message.reply_text(  # type: ignore[union-attr]
+                f"Permission denied: role '{role}' tidak boleh mengakses agent penuh lewat bot."
+            )
             return
         await update.message.reply_chat_action("typing")  # type: ignore[union-attr]
         result = await asyncio.to_thread(

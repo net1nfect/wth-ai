@@ -112,6 +112,7 @@ class PlannerAgent(BaseLLMAgent):
                 self.system_prompt,
                 state.conversation,
                 prompt,
+                role="planner",
                 timeout=self.config.models.planner_timeout_seconds,
                 on_token=on_token,
             )
@@ -142,6 +143,7 @@ class PlannerAgent(BaseLLMAgent):
                 CRITIC_SYSTEM,
                 [],
                 f"Review these hypotheses and tasks:\n\n{raw[:12000]}",
+                role="planner",
                 timeout=60,
             )
             killed = self._extract_killed(critic_raw)
@@ -153,6 +155,7 @@ class PlannerAgent(BaseLLMAgent):
                 FEASIBILITY_SYSTEM,
                 [],
                 f"Installed tools: {', '.join(tools_avail)}\n\nTasks to validate:\n{raw[:10000]}",
+                role="planner",
                 timeout=60,
             )
             if not parse_blocks(feasible_raw, "EXECUTOR_TASK") and not parse_blocks(feasible_raw, "FEASIBLE_TASK"):

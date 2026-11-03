@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 import os
-import re
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
@@ -34,15 +33,12 @@ class EvidenceVault:
         self.index_path.write_text(json.dumps(self._items, ensure_ascii=False, indent=2), encoding="utf-8")
 
     def redact(self, text: str) -> str:
-        patterns = [
-            (r"(?i)(api[_-]?key|token|password|secret|authorization)\s*[:=]\s*\S+", r"\1=***REDACTED***"),
-            (r"Bearer\s+[A-Za-z0-9\-._~+/]+=*", "Bearer ***REDACTED***"),
-            (r"eyJ[A-Za-z0-9_-]+\.eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+", "JWT_***REDACTED***"),
-        ]
-        result = text
-        for pattern, repl in patterns:
-            result = re.sub(pattern, repl, result)
-        return result
+        """WU-203: delegate to canonical `wth_ai.redaction.redact_secrets`
+        (single source of truth; also adds AWS-key coverage vs. the old local
+        copy)."""
+        from wth_ai.redaction import redact_secrets
+
+        return redact_secrets(text)
 
     def store(
         self,

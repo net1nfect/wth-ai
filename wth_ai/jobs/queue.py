@@ -19,11 +19,14 @@ class JobQueue:
         return self.store.update_status(job.job_id, "queued") or existing
 
     def dequeue(self) -> Job | None:
-        """Return the next queued job and mark it running."""
-        job = self.store.next_queued()
-        if job is None:
-            return None
-        return self.store.update_status(job.job_id, "running")
+        """Claim the next queued job atomically and return it as `running`.
+
+        Delegates to `JobStore.claim_next_queued()`: the previous body read
+        `next_queued()` and then wrote `status='running'` in a separate
+        statement keyed only on `job_id`, so two workers could claim and
+        execute the same job (TOCTOU).
+        """
+        return self.store.claim_next_queued()
 
     def peek(self) -> Job | None:
         return self.store.next_queued()

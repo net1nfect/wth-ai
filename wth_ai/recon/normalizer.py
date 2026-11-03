@@ -68,6 +68,22 @@ class ReconNormalizer:
         return existing
 
     # --- per-kind handlers ---
+    @staticmethod
+    def _mask(value: Any) -> str:
+        """Mask credentials in a discovered URL before it becomes an asset.
+
+        Every writer downstream reads from these buckets -- normalized/*.json,
+        normalized_result.json, asset_graph.json, recon_summary.json,
+        recon_report.md, the job result and the change events -- so masking at
+        this single boundary keeps a discovered credential out of all of them.
+        (Verified pre-fix: a URL carrying `?api_key=AKIA...` was stored verbatim
+        in all seven while the SAME key showed up correctly masked in
+        secret_candidates.json.)
+        """
+        from wth_ai.redaction import mask_url_secrets
+
+        return mask_url_secrets(str(value or ""))
+
     def _add_subdomain(self, source: str, it: dict[str, Any]) -> None:
         self._bucket_add(self.subdomains, DomainAsset(host=it["host"]), source)
 
@@ -79,10 +95,10 @@ class ReconNormalizer:
         )
 
     def _add_url(self, source: str, it: dict[str, Any]) -> None:
-        self._bucket_add(self.urls, URLAsset(url=it["url"]), source)
+        self._bucket_add(self.urls, URLAsset(url=self._mask(it["url"])), source)
 
     def _add_http_probe(self, source: str, it: dict[str, Any]) -> None:
-        obj = self._bucket_add(self.http_probes, HTTPProbe(url=it["url"]), source)
+        obj = self._bucket_add(self.http_probes, HTTPProbe(url=self._mask(it["url"])), source)
         # enrich on first real data
         if it.get("status"):
             obj.status = it["status"]
@@ -93,7 +109,7 @@ class ReconNormalizer:
             obj.length = it["length"]
 
     def _add_header(self, source: str, it: dict[str, Any]) -> None:
-        obj = self._bucket_add(self.headers, HeaderPosture(url=it["url"]), source)
+        obj = self._bucket_add(self.headers, HeaderPosture(url=self._mask(it["url"])), source)
         obj.missing = it.get("missing", obj.missing)
         obj.present = it.get("present", obj.present)
 
@@ -101,7 +117,7 @@ class ReconNormalizer:
         self._bucket_add(
             self.cookies,
             CookiePosture(
-                url=it["url"], name=it.get("name", ""), secure=it.get("secure", False),
+                url=self._mask(it["url"]), name=it.get("name", ""), secure=it.get("secure", False),
                 httponly=it.get("httponly", False), samesite=it.get("samesite", ""),
             ),
             source,
@@ -125,21 +141,25 @@ class ReconNormalizer:
     def _add_endpoint(self, source: str, it: dict[str, Any]) -> None:
         self._bucket_add(
             self.endpoints,
-            Endpoint(url=it["url"], method=it.get("method", "GET"), kind=it.get("endpoint_kind", "web")),
+            Endpoint(
+                url=self._mask(it["url"]), method=it.get("method", "GET"),
+                kind=it.get("endpoint_kind", "web"),
+            ),
             source,
         )
 
     def _add_parameter(self, source: str, it: dict[str, Any]) -> None:
         obj = self._bucket_add(
-            self.params, Parameter(url=it["url"], name=it.get("name", "")), source
+            self.params, Parameter(url=self._mask(it["url"]), name=it.get("name", "")), source
         )
         obj.interest = max(obj.interest, it.get("interest", 0))
 
     def _add_js_intel(self, source: str, it: dict[str, Any]) -> None:
-        obj = self._bucket_add(self.js_intel, JSIntel(url=it["url"]), source)
+        obj = self._bucket_add(self.js_intel, JSIntel(url=self._mask(it["url"])), source)
         for ep in it.get("endpoints", []):
-            if ep not in obj.endpoints:
-                obj.endpoints.append(ep)
+            masked = self._mask(ep)
+            if masked not in obj.endpoints:
+                obj.endpoints.append(masked)
 
     def _add_secret_candidate(self, source: str, it: dict[str, Any]) -> None:
         self._bucket_add(

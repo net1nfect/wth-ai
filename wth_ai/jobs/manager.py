@@ -13,6 +13,7 @@ from wth_ai.jobs.model import TERMINAL_STATUSES, Job
 from wth_ai.jobs.policy import PolicyEngine
 from wth_ai.jobs.queue import JobQueue
 from wth_ai.jobs.store import JobStore
+from wth_ai.models import PermissionMode
 from wth_ai.workspace import wth_home
 
 
@@ -63,8 +64,11 @@ class JobManager:
         requires_approval: bool = False,
         forbidden: tuple[str, ...] = (),
         metadata: dict[str, Any] | None = None,
+        permission_mode: PermissionMode | str | None = None,
     ) -> Job:
-        allowed, reason = self.policy.evaluate(type=type, target=target, forbidden=forbidden)
+        allowed, reason = self.policy.evaluate(
+            type=type, target=target, forbidden=forbidden, permission_mode=permission_mode,
+        )
         meta = dict(metadata or {})
         if requires_approval:
             meta["requires_approval"] = True

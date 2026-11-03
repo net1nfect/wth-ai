@@ -62,6 +62,58 @@ def detect_target_type(target: str) -> str:
     return "domain"
 
 
+#: Kata yang hanya bisa jadi "target" karena salah parse, bukan karena operator
+#: menamainya: kosakata command CLI (`/recon watch target ...`), atau nilai yang
+#: tertinggal dari option (`--interval` tanpa value).
+_NON_TARGET_WORDS = frozenset({
+    "target", "run", "quick", "watch", "plan", "show", "report", "tools",
+    "diff", "changes", "profile", "interval", "fast", "local", "recon",
+    "hunt", "scope", "status", "chat", "help",
+})
+
+#: Nilai interval telanjang ('6h', '90m', '2d', '3600') yang kehilangan option-nya.
+_INTERVAL_SHAPED = re.compile(r"\d+[smhd]?")
+
+
+def is_valid_recon_target(target: str) -> tuple[bool, str]:
+    """(ok, alasan) — tolak token yang cuma ada karena typo/option nyasar.
+
+    Bug terukur: `/recon watch --interval` menyimpan watch+cron dengan target
+    literal `--interval`; ticker cron lalu MENJALANKAN scan recon atas target
+    sampah itu tiap interval di background — operator melihatnya sebagai
+    "tiba-tiba scan apapun gajelas". Validasi yang sama dipakai parser argumen,
+    slash handler, helper CLI, dan CronStore.add supaya token seperti itu tidak
+    pernah bisa menjadi target di jalur mana pun.
+    """
+    t = (target or "").strip()
+    if not t:
+        return False, "target kosong"
+    low = t.lower()
+    if low.startswith("-"):
+        return False, f"`{t}` terlihat seperti option/flag, bukan target"
+    if low in _NON_TARGET_WORDS:
+        return False, f"`{t}` kosakata command, bukan target — sebutkan domain/IP/URL"
+    if "://" in t:
+        if urlparse(t).hostname:
+            return True, ""
+        return False, f"URL tanpa host: `{t}`"
+    host = t.split("/")[0].split(":")[0]
+    if not host:
+        return False, f"`{t}` bukan host"
+    if any(hint in low for hint in _PRIVATE_HINTS):
+        return True, ""
+    try:
+        ipaddress.ip_address(host)
+        return True, ""
+    except ValueError:
+        pass
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", host):
+        return False, f"`{t}` bukan domain/IP/URL yang valid"
+    if _INTERVAL_SHAPED.fullmatch(low):
+        return False, f"`{t}` terlihat seperti nilai interval, bukan target"
+    return True, ""
+
+
 class ReconPlanner:
     def __init__(
         self,

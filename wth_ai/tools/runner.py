@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import subprocess
 import time
 from pathlib import Path
 from typing import Any
@@ -46,18 +45,14 @@ class ManifestToolRunner(ToolRunner):
     check = self.permission.check_command(cmd)
     if not check["allowed"]:
       return "", check["reason"], 1
-    try:
-      proc = subprocess.run(
-        cmd,
-        shell=True,
-        capture_output=True,
-        text=True,
-        timeout=timeout or self.config.tools.timeout_seconds,
-        cwd=cwd,
-      )
-      return proc.stdout, proc.stderr, proc.returncode
-    except subprocess.TimeoutExpired:
-      return "", f"Timeout after {timeout}s", 124
+    from wth_ai.shell_runner import run_command
+
+    return run_command(
+      cmd,
+      timeout=timeout or self.config.tools.timeout_seconds,
+      cwd=str(cwd) if cwd else None,
+      max_bytes=self.config.tools.max_output_bytes,
+    )
 
   def run_tools_parallel_specs(
     self,

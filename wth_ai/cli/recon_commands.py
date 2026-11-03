@@ -43,6 +43,14 @@ def run_recon_job(
     created_by: str = "cli",
 ) -> tuple[Any, Any]:
     from wth_ai.jobs.worker import WorkerEngine
+    from wth_ai.recon.planner import is_valid_recon_target
+
+    ok, why = is_valid_recon_target(target)
+    if not ok:
+        # Target sampah (mis. "--interval" dari salah ketik) tidak boleh pernah
+        # menjadi job — dulu token seperti itu tersimpan dan ticker cron
+        # menjalankannya berulang di background.
+        raise ValueError(f"target recon tidak valid: {why}")
 
     meta: dict[str, Any] = {
         "authorized": True,
@@ -149,9 +157,16 @@ def recon_changes_text(mgr: Any, target: str) -> str:
 
 
 def recon_watch_text(target: str, profile: str, interval: str) -> str:
+    from wth_ai.recon.planner import is_valid_recon_target
     from wth_ai.cron.store import CronStore
     from wth_ai.recon.realtime import WatchConfig, parse_interval, save_watch
 
+    ok, why = is_valid_recon_target(target)
+    if not ok:
+        return (
+            f"Ditolak: {why}.\n"
+            "  Contoh: wth recon watch example.com --interval 6h"
+        )
     secs = parse_interval(interval or "6h")
     cfg = WatchConfig(target=target, interval_seconds=secs, profile=profile)
     path = save_watch(cfg)

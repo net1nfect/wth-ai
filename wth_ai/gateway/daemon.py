@@ -43,6 +43,7 @@ class GatewayDaemon:
         self._cron_thread: threading.Thread | None = None
         self._running = False
         self._plugins_loaded = False
+        self._audit_sink: Any = None  # WU-104: set in start() (guarded); pre-init so it's always a valid attr
 
     def _dispatch(self, method: str, params: dict[str, Any]) -> Any:
         if method == "ping":
@@ -115,6 +116,19 @@ class GatewayDaemon:
             ExecuteRpcServer().start_background()
         except Exception:
             pass
+        # WU-104: subscribe a durable AuditLogSink to the process bus for the
+        # daemon's lifetime. This advances WU-105's deliberately-deferred
+        # auto-wiring, scoped to the SERVER context specifically (a long-lived
+        # daemon that starts ExecuteRpcServer, jobs, recon -- exactly where a
+        # durable audit trail belongs), NOT a blanket wire into every one-shot
+        # CLI invocation. Guarded like the ExecuteRpcServer start above: a
+        # sink init failure (e.g. read-only disk) must never abort the daemon.
+        try:
+            from wth_ai.audit_log import AuditLogSink
+            self._audit_sink = AuditLogSink()
+            self.bus.subscribe(self._audit_sink)
+        except Exception:
+            self._audit_sink = None
         self._worker_thread = threading.Thread(target=self._worker_loop, daemon=False, name="gateway-worker")
         self._worker_thread.start()
         self._cron_thread = threading.Thread(target=self._cron_loop, daemon=False, name="gateway-cron")

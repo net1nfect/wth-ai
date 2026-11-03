@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import random
 import re
 from datetime import datetime, timedelta, timezone
@@ -10,6 +11,8 @@ from typing import Any
 from wth_ai.cron.store import CronEntry, CronStore
 from wth_ai.jobs.manager import JobManager
 from wth_ai.recon.realtime import JITTER_RATIO, parse_interval
+
+logger = logging.getLogger(__name__)
 
 
 def _parse_schedule(schedule: str) -> int | None:
@@ -37,7 +40,15 @@ class CronScheduler:
             if not self._due(entry, now):
                 continue
             job = self._enqueue(entry)
+            if job is None:
+                # Target entri tidak valid: entri sudah dimatikan di _enqueue,
+                # tidak ada job yang dibuat, dan tidak ada yang dijalankan.
+                continue
             self.store.update_run(entry.cron_id)
+            logger.info(
+                "cron %s fired %s job %s for target %s",
+                entry.cron_id, entry.job_type, job.job_id, entry.target,
+            )
             fired.append({"cron_id": entry.cron_id, "job_id": job.job_id})
         return fired
 
@@ -62,6 +73,19 @@ class CronScheduler:
         return (now - last) >= timedelta(seconds=interval + jitter)
 
     def _enqueue(self, entry: CronEntry):
+        from wth_ai.recon.planner import is_valid_recon_target
+
+        ok, why = is_valid_recon_target(entry.target)
+        if not ok:
+            # Pertahanan terakhir: entri LAMA (dibuat sebelum guard ada) bisa
+            # berisi target sampah seperti "--interval", dan ticker akan
+            # menjalankan scan recon atasnya tiap interval di background tanpa
+            # pernah ditanyakan ke operator. Jangan buat job-nya; matikan
+            # entri-nya sekalian supaya tidak dicoba lagi tiap tick.
+            reason = f"target tidak valid: {why}"
+            logger.warning("cron %s dinonaktifkan — %s", entry.cron_id, reason)
+            self.store.disable_with_reason(entry.cron_id, reason)
+            return None
         if entry.job_type == "autopilot":
             # Operasi otonom berkala: langkah uji berbatas disusun dari temuan +
             # sinyal, dijalankan, lalu belajar. Opt-in destruktif TIDAK diambil dari

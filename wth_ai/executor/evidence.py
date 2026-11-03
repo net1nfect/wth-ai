@@ -8,6 +8,7 @@ from typing import Any
 from uuid import uuid4
 
 from wth_ai.models import Evidence, ExecutorResult
+from wth_ai.redaction import redact_secrets
 
 
 class EvidencePipeline:
@@ -16,13 +17,20 @@ class EvidencePipeline:
     NUCLEI_RE = re.compile(r"\[(critical|high|medium|low)\]", re.I)
 
     def from_executor_result(self, result: ExecutorResult) -> list[Evidence]:
+        # WU-203 (DATA-03): `content` comes straight from raw tool output
+        # (result.evidence / output_summary) and previously flowed UNREDACTED
+        # into Evidence -> findings candidates (description/evidence/
+        # affected_asset) -> SessionState -> disk. Redact here (idempotent, so
+        # double-redaction of already-redacted upstream output is harmless);
+        # classification/severity still run on the ORIGINAL line so a secret's
+        # presence never changes how evidence is categorised.
         items: list[Evidence] = []
         for line in result.evidence:
             items.append(Evidence(
                 id=f"EVD-{uuid4().hex[:8]}",
                 source_tool="executor",
                 evidence_type=self._classify(line),
-                content=line[:500],
+                content=redact_secrets(line[:500]),
                 severity_hint=self._severity(line),
                 task_id=result.task_id,
             ))
@@ -32,7 +40,7 @@ class EvidencePipeline:
                 id=f"EVD-{uuid4().hex[:8]}",
                 source_tool="executor",
                 evidence_type="output",
-                content=combined[:1000],
+                content=redact_secrets(combined[:1000]),
                 task_id=result.task_id,
             ))
         return items

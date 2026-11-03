@@ -76,6 +76,13 @@ class CronStore:
         return self._load()
 
     def add(self, job_type: str, target: str, schedule: str, *, profile: str = "recon-only") -> CronEntry:
+        from wth_ai.recon.planner import is_valid_recon_target
+
+        ok, why = is_valid_recon_target(target)
+        if not ok:
+            # Entri cron MENJALANKAN scan berulang tiap interval; target sampah
+            # seperti "--interval" tidak boleh pernah masuk store ini.
+            raise ValueError(f"target cron tidak valid: {why}")
         entries = self._load()
         # Idempotent per (job_type, target). `wth recon watch example.com`
         # previously appended a SECOND entry whenever it was re-run (e.g. to
@@ -114,6 +121,27 @@ class CronStore:
         for e in entries:
             if e.cron_id == cron_id:
                 e.enabled = enabled
+                found = True
+        if found:
+            self._save(entries)
+        return found
+
+    def disable_with_reason(self, cron_id: str, reason: str) -> bool:
+        """Matikan entri + simpan alasannya di `meta`.
+
+        Dipakai scheduler saat menemukan entri LAMA dengan target tidak valid
+        (dibuat sebelum guard ada): daripada menjalankan scan sampah tiap
+        interval, entri dimatikan dan alasannya terlihat lewat `wth cron list`.
+        """
+        from datetime import datetime, timezone
+
+        entries = self._load()
+        found = False
+        for e in entries:
+            if e.cron_id == cron_id:
+                e.enabled = False
+                e.meta["disabled_reason"] = reason
+                e.meta["disabled_at"] = datetime.now(timezone.utc).isoformat()
                 found = True
         if found:
             self._save(entries)

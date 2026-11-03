@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import re
 from pathlib import Path
 from typing import Any
 
@@ -43,17 +42,24 @@ def _parse_recon_args(args: list[str]) -> tuple[str, str, bool, str]:
         elif a == "--interval" and i + 1 < len(args):
             interval = args[i + 1]
             i += 1
+        elif a.startswith("-"):
+            # Option tak dikenal (atau `--interval` tanpa value di akhir baris)
+            # JANGAN pernah jatuh ke `rest` -- dulu token seperti itu bisa
+            # tersimpan sebagai TARGET (`/recon watch --interval` -> target
+            # literal "--interval", lalu cron menjalankan scan atasnya tiap
+            # interval). Token begini selalu hasil salah ketik, bukan target.
+            pass
         else:
             rest.append(a)
         i += 1
     target = ""
-    if rest:
-        for tok in rest:
-            if re.search(r"[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}", tok) or tok.startswith("http"):
-                target = tok.replace("https://", "").replace("http://", "").split("/")[0]
-                break
-        if not target:
-            target = rest[0]
+    from wth_ai.recon.planner import is_valid_recon_target
+
+    for tok in rest:
+        ok, _why = is_valid_recon_target(tok)
+        if ok:
+            target = tok.replace("https://", "").replace("http://", "").split("/")[0]
+            break
     if fast and profile == "recon-only":
         profile = "budget"
     return target, profile, fast, interval
@@ -110,6 +116,11 @@ def _recon_run(orch: Any, args: list[str]) -> str:
         target = orch.state.scope.target or ""
     if not target:
         return "Usage: `/recon example.com` or set target first: `/target example.com`"
+    from wth_ai.recon.planner import is_valid_recon_target
+
+    ok_target, why = is_valid_recon_target(target)
+    if not ok_target:
+        return f"Ditolak: {why}.\nContoh: `/recon example.com` · set target dulu: `/target example.com`"
 
     ok, msg = orch.scope_mgr.is_in_scope(target)
     if not ok and orch.state.scope.target:
@@ -171,6 +182,7 @@ def _recon_quick(orch: Any, args: list[str]) -> str:
 
 
 def _recon_watch(orch: Any, args: list[str]) -> str:
+    from wth_ai.recon.planner import is_valid_recon_target
     from wth_ai.recon.realtime import WatchConfig, parse_interval, save_watch
 
     target, profile, _, interval = _parse_recon_args(args)
@@ -178,6 +190,12 @@ def _recon_watch(orch: Any, args: list[str]) -> str:
         target = orch.state.scope.target or ""
     if not target:
         return "Usage: `/recon watch example.com --interval 6h`"
+    ok_target, why = is_valid_recon_target(target)
+    if not ok_target:
+        # Tanpa guard ini, `/recon watch --interval` menyimpan watch+cron atas
+        # target "--interval" dan ticker menjalankan scan diam-diam tiap
+        # interval — persis keluhan "tiba-tiba scan apapun gajelas".
+        return f"Ditolak: {why}.\nContoh: `/recon watch example.com --interval 6h`"
     secs = parse_interval(interval or "6h")
     cfg = WatchConfig(target=target, interval_seconds=secs, profile=profile)
     path = save_watch(cfg)
