@@ -5,9 +5,12 @@ from __future__ import annotations
 import os
 import re
 import shlex
+import signal
 import subprocess
 import threading
 from typing import Callable
+
+from wth_ai.running_actions import get_running_actions
 
 MAX_OUTPUT_BYTES = 512_000
 
@@ -35,6 +38,25 @@ def tokenize_command(command: str) -> list[str]:
         return command.split()
 
 
+def _kill_process_tree(proc: subprocess.Popen) -> None:
+    """SIGKILL seluruh process group `proc` (anak-cucu ikut), fallback `proc.kill()`.
+
+    Valid karena kedua jalur spawn memakai `start_new_session=True` — anak jadi
+    leader group-nya sendiri (`pgid == pid`). Membunuh satu PID saja meninggalkan
+    anak-cucunya hidup (kelas bug sama dengan pipe-timeout WU-108).
+    """
+    if hasattr(os, "killpg"):
+        try:
+            os.killpg(proc.pid, signal.SIGKILL)
+            return
+        except OSError:
+            pass
+    try:
+        proc.kill()
+    except OSError:
+        pass
+
+
 def run_argv(
     argv: list[str],
     *,
@@ -59,7 +81,12 @@ def run_argv(
                 text=True,
                 cwd=cwd,
                 env=base_env,
+                # F1/WU-106: sesi sendiri -> pgid == pid, supaya kill-switch dan
+                # kill-tree saat timeout menjangkau SELURUH proses tree, bukan
+                # cuma proses langsung.
+                start_new_session=(os.name != "nt"),
             )
+            action_id = get_running_actions().register(proc.pid, label=" ".join(argv[:3])[:100])
             # WU-108: `for line in proc.stdout:` blocks reading until the
             # pipe hits EOF (process exits) -- it has NO timeout of its own,
             # so `timeout` was completely ineffective for a hung process that
@@ -73,10 +100,7 @@ def run_argv(
 
             def _kill_on_timeout() -> None:
                 timed_out.set()
-                try:
-                    proc.kill()
-                except OSError:
-                    pass
+                _kill_process_tree(proc)
 
             watchdog = threading.Timer(timeout, _kill_on_timeout)
             watchdog.daemon = True
@@ -91,24 +115,39 @@ def run_argv(
                 proc.wait(timeout=timeout)
             finally:
                 watchdog.cancel()
+                get_running_actions().unregister(action_id)
             if timed_out.is_set():
                 return "", f"timeout after {timeout}s", 124
             stderr = (proc.stderr.read() if proc.stderr else "") or ""
             stdout = redact_output("\n".join(stdout_lines))[:max_bytes]
             return stdout, redact_output(stderr)[:max_bytes], proc.returncode or 0
-        proc = subprocess.run(
+        # Popen (bukan subprocess.run) supaya PID/process-group tercatat ke
+        # RunningActionRegistry: proses non-streaming juga harus bisa dibunuh
+        # kill-switch dan tidak meninggalkan anak saat timeout.
+        proc = subprocess.Popen(
             argv,
-            capture_output=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
             text=True,
-            timeout=timeout,
             cwd=cwd,
             env=base_env,
+            start_new_session=(os.name != "nt"),
         )
-        return (
-            redact_output(proc.stdout or "")[:max_bytes],
-            redact_output(proc.stderr or "")[:max_bytes],
-            proc.returncode,
-        )
+        action_id = get_running_actions().register(proc.pid, label=" ".join(argv[:3])[:100])
+        try:
+            try:
+                stdout_raw, stderr_raw = proc.communicate(timeout=timeout)
+            except subprocess.TimeoutExpired:
+                _kill_process_tree(proc)
+                proc.communicate()
+                return "", f"timeout after {timeout}s", 124
+            return (
+                redact_output(stdout_raw or "")[:max_bytes],
+                redact_output(stderr_raw or "")[:max_bytes],
+                proc.returncode or 0,
+            )
+        finally:
+            get_running_actions().unregister(action_id)
     except subprocess.TimeoutExpired:
         return "", f"timeout after {timeout}s", 124
     except OSError as exc:

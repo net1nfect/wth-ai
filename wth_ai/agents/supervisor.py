@@ -54,6 +54,16 @@ class SupervisorAgent(BaseLLMAgent):
             # still inspecting SupervisorAgent._stopped directly.
             self._ctx.stopped = True
             self._ctx.state.current_phase = AssessmentPhase.STOPPED
+        # F1/WU-106 (remainder): kill-switch proses. `ctx.stopped` hanya
+        # menghentikan ITERASI berikutnya -- subprocess yang sedang berjalan
+        # butuh killpg nyata (RunningActionRegistry). Tidak pernah raise:
+        # cleanup tidak boleh mengganggu respons /stop.
+        try:
+            from wth_ai.running_actions import get_running_actions
+
+            get_running_actions().kill_all()
+        except Exception:  # noqa: BLE001
+            pass
         return "Agent stopped. Say anything to continue or `/help`."
 
     def run(

@@ -1434,6 +1434,17 @@ class WTHOrchestrator:
     def shutdown(self, *, reason: str = "quit") -> str:
         """Stop agents, background jobs, and persist session."""
         stopped_jobs = 0
+        # F1/WU-106 (remainder): kill-switch proses DIJALANKAN DULU -- hentikan
+        # subprocess yang sedang berjalan sebelum loop di-stop; `stop()` di
+        # bawah juga memanggil kill_all (idempotent) sebagai jaring kedua
+        # untuk spawn-balapan yang lolos sesudah blok ini.
+        killed_processes = 0
+        try:
+            from wth_ai.running_actions import get_running_actions
+
+            killed_processes = len(get_running_actions().kill_all().get("terminated", []))
+        except Exception:  # noqa: BLE001 - shutdown tidak boleh crash karena cleanup
+            killed_processes = 0
         try:
             self.supervisor.stop()
         except Exception:
@@ -1459,6 +1470,8 @@ class WTHOrchestrator:
         parts = ["✓ WTH-AI ditutup · session disimpan"]
         if stopped_jobs:
             parts.append(f"{stopped_jobs} job dihentikan")
+        if killed_processes:
+            parts.append(f"{killed_processes} proses latar dihentikan")
         if reason and reason != "quit":
             parts.append(reason)
         return " · ".join(parts)
