@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
+from wth_ai.oob.dns import DEFAULT_DNS_HOST, DEFAULT_DNS_PORT, DNSListener
 from wth_ai.oob.server import DEFAULT_HOST, OOBCallbackServer
 from wth_ai.oob.store import OOBStore
 from wth_ai.terminal.models import TerminalResult
@@ -64,6 +65,12 @@ class OOBCallbackService:
         self.host = host or os.environ.get("WTH_OOB_HOST") or DEFAULT_HOST
         self._port_pref = env_port if port is None else int(port)
         self.server: OOBCallbackServer | None = None
+        self.dns: DNSListener | None = None
+        try:
+            self._dns_port_pref = int(os.environ.get("WTH_OOB_DNS_PORT", str(DEFAULT_DNS_PORT)) or DEFAULT_DNS_PORT)
+        except ValueError:
+            self._dns_port_pref = DEFAULT_DNS_PORT
+        self.dns_host = os.environ.get("WTH_OOB_DNS_HOST") or DEFAULT_DNS_HOST
 
     @property
     def running(self) -> bool:
@@ -92,6 +99,57 @@ class OOBCallbackService:
         self.server.stop()
         return True
 
+    # -- DNS listener ------------------------------------------------------ #
+
+    @property
+    def dns_running(self) -> bool:
+        return self.dns is not None and self.dns.running
+
+    def start_dns(self, *, host: str | None = None, port: int | None = None) -> dict[str, Any]:
+        """Hidupkan listener DNS (default 127.0.0.1:5353, unprivileged)."""
+        if self.dns_running:
+            return self.dns_status()
+        self.dns = DNSListener(
+            self.store,
+            host=host or self.dns_host,
+            port=self._dns_port_pref if port is None else int(port),
+        )
+        self.dns.start()
+        self.dns_host = self.dns.host
+        return self.dns_status()
+
+    def stop_dns(self) -> bool:
+        if self.dns is None:
+            return False
+        self.dns.stop()
+        return True
+
+    def dns_status(self) -> dict[str, Any]:
+        listener = self.dns
+        return {
+            "running": self.dns_running,
+            "host": listener.host if listener else self.dns_host,
+            "port": listener.port if listener else 0,
+            "domain": self.dns_domain(),
+            "queries": listener.queries if listener else 0,
+        }
+
+    def dns_domain(self) -> str:
+        """Suffix qname yang dipakai; token selalu label PERTAMA."""
+        if self.dns_running and self.dns is not None:
+            return f"{self.dns_host}:{self.dns.port}"
+        return ""
+
+    def dns_name_for(self, token: str) -> str:
+        """Nama yang harus di-resolve target untuk memicu callback.
+
+        Token selalu label PERTAMA (`<token>.oob.local`); operator mengarahkan
+        suffix itu ke listener via /etc/hosts, dnsmasq, atau `--dns`.
+        """
+        if not self.dns_running or self.dns is None:
+            return ""
+        return f"{token}.oob.local"
+
     def create(
         self,
         *,
@@ -103,6 +161,7 @@ class OOBCallbackService:
         entry = self.store.create_token(label=label, ttl_minutes=ttl_minutes, session_id=session_id, target=target)
         srv = self.server
         entry["url"] = srv.url_for(entry["token"]) if (srv is not None and srv.running) else ""
+        entry["dns"] = self.dns_name_for(entry["token"])
         return entry
 
     def record_as_transcript(
@@ -145,6 +204,9 @@ class OOBCallbackService:
             "host": self.server.host if self.server else self.host,
             "port": self.server.port if self.server else 0,
             "base_url": self.base_url,
+            "dns_running": self.dns_running,
+            "dns_host": self.dns.host if self.dns else self.dns_host,
+            "dns_port": self.dns.port if self.dns else 0,
             "tokens_total": len(tokens),
             "tokens_open": len(open_tokens),
             "hits_total": self.store.total_hits(),

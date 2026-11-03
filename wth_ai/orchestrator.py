@@ -1203,6 +1203,31 @@ class WTHOrchestrator:
                 )
             return "\n".join(rows)
 
+        if action == "dns":
+            sub = args[1].lower() if len(args) > 1 else "status"
+            if sub == "start":
+                port = None
+                for i, a in enumerate(args):
+                    if a == "--port" and i + 1 < len(args):
+                        try:
+                            port = int(args[i + 1])
+                        except ValueError:
+                            return "Nilai --port harus angka."
+                st = oob.start_dns(port=port)
+                return (
+                    f"DNS listener aktif di {st['host']}:{st['port']}.\n"
+                    "hostname callback: <token>.oob.local (token dari `/oob new`)\n"
+                    "catatan: resolver target harus diarahkan ke host ini (mis. /etc/hosts, dnsmasq, atau --dns 127.0.0.1)."
+                )
+            if sub == "stop":
+                return "DNS listener dihentikan." if oob.stop_dns() else "DNS listener memang tidak jalan."
+            st = oob.dns_status()
+            lines = [f"OOB DNS — {'RUNNING' if st['running'] else 'stopped'}"]
+            if st["running"]:
+                lines.append(f"bind: {st['host']}:{st['port']} · query tercatat: {st['queries']}")
+            lines.append("pakai: /oob dns start [--port N] · /oob dns stop · /oob dns")
+            return "\n".join(lines)
+
         if action == "clear":
             removed = oob.store.clear_expired()
             return f"{removed} token kedaluwarsa dibersihkan (riwayat interaksi tetap disimpan sebagai bukti)."
