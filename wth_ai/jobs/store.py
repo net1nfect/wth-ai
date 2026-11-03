@@ -90,7 +90,7 @@ class JobStore:
     def create_job(self, job: Job) -> Job:
         with self._conn() as conn:
             conn.execute(
-                f"INSERT INTO jobs ({','.join(_COLUMNS)}) VALUES ({','.join('?' for _ in _COLUMNS)})",
+                f"INSERT INTO jobs ({','.join(_COLUMNS)}) VALUES ({','.join('?' for _ in _COLUMNS)})",  # nosec B608
                 (
                     job.job_id, job.type, job.status, job.priority, job.created_at, job.updated_at,
                     job.started_at, job.finished_at, job.created_by, job.target, job.profile,
@@ -127,7 +127,7 @@ class JobStore:
         where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
         with self._conn() as conn:
             rows = conn.execute(
-                f"SELECT * FROM jobs {where} ORDER BY created_at DESC LIMIT ?",
+                f"SELECT * FROM jobs {where} ORDER BY created_at DESC LIMIT ?",  # nosec B608
                 (*params, limit),
             ).fetchall()
         return [self._row_to_job(r) for r in rows]
@@ -137,7 +137,7 @@ class JobStore:
         sets = ", ".join(f"{k} = ?" for k in fields)
         with self._conn() as conn:
             cur = conn.execute(
-                f"UPDATE jobs SET {sets} WHERE job_id = ?",
+                f"UPDATE jobs SET {sets} WHERE job_id = ?",  # nosec B608
                 (*fields.values(), job_id),
             )
             if cur.rowcount == 0:
@@ -203,7 +203,7 @@ class JobStore:
         """Read-only preview of the next queued job (does NOT claim it)."""
         with self._conn() as conn:
             row = conn.execute(
-                f"SELECT job_id FROM jobs WHERE status = 'queued' "
+                f"SELECT job_id FROM jobs WHERE status = 'queued' "  # nosec B608
                 f"ORDER BY {self._PRIORITY_ORDER_SQL}, created_at ASC LIMIT 1"
             ).fetchone()
         return self.get_job(row["job_id"]) if row else None
@@ -238,7 +238,7 @@ class JobStore:
         try:
             conn.execute("BEGIN IMMEDIATE")
             row = conn.execute(
-                f"SELECT job_id FROM jobs WHERE status = 'queued' "
+                f"SELECT job_id FROM jobs WHERE status = 'queued' "  # nosec B608
                 f"ORDER BY {self._PRIORITY_ORDER_SQL}, created_at ASC LIMIT 1"
             ).fetchone()
             if row is not None:

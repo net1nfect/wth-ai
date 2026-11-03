@@ -1,6 +1,6 @@
 click==8.1.7
 rich==13.6.0
-python-dotenv==1.0.0
+python-dotenv>=1.2.2
 loguru==0.7.2
 prompt-toolkit==3.0.43
 nodriver>=0.38

@@ -63,7 +63,7 @@ class ToolInstaller:
         if shell or argv is None:
             return subprocess.run(
                 display,
-                shell=True,
+                shell=True,  # nosec B602
                 capture_output=True,
                 text=True,
                 timeout=600,

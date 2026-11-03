@@ -109,7 +109,8 @@ class OllamaProvider(BaseLLMProvider):
             "stream": False,
         }
         url = f"{self.base_url}/api/chat"
-        r = requests.post(url, json=payload, timeout=timeout or self.default_timeout)
+        req_timeout = timeout or self.default_timeout
+        r = requests.post(url, json=payload, timeout=req_timeout)
         raise_for_status(self.name, model, url, r)
         data = r.json()
         return {"message": data.get("message", {}), "model": model, "raw": data}

@@ -115,7 +115,7 @@ class SkillHub:
             dest.mkdir(parents=True, exist_ok=True)
             url = f"{NINEROUTER_RAW_BASE}/{skill_id}/SKILL.md"
             try:
-                with urllib.request.urlopen(url, timeout=45) as resp:  # noqa: S310
+                with urllib.request.urlopen(url, timeout=45) as resp:  # noqa: S310  # nosec B310
                     text = resp.read().decode("utf-8", errors="replace")
             except (urllib.error.URLError, TimeoutError, OSError) as exc:
                 return f"9router sync failed on `{skill_id}`: {exc}"

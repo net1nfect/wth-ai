@@ -190,7 +190,8 @@ class OpenAICompatProvider(BaseLLMProvider):
         if response_format:
             payload["response_format"] = response_format
         url = f"{self.base_url}/chat/completions"
-        r = requests.post(url, headers=self._headers(), json=payload, timeout=timeout or self.default_timeout)
+        req_timeout = timeout or self.default_timeout
+        r = requests.post(url, headers=self._headers(), json=payload, timeout=req_timeout)
         raise_for_status(self.provider_name, model, url, r)
         data = _parse_response_json(r.text)
         self._record_usage(data)
@@ -218,7 +219,8 @@ class OpenAICompatProvider(BaseLLMProvider):
             "stream": False,
         }
         url = f"{self.base_url}/chat/completions"
-        r = requests.post(url, headers=self._headers(), json=payload, timeout=timeout or self.default_timeout)
+        req_timeout = timeout or self.default_timeout
+        r = requests.post(url, headers=self._headers(), json=payload, timeout=req_timeout)
         raise_for_status(self.provider_name, model, url, r)
         data = _parse_response_json(r.text)
         self._record_usage(data)

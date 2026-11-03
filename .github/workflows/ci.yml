@@ -2,7 +2,7 @@ name: CI
 
 on:
   push:
-    branches: [main, master, develop]
+    branches: [main, master, develop, agentic]
   pull_request:
 
 jobs:
@@ -16,3 +16,16 @@ jobs:
       - run: pip install -r requirements.txt && pip install -e .
       - run: python3 wth_ai/tools/generate_manifest.py
       - run: pytest tests/ -v --tb=short
+
+  security:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install pip-audit bandit
+      - name: Dependency audit (pip-audit)
+        run: pip-audit -r requirements.txt
+      - name: Static security scan (bandit, severity >= medium)
+        run: bandit -r wth_ai -ll -q
