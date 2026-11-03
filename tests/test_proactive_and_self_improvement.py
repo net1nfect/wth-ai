@@ -310,7 +310,7 @@ def test_registry_discovers_skills_written_one_namespace_deep(tmp_path):
         encoding="utf-8",
     )
 
-    registry = SkillRegistry(openclaw_path=tmp_path / "tidak-ada", local_path=root)
+    registry = SkillRegistry(openclaw_path=tmp_path / "tidak-ada", local_path=root, sources=("local",))
     found = registry.discover()
     assert found == 2, f"harus menemukan skill langsung dan yang di namespace: {found}"
     assert any(s.id.startswith("auto-") for s in registry.skills.values())
