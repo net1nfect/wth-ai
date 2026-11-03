@@ -15,6 +15,7 @@ from wth_ai.config import WTHConfig
 from wth_ai.mcp.client import MCPToolResult
 from wth_ai.mcp.config import MCPServerSpec, parse_mcp_servers
 from wth_ai.vault import SecretVault, is_vault_ref, mask_secret
+from wth_ai.running_actions import get_running_actions, kill_process_tree
 
 
 def _now() -> str:
@@ -40,6 +41,7 @@ class _StdioMCPConnection:
         self.name = name
         self.spec = spec
         self.proc: subprocess.Popen[str] | None = None
+        self._action_id: str | None = None
         self._lock = threading.Lock()
         self._req_id = 0
         self.tools: list[dict[str, Any]] = []
@@ -57,6 +59,12 @@ class _StdioMCPConnection:
                 text=True,
                 env=env,
                 cwd=self.spec.cwd,
+                # F1/WU-106: sesi sendiri -> kill-switch menjangkau server MCP
+                # (dan anak-anaknya) lewat process-group.
+                start_new_session=(os.name != "nt"),
+            )
+            self._action_id = get_running_actions().register(
+                self.proc.pid, label=f"mcp:{self.name}"
             )
             self._rpc("initialize", {"protocolVersion": "2024-11-05", "capabilities": {}, "clientInfo": {"name": "wth-ai", "version": "1.0"}})
             listed = self._rpc("tools/list", {})
@@ -72,7 +80,11 @@ class _StdioMCPConnection:
                 self.proc.terminate()
                 self.proc.wait(timeout=3)
             except (OSError, subprocess.TimeoutExpired):
-                self.proc.kill()
+                # SIGTERM tidak cukup -- kill seluruh tree (server MCP bisa
+                # punya proses anak), bukan cuma proses langsung.
+                kill_process_tree(self.proc)
+        get_running_actions().unregister(self._action_id)
+        self._action_id = None
         self.proc = None
 
     def _rpc(self, method: str, params: dict[str, Any], timeout: float = 30.0) -> Any:
