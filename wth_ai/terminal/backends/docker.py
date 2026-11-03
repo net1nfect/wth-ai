@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import os
 import shutil
 import subprocess
 from dataclasses import dataclass
 from typing import Any
+
+from wth_ai.running_actions import get_running_actions, kill_process_tree
 
 
 @dataclass
@@ -24,22 +27,32 @@ class DockerTerminalBackend:
             "docker", "run", "--rm", "--network=none",
             self.image, "sh", "-c", inner,
         ]
+        # F1/WU-106: Popen (bukan subprocess.run) + registry -- `docker run`
+        # adalah proses panjang; kill-switch harus menjangkau CLI-nya.
+        proc = subprocess.Popen(
+            docker_cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            shell=False,
+            start_new_session=(os.name != "nt"),
+        )
+        action_id = get_running_actions().register(proc.pid, label="docker:run")
         try:
-            proc = subprocess.run(
-                docker_cmd,
-                capture_output=True,
-                text=True,
-                timeout=timeout,
-                shell=False,
-            )
-        except subprocess.TimeoutExpired:
-            return {"backend": self.name, "error": "timeout", "exit_code": 124}
-        return {
-            "backend": self.name,
-            "exit_code": proc.returncode,
-            "stdout": proc.stdout,
-            "stderr": proc.stderr,
-        }
+            try:
+                out, err = proc.communicate(timeout=timeout)
+            except subprocess.TimeoutExpired:
+                kill_process_tree(proc)
+                proc.communicate()
+                return {"backend": self.name, "error": "timeout", "exit_code": 124}
+            return {
+                "backend": self.name,
+                "exit_code": proc.returncode,
+                "stdout": out,
+                "stderr": err,
+            }
+        finally:
+            get_running_actions().unregister(action_id)
 
 
 def _shell_quote(arg: str) -> str:

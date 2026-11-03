@@ -377,3 +377,145 @@ class TestKillSwitchCoverageExtensions:
         assert result and result[0]["status"] == "success", result
         assert get_running_actions().active_count() == 0
         reset_running_actions()
+
+
+class TestSpawnSiteCoverageSweep:
+    """F1 slice 3: mcp/manager, tools/installer, intel/feed, computer_use,
+    docker backend — semua spawn site terakhir register/cleanup via registry."""
+
+    def test_mcp_stdio_connection_registers_and_cleans(self):
+        from wth_ai.mcp.config import MCPServerSpec
+        from wth_ai.mcp.manager import _StdioMCPConnection
+
+        reset_running_actions()
+        server_code = (
+            "import sys, json\n"
+            "for line in sys.stdin:\n"
+            "    try: msg = json.loads(line)\n"
+            "    except Exception: continue\n"
+            "    m = msg.get('method')\n"
+            "    if m == 'initialize': r = {'protocolVersion': '2024-11-05', 'capabilities': {}}\n"
+            "    elif m == 'tools/list': r = {'tools': []}\n"
+            "    else: continue\n"
+            "    print(json.dumps({'jsonrpc': '2.0', 'id': msg.get('id'), 'result': r}), flush=True)\n"
+        )
+        conn = _StdioMCPConnection("fake", MCPServerSpec(command="python3", args=["-c", server_code]))
+        try:
+            assert conn.start() is True
+            snap = get_running_actions().snapshot()
+            assert len(snap) == 1, snap
+            assert snap[0]["label"] == "mcp:fake"
+        finally:
+            conn.stop()
+        assert get_running_actions().active_count() == 0
+        reset_running_actions()
+
+    def test_installer_run_command_registers_and_cleans(self, monkeypatch, tmp_path):
+        from wth_ai.tools.installer import ToolInstaller
+
+        reset_running_actions()
+        monkeypatch.setattr(
+            "wth_ai.tools.installer.normalize_install_command",
+            lambda method, cmd, use_sudo=False: (["sleep", "0.5"], "sleep 0.5", False),
+        )
+        inst = ToolInstaller.__new__(ToolInstaller)
+        inst.tools_bin = tmp_path / "bin"
+        result: list = []
+        thread = threading.Thread(target=lambda: result.append(inst._run_command("pip", "x", use_sudo=False)))
+        thread.start()
+        seen = 0
+        deadline = time.monotonic() + 3
+        while time.monotonic() < deadline:
+            seen = get_running_actions().active_count()
+            if seen:
+                break
+            time.sleep(0.01)
+        assert seen == 1, f"installer spawn tidak ter-registrasi (count={seen})"
+        assert get_running_actions().snapshot()[0]["label"].startswith("install:")
+        thread.join(timeout=10)
+        assert result and result[0].returncode == 0
+        assert get_running_actions().active_count() == 0
+        reset_running_actions()
+
+    def test_intel_nuclei_templates_registers_and_cleans(self, monkeypatch, tmp_path):
+        from wth_ai.config import WTHConfig
+        from wth_ai.intel.feed import IntelFeed
+
+        reset_running_actions()
+        monkeypatch.setenv("WTH_HOME", str(tmp_path / "home"))
+        bin_dir = tmp_path / "fakebin"
+        bin_dir.mkdir()
+        fake = bin_dir / "nuclei"
+        fake.write_text("#!/bin/sh\nsleep 0.5\nexit 0\n", encoding="utf-8")
+        fake.chmod(0o755)
+        monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ.get('PATH', '')}")
+        cfg = WTHConfig()
+        cfg.intel.nuclei_templates_check = True
+        feed = IntelFeed(cfg)
+        result: list = []
+        thread = threading.Thread(target=lambda: result.append(feed.check_nuclei_templates()))
+        thread.start()
+        seen = 0
+        deadline = time.monotonic() + 3
+        while time.monotonic() < deadline:
+            seen = get_running_actions().active_count()
+            if seen:
+                break
+            time.sleep(0.01)
+        assert seen == 1, f"nuclei spawn tidak ter-registrasi (count={seen})"
+        assert get_running_actions().snapshot()[0]["label"] == "intel:nuclei-templates"
+        thread.join(timeout=10)
+        assert result and result[0]["status"] == "ok"
+        assert get_running_actions().active_count() == 0
+        reset_running_actions()
+
+    def test_computer_use_run_registers_and_cleans(self):
+        from wth_ai.computer_use.session import ComputerUse
+
+        reset_running_actions()
+        cu = ComputerUse(timeout=10)
+        result: list = []
+        thread = threading.Thread(target=lambda: result.append(cu._run(["/bin/sleep", "0.5"])))
+        thread.start()
+        seen = 0
+        deadline = time.monotonic() + 3
+        while time.monotonic() < deadline:
+            seen = get_running_actions().active_count()
+            if seen:
+                break
+            time.sleep(0.01)
+        assert seen == 1, f"computer_use spawn tidak ter-registrasi (count={seen})"
+        assert get_running_actions().snapshot()[0]["label"].startswith("computer_use:")
+        thread.join(timeout=10)
+        assert result and result[0][0] is True
+        assert get_running_actions().active_count() == 0
+        reset_running_actions()
+
+    def test_docker_backend_registers_and_cleans(self, monkeypatch, tmp_path):
+        from wth_ai.terminal.backends.docker import DockerTerminalBackend
+
+        reset_running_actions()
+        bin_dir = tmp_path / "fakebin"
+        bin_dir.mkdir()
+        fake = bin_dir / "docker"
+        fake.write_text("#!/bin/sh\nsleep 0.5\necho done\nexit 0\n", encoding="utf-8")
+        fake.chmod(0o755)
+        monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ.get('PATH', '')}")
+        backend = DockerTerminalBackend()
+        assert backend.available() is True
+        result: list = []
+        thread = threading.Thread(target=lambda: result.append(backend.run(["echo", "hi"])))
+        thread.start()
+        seen = 0
+        deadline = time.monotonic() + 3
+        while time.monotonic() < deadline:
+            seen = get_running_actions().active_count()
+            if seen:
+                break
+            time.sleep(0.01)
+        assert seen == 1, f"docker spawn tidak ter-registrasi (count={seen})"
+        assert get_running_actions().snapshot()[0]["label"] == "docker:run"
+        thread.join(timeout=10)
+        assert result and result[0]["exit_code"] == 0
+        assert get_running_actions().active_count() == 0
+        reset_running_actions()

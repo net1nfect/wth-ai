@@ -13,6 +13,7 @@ import requests
 
 from wth_ai.config import WTHConfig
 from wth_ai.models import AttackSurface
+from wth_ai.running_actions import get_running_actions, kill_process_tree
 
 
 class IntelFeed:
@@ -41,18 +42,29 @@ class IntelFeed:
         if not self.config.intel.nuclei_templates_check:
             return {"status": "disabled"}
         try:
-            proc = subprocess.run(
+            proc = subprocess.Popen(
                 ["nuclei", "-update-templates", "-silent"],
-                capture_output=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
                 text=True,
-                timeout=120,
+                start_new_session=(os.name != "nt"),
             )
+        except FileNotFoundError:
+            return {"status": "unavailable", "error": "nuclei tidak ada di PATH"}
+        action_id = get_running_actions().register(proc.pid, label="intel:nuclei-templates")
+        try:
+            try:
+                out, _err = proc.communicate(timeout=120)
+            except subprocess.TimeoutExpired:
+                kill_process_tree(proc)
+                proc.communicate()
+                return {"status": "unavailable", "error": "timeout after 120s"}
             return {
                 "status": "ok" if proc.returncode == 0 else "failed",
-                "stdout": proc.stdout[-300:] if proc.stdout else "",
+                "stdout": out[-300:] if out else "",
             }
-        except (FileNotFoundError, subprocess.TimeoutExpired) as exc:
-            return {"status": "unavailable", "error": str(exc)}
+        finally:
+            get_running_actions().unregister(action_id)
 
     def cve_hints_for_tech(self, tech_stack: dict[str, str]) -> list[dict[str, str]]:
         hints: list[dict[str, str]] = []

@@ -30,6 +30,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from wth_ai.running_actions import get_running_actions, kill_process_tree
+
 # Read-only vs input-injecting actions, so the permission gate can treat them
 # differently: looking at the screen is not the same as typing into it.
 READ_ONLY_ACTIONS = frozenset({"detect", "screenshot", "windows", "screen_size", "cursor"})
@@ -232,19 +234,37 @@ class ComputerUse:
 
     def _run(self, argv: list[str]) -> tuple[bool, str]:
         try:
-            proc = subprocess.run(  # noqa: S603 - argv list, no shell
-                argv, capture_output=True, text=True, timeout=self.timeout, env=self._env()
+            # F1/WU-106: Popen (bukan subprocess.run) supaya aksi yang sedang
+            # berjalan (mis. input injection yang menggantung) bisa dibunuh
+            # kill-switch; start_new_session -> killpg menjangkau tree-nya.
+            proc = subprocess.Popen(  # noqa: S603 - argv list, no shell
+                argv,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                env=self._env(),
+                start_new_session=(os.name != "nt"),
             )
-        except subprocess.TimeoutExpired:
-            return False, f"timeout {self.timeout}s: {' '.join(argv[:2])}"
         except FileNotFoundError:
             return False, f"binary tidak ada: {argv[0]}"
         except OSError as exc:
             return False, f"{type(exc).__name__}: {exc}"
-        output = (proc.stdout or proc.stderr or "").strip()
-        if proc.returncode != 0:
-            return False, f"exit {proc.returncode}: {output[:300]}"
-        return True, output
+        action_id = get_running_actions().register(
+            proc.pid, label=f"computer_use:{Path(argv[0]).name}"[:100]
+        )
+        try:
+            try:
+                stdout, stderr = proc.communicate(timeout=self.timeout)
+            except subprocess.TimeoutExpired:
+                kill_process_tree(proc)
+                proc.communicate()
+                return False, f"timeout {self.timeout}s: {' '.join(argv[:2])}"
+            output = (stdout or stderr or "").strip()
+            if proc.returncode != 0:
+                return False, f"exit {proc.returncode}: {output[:300]}"
+            return True, output
+        finally:
+            get_running_actions().unregister(action_id)
 
     # ------------------------------------------------------------------ #
     # read-only actions

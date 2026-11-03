@@ -17,6 +17,7 @@ from wth_ai.tools.platform import (
     platform_summary,
 )
 from wth_ai.tools.registry import ToolRegistry, ToolSpec
+from wth_ai.running_actions import get_running_actions, kill_process_tree
 
 TOP_RECON_TOOLS: tuple[str, ...] = (
     "subfinder", "httpx", "dnsx", "nuclei", "naabu", "katana", "gau",
@@ -60,23 +61,31 @@ class ToolInstaller:
     def _run_command(self, method: str, cmd: str, *, use_sudo: bool) -> subprocess.CompletedProcess[str]:
         argv, display, shell = normalize_install_command(method, cmd, use_sudo=use_sudo)
         env = {**os.environ, "GOBIN": str(self.tools_bin)}
-        if shell or argv is None:
-            return subprocess.run(
-                display,
-                shell=True,  # nosec B602
-                capture_output=True,
-                text=True,
-                timeout=600,
-                env=env,
-            )
-        return subprocess.run(
-            argv,
-            shell=False,
-            capture_output=True,
+        use_shell = bool(shell or argv is None)
+        target: Any = display if use_shell else argv
+        # F1/WU-106: Popen (bukan subprocess.run) supaya PID/process-group
+        # tercatat ke RunningActionRegistry -- install bisa berjalan sampai
+        # 600s dan harus bisa dibunuh kill-switch tanpa meninggalkan anak.
+        proc = subprocess.Popen(
+            target,
+            shell=use_shell,  # nosec B602 - display string memang via shell (kontrak lama)
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
             text=True,
-            timeout=600,
             env=env,
+            start_new_session=(os.name != "nt"),
         )
+        action_id = get_running_actions().register(proc.pid, label=f"install:{str(display)[:80]}")
+        try:
+            try:
+                out, err = proc.communicate(timeout=600)
+            except subprocess.TimeoutExpired:
+                kill_process_tree(proc)
+                proc.communicate()
+                raise
+            return subprocess.CompletedProcess(target, proc.returncode, out, err)
+        finally:
+            get_running_actions().unregister(action_id)
 
     def install_one(
         self,
