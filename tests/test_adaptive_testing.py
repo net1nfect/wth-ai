@@ -168,3 +168,29 @@ def test_executor_prompt_allows_adapting_within_the_task():
     text = Path("prompts/executor_system.txt").read_text(encoding="utf-8")
     assert "beradaptasi" in text.lower()
     assert "bukan batas" in text.lower(), "modul harus disebut sebagai contoh, bukan batas"
+
+
+def test_executor_prompt_carries_v3_doctrine():
+    """Doktrin v3: adaptive probe, destruktif berbatas, dan disiplin bukti.
+
+    Prompt ini dibaca langsung oleh test (bukan lewat loader), jadi kontraknya
+    adalah ISI file. Test ini gagal bila salah satu pilar v3 hilang saat prompt
+    disunting berikutnya.
+    """
+    from pathlib import Path
+
+    text = Path("prompts/executor_system.txt").read_text(encoding="utf-8")
+    for token in (
+        "doktrin v3",
+        "http_probe",
+        "compare_to",
+        "[DIFF vs TX]",
+        "destructive_allowed",
+        "blast radius",
+        "single-object",
+        "mass",
+        "Cleanup",
+        "COMMAND_VALIDATION",
+    ):
+        assert token in text, f"doktrin v3 kehilangan `{token}`"
+    assert "v2.0" not in text, "penanda versi lama harus sudah diganti"
