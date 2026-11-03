@@ -125,8 +125,13 @@ def run_autopilot(
         except Exception:  # noqa: BLE001
             findings = []
 
+    # `{base}` WAJIB berupa URL berskema: versi pertama memakai target apa adanya
+    # ("127.0.0.1:42969"), sehingga `requests` melempar MissingSchema dan setiap
+    # langkah tercatat "dijalankan" dengan status kosong -- nol permintaan nyata.
+    from wth_ai.recon.http import normalize_url
+
     values = {
-        "base": target.rstrip("/"),
+        "base": normalize_url(target).rstrip("/"),
         "marker": "wth-auto-9z8y7",
         "own_id": "1",
         "own_other_id": "1",

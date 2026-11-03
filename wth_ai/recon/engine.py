@@ -29,6 +29,7 @@ from wth_ai.recon.adaptive import (
 )
 from wth_ai.recon.diff import diff_results
 from wth_ai.recon.model import ToolRun, ToolSpec
+from wth_ai.recon.http import is_private_literal as _is_private_literal
 from wth_ai.recon.normalizer import ReconNormalizer
 from wth_ai.recon.planner import ReconPlanner, detect_target_type
 from wth_ai.recon.registry import ReconToolRegistry
@@ -125,7 +126,11 @@ class ReconEngine:
         )
         host = rhttp.host_of(target)
         base_url = rhttp.normalize_url(target)
-        ctx = BuiltinContext(target=target, host=host, base_url=base_url)
+        ctx = BuiltinContext(target=target, host=host, base_url=base_url,
+                       # Operator yang menamai alamat private/loopback sebagai target
+                       # adalah otorisasinya; guard SSRF tetap menolak alamat internal
+                       # yang tidak disebut. Tanpa ini, recon di lab lokal selalu 0 URL.
+                       allow_private=_is_private_literal(host))
         normalizer = ReconNormalizer()
         tool_runs: list[ToolRun] = []
 

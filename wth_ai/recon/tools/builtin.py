@@ -24,6 +24,9 @@ class BuiltinContext:
     urls: list[str] = field(default_factory=list)
     js_files: list[str] = field(default_factory=list)
     homepage_html: str = ""
+    #: True bila operator menyebut alamat private/loopback sebagai TARGET (lab lokal).
+    #: Guard SSRF tetap menolak alamat internal yang tidak disebut operator.
+    allow_private: bool = False
 
     def absorb(self, items: list[dict[str, Any]]) -> None:
         """Fold normalized items back into accumulators for later builtins."""
@@ -39,7 +42,7 @@ class BuiltinContext:
 
 # --- individual builtins ---
 def _builtin_http(ctx: BuiltinContext) -> list[dict[str, Any]]:
-    resp = rhttp.fetch(ctx.base_url, method="GET")
+    resp = rhttp.fetch(ctx.base_url, method="GET", allow_private=ctx.allow_private)
     if not resp.ok:
         return []
     ctx.homepage_html = resp.text
@@ -95,7 +98,8 @@ def _builtin_robots(ctx: BuiltinContext) -> list[dict[str, Any]]:
 
     items: list[dict[str, Any]] = []
     for path in ("robots.txt", "sitemap.xml"):
-        resp = rhttp.fetch(urljoin(ctx.base_url + "/", path), method="GET")
+        resp = rhttp.fetch(urljoin(ctx.base_url + "/", path), method="GET",
+                               allow_private=ctx.allow_private)
         if not resp.ok or resp.status >= 400:
             continue
         items.append({"kind": "url", "url": resp.url})
@@ -120,7 +124,7 @@ def _builtin_js(ctx: BuiltinContext) -> list[dict[str, Any]]:
     if not targets and ctx.homepage_html:
         items.extend(js.analyze(ctx.base_url, ctx.homepage_html))
     for jf in targets:
-        resp = rhttp.fetch(jf, method="GET")
+        resp = rhttp.fetch(jf, method="GET", allow_private=ctx.allow_private)
         if resp.ok:
             items.extend(js.analyze(jf, resp.text))
     return items
