@@ -88,9 +88,9 @@ class SsrfExecutor(BaseVulnExecutor):
                 request_pairs.append(proof_pair)
 
         body = resp.get("body", "").lower()
-        oob_hit = self._try_mcp_oob(task)
+        oob_hit = self._try_oob_callback(task)
         if oob_hit:
-            evidence.append(f"OOB callback via MCP: {oob_hit}")
+            evidence.append(f"OOB callback (blind-SSRF): {oob_hit}")
         # Sinyal sekunder (lemah): tetap dilaporkan, tapi TIDAK sendirian dianggap
         # bukti kuat -- disebut apa adanya sebagai indikasi.
         if not proof:
@@ -146,8 +146,43 @@ class SsrfExecutor(BaseVulnExecutor):
             )
         return "", None
 
+    def _try_oob_callback(self, task: ExecutorTask) -> str:
+        """Jalur callback blind-SSRF lewat Callback Center lokal (F2).
+
+        Alur yang benar untuk SSRF *blind*: URL callback milik kita dikirim ke
+        parameter yang rentan, lalu kehadiran hit di listener membuktikan server
+        target benar-benar menghubungi URL kita — bukti yang tidak bisa dipalsukan
+        oleh error generik.
+
+        Kontrak penting:
+        * **Tidak pernah membuka listener sendiri.** Listener adalah keputusan
+          operator (`/oob start`); executor hanya memakainya bila sudah hidup.
+        * **Tidak ada HTTP saat listener mati** — supaya jumlah request di jalur
+          non-blind tidak berubah (lihat `test_vuln_executor_scope_guard.py`).
+        * Kalau Callback Center tidak tersedia, mundur ke jalur MCP lama
+          (kompatibel), dan mengembalikan "" bila keduanya tidak ada.
+        """
+        try:
+            from wth_ai.oob import get_oob_service
+
+            svc = get_oob_service()
+            if svc.running:
+                entry = svc.create(
+                    label=f"blind-ssrf:{task.id}",
+                    session_id=getattr(self.state, "session_id", ""),
+                    target=getattr(getattr(self.state, "scope", None), "target", ""),
+                )
+                return (
+                    f"token {entry['token'][:12]}… siap — kirim `{entry['url']}` ke parameter "
+                    f"yang diuji, lalu periksa hit lewat `oob_check`/`/oob hits {entry['token']}`; "
+                    "hit = bukti server menghubungi URL kita"
+                )
+        except Exception:  # noqa: BLE001
+            pass
+        return self._try_mcp_oob(task)
+
     def _try_mcp_oob(self, task: ExecutorTask) -> str:
-        """Optional OOB SSRF check via MCP when enabled."""
+        """Fallback lama: OOB via MCP bila Callback Center lokal tidak aktif."""
         try:
             from wth_ai.mcp.client import MCPClient
             from wth_ai.config import WTHConfig
