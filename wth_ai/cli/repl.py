@@ -455,7 +455,7 @@ class WTHRepl:
         return selected.endswith(" ") and not original.endswith(" ")
 
     #: Commands whose bare form already opens an interactive view of its own.
-    SELF_INTERACTIVE = frozenset({"/model", "/permission"})
+    SELF_INTERACTIVE = frozenset({"/model", "/permission", "/effort"})
 
     def _remember_output(self, command: str, response: Any) -> None:
         """Keep the last few thousand lines so PageUp has something to show."""
@@ -544,7 +544,9 @@ class WTHRepl:
             return text
 
         subs = parse_subcommands(getattr(command, "usage", "") or "")
-        if not subs:
+        # Satu pilihan bukan pertanyaan: menu satu-item cuma menambah langkah,
+        # dan Esc-nya menghasilkan turn kosong (bug `/resume`).
+        if len(subs) < 2:
             return text
         from wth_ai.cli.ui.menu import MenuItem
 
