@@ -26,6 +26,8 @@ from wth_ai.recon.tools.adapters import get_adapter
 from wth_ai.recon.tools.builtin import BuiltinContext, run_builtin
 from wth_ai.recon.tools.catalog import BUILTIN_TOOLS
 
+from wth_ai.running_actions import get_running_actions, kill_process_tree
+
 MAX_OUTPUT_BYTES = 200_000
 DEFAULT_TIMEOUT = 60
 
@@ -171,6 +173,14 @@ class SafeToolRunner:
             stdin=subprocess.DEVNULL,
             env=_sanitized_env(),
             cwd=cwd,
+            # F1/WU-106: sesi sendiri -> pgid == pid; kill-switch (dan kill saat
+            # timeout) menjangkau seluruh proses tree. Test-seam `_spawn` tiruan
+            # menerima **kwargs, jadi kwarg tambahan ini aman.
+            start_new_session=(os.name != "nt"),
+        )
+        action_id = get_running_actions().register(
+            getattr(proc, "pid", 0) or 0,
+            label=("recon:" + os.path.basename(argv[0]))[:100] if argv else "recon",
         )
 
         def _drain(stream: Any) -> bytes:
@@ -200,18 +210,23 @@ class SafeToolRunner:
         for t in readers:
             t.start()
         try:
-            code = proc.wait(timeout=self.timeout)
-        except subprocess.TimeoutExpired:
-            proc.kill()
             try:
-                proc.wait(timeout=5)
+                code = proc.wait(timeout=self.timeout)
             except subprocess.TimeoutExpired:
-                pass
+                # F1/WU-106: kill seluruh tree (bukan proc.kill() satu PID) --
+                # anak-cucu tool recon tidak boleh jadi orphan saat timeout.
+                kill_process_tree(proc)
+                try:
+                    proc.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    pass
+                for t in readers:
+                    t.join(timeout=5)
+                raise
             for t in readers:
                 t.join(timeout=5)
-            raise
-        for t in readers:
-            t.join(timeout=5)
+        finally:
+            get_running_actions().unregister(action_id)
         out = out_box[0].decode("utf-8", errors="replace") if out_box else ""
         err = err_box[0].decode("utf-8", errors="replace") if err_box else ""
         return out, err, code

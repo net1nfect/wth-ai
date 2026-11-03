@@ -39,6 +39,27 @@ _KILL_POLL_SECONDS = 0.05
 _SIGKILL_GRACE_SECONDS = 0.5
 
 
+def kill_process_tree(proc: Any) -> None:
+    """SIGKILL seluruh process group `proc` (anak-cucu ikut), fallback `proc.kill()`.
+
+    Valid bila proses di-spawn dengan `start_new_session=True` (anak jadi leader
+    group-nya sendiri, `pgid == pid`). Membunuh satu PID saja meninggalkan
+    anak-cucunya hidup (kelas bug yang sama dengan pipe-timeout WU-108). Aman
+    terhadap objek proses tiruan (test-seam) tanpa atribut `pid`.
+    """
+    pid = getattr(proc, "pid", None)
+    if isinstance(pid, int) and pid > 0 and hasattr(os, "killpg"):
+        try:
+            os.killpg(pid, signal.SIGKILL)
+            return
+        except OSError:
+            pass
+    try:
+        proc.kill()
+    except (OSError, AttributeError):
+        pass
+
+
 @dataclass(frozen=True)
 class RunningAction:
     action_id: str
