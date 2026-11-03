@@ -232,6 +232,7 @@ def _default_commands() -> list[PlatformCommand]:
         PlatformCommand("/target", "/target [url|domain|clear|show]", "Set assessment target", "setup"),
         PlatformCommand("/scope", "/scope [set key=val ...]", "Full scope (advanced)", "setup", ("/scope set",)),
         PlatformCommand("/permission", "/permission [read_only|standard|elevated|full_lab|unrestricted]", "Permission mode", "setup"),
+        PlatformCommand("/effort", "/effort [low|medium|high|xhigh|ultra]", "Budget generasi LLM (max_tokens + timeout)", "setup"),
         PlatformCommand("/model", "/model [list|use N|set role id|fix|show]", "Switch LLM models", "setup"),
         PlatformCommand("/provider", "/provider [show|set role type|list]", "Switch LLM provider", "setup"),
         PlatformCommand("/profile", "/profile [list|use name]", "Engagement profile preset", "setup"),

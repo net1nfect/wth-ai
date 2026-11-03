@@ -8,6 +8,7 @@ _QUICK_SLASH = frozenset({
     "/quit", "/exit", "/doctor", "/tools", "/skills", "/skill", "/model",
     "/perm", "/permission", "/new-session", "/resume", "/gateway", "/cron",
     "/findings", "/graph", "/memory", "/setup", "/stop", "/provider", "/profile",
+    "/effort",
     "/mcp",
 })
 

@@ -29,6 +29,16 @@ class LLMProviderRouter:
         #: can surface it next to the answer.
         self.budget_notice: str = ""
 
+    def reset_provider_cache(self) -> None:
+        """Lepas instance provider yang di-cache.
+
+        Instance dibangun dengan `max_tokens`/timeout DARI CONFIG SAAT ITU --
+        `/effort` mengubah config setelah provider mungkin sudah di-cache, jadi
+        tanpa reset nilai baru tidak pernah sampai ke provider.
+        """
+        self._providers.clear()
+        self._role_providers.clear()
+
     def _get_or_create_provider(self, ptype: str) -> BaseLLMProvider:
         if ptype in self._providers:
             return self._providers[ptype]

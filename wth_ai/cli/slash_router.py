@@ -111,6 +111,7 @@ class SlashRouter:
 def build_slash_router(orch: Any) -> SlashRouter:
     """Wire orchestrator methods into slash handlers."""
     from wth_ai.cli.handlers.config_handler import handle_config
+    from wth_ai.cli.handlers.effort_handler import handle_effort
     from wth_ai.cli.handlers.platform_handler import handle_cron, handle_gateway, handle_memory, handle_mode
     from wth_ai.cli.handlers.recon_handler import handle_recon
     from wth_ai.cli.handlers.setup_handler import (
@@ -223,6 +224,7 @@ def build_slash_router(orch: Any) -> SlashRouter:
         "/target": lambda a: handle_target(orch, a),
         "/scope": _scope,
         "/permission": orch._handle_permission,
+        "/effort": lambda a: handle_effort(orch, a),
         "/computer": orch._handle_computer,
         "/research": orch._handle_research,
         "/jobs": orch._handle_jobs,
