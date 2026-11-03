@@ -56,6 +56,58 @@ def _dispatch_computer_use(ctx: SupervisorContext, args: dict[str, Any], *, appr
     return result.describe()
 
 
+def _dispatch_oob_create(ctx: SupervisorContext, args: dict[str, Any]) -> str:
+    """Buat token callback OOB (F2).
+
+    Sengaja TANPA approval gate dan TANPA parameter host/port:
+    * membuat token + listener loopback tidak menyentuh target apa pun;
+    * host/port adalah permukaan OPERATOR (slash `/oob start --host`), bukan
+      permukaan LLM — kalau LLM bisa memindahkan bind ke 0.0.0.0, ia bisa
+      membuka port ke jaringan; itu tidak boleh berasal dari argumen model.
+    """
+    from wth_ai.oob import get_oob_service
+
+    svc = get_oob_service()
+    if not svc.running:
+        svc.start()
+    label = str(args.get("label", "") or "callback")
+    ttl = args.get("ttl_minutes")
+    state = ctx.state
+    entry = svc.create(
+        label=label,
+        ttl_minutes=int(ttl) if ttl else None,
+        session_id=getattr(state, "session_id", ""),
+        target=getattr(getattr(state, "scope", None), "target", ""),
+    )
+    return (
+        f"OOB token dibuat: `{label}`\n"
+        f"url: {entry['url']}\n"
+        f"token: {entry['token']}\n"
+        f"expires: {entry['expires_at']}\n"
+        "Kirim URL ini ke vektor yang diuji (mis. parameter url=, XML entity, template), "
+        "lalu panggil oob_check(token=...) untuk melihat hit."
+    )
+
+
+def _dispatch_oob_check(ctx: SupervisorContext, args: dict[str, Any]) -> str:
+    """Periksa hit callback; bila ada, simpan sebagai transcript [TX:...]."""
+    from wth_ai.oob import format_hits, get_oob_service
+
+    svc = get_oob_service()
+    token = str(args.get("token", "")).strip()
+    if not token:
+        return "oob_check: argumen 'token' wajib (dari oob_create)."
+    entry = svc.store.get_token(token) or {"token": token, "label": ""}
+    hits = svc.store.hits(token)
+    if not hits:
+        return (
+            f"Belum ada hit untuk `{entry.get('label') or token[:10]}…`. "
+            "Jika target belum dihubungi, tunggu; jika sudah, periksa apakah URL callback persis sama."
+        )
+    tx = svc.record_as_transcript(ctx.terminal.transcripts, token=token, entry=entry, hits=hits)
+    return f"{format_hits(entry, hits)}\n\nbukti tersimpan: [TX:{tx}] — kutip ini sebagai bukti callback (bukan klaim)."
+
+
 def _dispatch_research(ctx: SupervisorContext, args: dict[str, Any]) -> str:
     """Public-information research. No approval gate, deliberately.
 
@@ -167,6 +219,12 @@ def _dispatch(ctx: SupervisorContext, name: str, args: dict[str, Any], *, approv
 
     if name == "computer_use":
         return _dispatch_computer_use(ctx, args, approved=approved)
+
+    if name == "oob_create":
+        return _dispatch_oob_create(ctx, args)
+
+    if name == "oob_check":
+        return _dispatch_oob_check(ctx, args)
 
     if name == "permission_set":
         mode = str(args.get("mode", "ask"))

@@ -220,6 +220,7 @@ def build_slash_router(orch: Any) -> SlashRouter:
         "/tools": _tools,
         "/mcp": _mcp,
         "/browser": orch._browser_probe,
+        "/oob": orch._handle_oob,
         "/scan": _recon,
         "/gateway": lambda a: handle_gateway(orch, a),
         "/cron": lambda a: handle_cron(orch, a),

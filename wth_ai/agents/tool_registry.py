@@ -252,6 +252,46 @@ TOOL_DEFINITIONS: dict[str, dict[str, Any]] = {
             },
         },
     },
+    "oob_create": {
+        "type": "function",
+        "function": {
+            "name": "oob_create",
+            "description": (
+                "Buat token callback OOB (out-of-band) milik engagement ini: URL yang "
+                "HARUS dihubungi server target bila uji blind SSRF/XXE/RCE/blind XSS "
+                "berhasil. Listener default hanya loopback (127.0.0.1); host/port "
+                "tidak bisa diubah dari argumen tool. Setelah URL dikirim ke vektor "
+                "uji, panggil oob_check untuk melihat hit — hit tercatat sebagai "
+                "bukti, bukan klaim."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "label": {"type": "string", "description": "Penanda singkat, mis. 'ssrf-url-param'."},
+                    "ttl_minutes": {"type": "integer", "description": "Masa hidup token dalam menit (default 60)."},
+                },
+                "required": [],
+            },
+        },
+    },
+    "oob_check": {
+        "type": "function",
+        "function": {
+            "name": "oob_check",
+            "description": (
+                "Periksa apakah token callback OOB sudah dihubungi target. Bila ada "
+                "hit, bukti disimpan sebagai transcript dan bisa dikutip [TX:...]. "
+                "Tanpa hit, jangan klaim apa pun."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "token": {"type": "string", "description": "Token dari oob_create."},
+                },
+                "required": ["token"],
+            },
+        },
+    },
     "run_shell": {
         "type": "function",
         "function": {
@@ -403,8 +443,8 @@ TOOL_DEFINITIONS: dict[str, dict[str, Any]] = {
 
 ACTOR_TOOLS: dict[str, list[str]] = {
     "supervisor": list(TOOL_DEFINITIONS.keys()),
-    "planner": ["query_graph", "http_probe", "store_evidence", "scope_show", "session_status"],
-    "executor": ["query_graph", "http_probe", "run_shell", "store_evidence"],
+    "planner": ["query_graph", "http_probe", "store_evidence", "scope_show", "session_status", "oob_create", "oob_check"],
+    "executor": ["query_graph", "http_probe", "run_shell", "store_evidence", "oob_create", "oob_check"],
     "recon": ["query_graph", "http_probe", "run_shell", "recon_list_tools", "recon_run_tool", "recon_finalize"],
 }
 
