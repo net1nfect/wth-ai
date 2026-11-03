@@ -316,7 +316,12 @@ def build_command_menu(*, predicate: Callable[[Any], bool] | None = None) -> lis
     """Level 0 = categories, level 1 = commands, level 2 = subcommands."""
     from collections import OrderedDict
 
-    from wth_ai.platform.registry import get_platform_registry
+    from wth_ai.platform.registry import (
+        CATEGORY_DESCRIPTIONS,
+        CATEGORY_ORDER,
+        START_HERE,
+        get_platform_registry,
+    )
 
     registry = get_platform_registry()
     commands = [c for c in getattr(registry, "commands", []) if predicate is None or predicate(c)]
@@ -341,10 +346,27 @@ def build_command_menu(*, predicate: Callable[[Any], bool] | None = None) -> lis
         )
         by_category.setdefault(cmd.category or "lain", []).append(item)
 
-    return [
-        MenuItem(label=category, description=f"{len(items)} command", children=items)
-        for category, items in by_category.items()
-    ]
+    ordered = [c for c in CATEGORY_ORDER if c in by_category] + \
+        [c for c in by_category if c not in CATEGORY_ORDER]
+    levels = []
+    for category in ordered:
+        desc = CATEGORY_DESCRIPTIONS.get(category, "")
+        count = f"{len(by_category[category])} command"
+        levels.append(
+            MenuItem(
+                label=registry.category_title(category),
+                description=f"{desc} · {count}" if desc else count,
+                children=by_category[category],
+            )
+        )
+    # Level pertama juga menawarkan alur mulai yang disarankan -- supaya "/" tidak
+    # jadi daftar 12 kategori tanpa titik masuk yang jelas.
+    start = MenuItem(
+        label="▶ mulai di sini",
+        description="alur disarankan untuk engagement baru",
+        children=[MenuItem(label=cmd, description=desc, action=cmd) for cmd, desc in START_HERE],
+    )
+    return [start] + levels
 
 
 # --------------------------------------------------------------------------- #

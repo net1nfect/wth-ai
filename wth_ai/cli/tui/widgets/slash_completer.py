@@ -102,9 +102,10 @@ class SlashCompleter(Completer):
         # Subsequence fallback: `/rcn` should still find `/recon`. Cheap, and it
         # is what "fuzzy" meant here in the first place.
         if not names and partial:
-            needle = partial.lstrip("/").lower()
-            names = [c.name for c in commands
-                     if _subsequence(needle, c.name.lstrip("/").lower())]
+            # Jalur saran yang SAMA dengan pesan unknown-command (`/rcon` ->
+            # `/recon`), supaya menu completion dan pesan error menawarkan hal
+            # yang konsisten.
+            names = registry.suggestions(partial, limit=8)
 
         # Keep registry order, drop anything that cannot be described: a menu
         # entry with no description is the thing this module exists to remove.
