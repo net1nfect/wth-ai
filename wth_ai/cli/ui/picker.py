@@ -320,6 +320,12 @@ def build_picker_bindings(state: "ListPickerState", result: dict) -> Any:
         event.app.exit()
 
     # Everything else types into the filter (including backspace).
+    #
+    # CATATAN bug nyata (traceback di terminal operator): cabang `elif on_render ...`
+    # di sini mereferensikan parameter yang hanya ada di `pick_from_list`, bukan di
+    # fungsi binding ini -- akibat ekstraksi yang memindahkan blok tanpa membawa nama
+    # yang dipakainya. Cabang itu memang mati (render dijalankan `invalidate()`), jadi
+    # dihapus, bukan disambungkan.
     @bindings.add("<any>")
     def _type(event):
         char = event.data
@@ -327,8 +333,6 @@ def build_picker_bindings(state: "ListPickerState", result: dict) -> Any:
             state.set_query(state.query[:-1])
         elif char.isprintable():
             state.set_query(state.query + char)
-        elif on_render is not None:
-            on_render(state)
         event.app.invalidate()
 
     return bindings
@@ -367,7 +371,6 @@ def pick_from_list(
     *,
     subtitle: str = "",
     window: int = 12,
-    on_render: Callable[[ListPickerState], Any] | None = None,
     describe: Callable[[str], str] | None = None,
 ) -> str | None:
     """Run the picker. Returns the chosen item, or None when cancelled/unavailable."""
