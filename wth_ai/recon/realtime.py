@@ -29,7 +29,7 @@ def _watch_dir() -> Path:
 
 def _slug(target: str) -> str:
     safe = re.sub(r"[^A-Za-z0-9_.\-]", "_", target)
-    return f"{safe}-{hashlib.sha1(target.encode()).hexdigest()[:8]}"
+    return f"{safe}-{hashlib.sha1(target.encode(), usedforsecurity=False).hexdigest()[:8]}"
 
 
 def parse_interval(text: str) -> int:

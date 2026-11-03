@@ -1,0 +1,37 @@
+# Build context hygiene (INFRA-01). Tanpa ini, `COPY . /app` membawa
+# seluruh riwayat git, data engagement, log, serta hasil recon ke dalam image.
+.git/
+.github/
+.hermes/
+venv/
+.venv/
+__pycache__/
+**/__pycache__/
+*.pyc
+.pytest_cache/
+.mypy_cache/
+*.egg-info/
+dist/
+build/
+
+# Data runtime / hasil (bukan bagian image; hidup di $WTH_HOME volume)
+data/engagements/
+data/cli_history
+data/sessions/*.json
+logs/
+reports/
+wth-results/
+
+# Secret & config lokal
+.env
+.env.local
+*.key
+vault.enc
+
+# Editor / OS
+.cursor/
+.DS_Store
+
+# Artefak dokumen berat (tidak dibutuhkan runtime image)
+*.bak
+*.tmp

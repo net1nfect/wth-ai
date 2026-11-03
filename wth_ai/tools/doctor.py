@@ -222,7 +222,7 @@ class ToolDoctor:
     url = base.rstrip("/") + "/models"
     try:
       req = urllib.request.Request(url, method="GET")  # noqa: S310
-      with urllib.request.urlopen(req, timeout=3) as resp:  # noqa: S310
+      with urllib.request.urlopen(req, timeout=3) as resp:  # noqa: S310  # nosec B310
         ok = 200 <= resp.status < 300
       return {"ok": ok, "base_url": base, "reachable": ok}
     except Exception as exc:  # noqa: BLE001

@@ -39,7 +39,7 @@ DEFAULT_WEIGHTS: dict[str, float] = {
 SIBLING_OBJECT_IDS = ("2", "0", "admin", "1")
 
 #: Varian host untuk membuktikan SSRF tidak hanya bekerja lewat satu bentuk penulisan.
-SSRF_HOST_VARIANTS = ("localhost", "[::1]", "0.0.0.0")
+SSRF_HOST_VARIANTS = ("localhost", "[::1]", "0.0.0.0")  # nosec B104
 
 OBJ_PARAM_HINTS = ("id", "user", "user_id", "account", "account_id", "uuid", "order", "doc", "file")
 URL_PARAM_HINTS = ("url", "uri", "link", "next", "redirect", "dest", "target", "callback", "image", "fetch")

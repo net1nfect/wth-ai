@@ -11,7 +11,7 @@ setup(
     install_requires=[
         "click>=8.1",
         "rich>=13.6",
-        "python-dotenv>=1.0",
+        "python-dotenv>=1.2.2",
         "prompt-toolkit>=3.0",
         "requests>=2.31",
         "pyyaml>=6.0",

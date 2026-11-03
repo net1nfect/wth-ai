@@ -68,7 +68,7 @@ class ResponseDiffBrain:
                 r = self.session.get(url, timeout=self.timeout, allow_redirects=True)
                 body = r.text[:8000]
                 status = r.status_code
-            return status, body, hashlib.md5(body.encode()).hexdigest()
+            return status, body, hashlib.md5(body.encode(), usedforsecurity=False).hexdigest()
         except requests.RequestException:
             return 0, "", ""
 

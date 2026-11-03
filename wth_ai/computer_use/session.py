@@ -24,6 +24,7 @@ from __future__ import annotations
 import os
 import shutil
 import subprocess
+import tempfile
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -259,7 +260,7 @@ class ComputerUse:
         candidates = self._screenshot_candidates()
         if not candidates:
             return ActionResult("screenshot", False, detail="tidak ada backend screenshot terpasang")
-        target = Path(path) if path else Path(os.environ.get("TMPDIR", "/tmp")) / f"cu-{int(time.time()*1000)}.png"
+        target = Path(path) if path else Path(tempfile.gettempdir()) / f"cu-{int(time.time()*1000)}.png"
         target.parent.mkdir(parents=True, exist_ok=True)
 
         attempts: list[str] = []

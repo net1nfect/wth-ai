@@ -41,7 +41,7 @@ _CATEGORY_PRIORITY: tuple[str, ...] = (
     "container", "mobile", "core",
 )
 
-_PRIVATE_HINTS = ("localhost", "127.0.0.1", "0.0.0.0", "::1")
+_PRIVATE_HINTS = ("localhost", "127.0.0.1", "0.0.0.0", "::1")  # nosec B104
 
 
 def detect_target_type(target: str) -> str:
