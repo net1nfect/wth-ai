@@ -126,7 +126,7 @@ Mode operasi: sesi interaktif (CLI/TUI), Bot (remote), Autopilot/Cron (berkala b
 
 ## 6. Roadmap fase
 
-- **Phase 0 — Bersihkan meja (1 minggu).** Commit 53 file kerja P0/P1; `.gitignore` data/logs; fix 2 test non-hermetis; suite hijau (target 1.319); audit `prompts/*.txt` (acceptance WU-011); `.dockerignore` + CI scanning (WU-209); rapikan branch.
+- **Phase 0 — Bersihkan meja (1 minggu).** [SEBAGIAN SELESAI 2026-11-04: backlog P0/P1 di-commit sebagai 4 commit tematik (`2c35d7f`..`cf2c740`) + `3065025`; `.gitignore` + untrack 143 file runtime; 2 test non-hermetis diperbaiki via parameter `sources=` + 2 test kontrak baru — suite **1321 passed / 0 failed**. Sisa: audit `prompts/*.txt` + `executor_system_v3`; `.dockerignore` + CI scanning (WU-209).]
 - **Phase 1 — Eksekusi nyata (2–3 minggu).** F1 → F2, F3, F4, F6, F7 (+ F19 sebagian). Gate demo: satu run lab end-to-end: browser login (F4) → capture proxy (F3) → blind SSRF terbukti via callback (F2).
 - **Phase 2 — Mesin serangan (3–4 minggu).** F5, F8, F9, F10. Gate: chain multi-hop tereksekusi ber-bukti; FP-rate turun terukur di benchmark mini; exploit runtime sandboxed + killable.
 - **Phase 3 — Skala & ukur (3–4 minggu).** F11, F12, F13, F14. Gate: benchmark v1 publik-internal; budget hard-stop; worker paralel tanpa cross-talk.
@@ -167,9 +167,9 @@ Klaim "lebih canggih dari Strix" hanya boleh keluar SETELAH angka ini ada (dan o
 
 ## 10. Checklist minggu ini
 
-1. [ ] `git add -A` + commit "P0/P1 security remediation + docs" (pecah 2–3 commit tematik bila perlu); push.
-2. [ ] `.gitignore` untuk `data/engagements/*`, `logs/*`, `data/cli_history` (atau relokasi ke `$WTH_HOME`).
-3. [ ] Fix isolasi `SkillRegistry` → suite hijau (1.319).
+1. [x] Commit backlog P0/P1 — 4 commit tematik (`2c35d7f`, `01a8574`, `b405c11`, `cf2c740`) + push origin agentic.
+2. [x] `.gitignore` + untrack 143 file runtime (file tetap di disk).
+3. [x] Isolasi `SkillRegistry` — parameter `sources=` eksplisit + `tests/test_skill_registry_sources.py`; suite **1321 passed / 0 failed** (`fix(skills)`).
 4. [ ] Audit `prompts/*.txt` vs tool registry sekarang; tulis `executor_system_v3` (doktrin adaptif + destruktif berbatas + callback).
 5. [ ] Tentukan daftar target benchmark v1 (F12) dan simpan sebagai config.
 6. [ ] Mulai implementasi F2 (Callback Center) — nilai diferensiasi tertinggi, dependensi paling kecil, dan langsung menutup kelemahan callbacks yang dimiliki Strix.
