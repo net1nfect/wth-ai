@@ -24,6 +24,10 @@ READ_ONLY_TOOLS = {
     # -- they were previously granted in NO mode except UNRESTRICTED's wildcard,
     # which forced operators out of read-only recon just to resolve a hostname.
     "dig", "host", "nslookup", "getent", "whois", "openssl",
+    # Computer-use OBSERVATION. Reading the screen / window list / geometry
+    # changes nothing, so it belongs here rather than behind an approval prompt.
+    "scrot", "grim", "spectacle", "gnome-screenshot", "import",
+    "wmctrl", "xrandr", "xclip",
 }
 
 STANDARD_TOOLS = READ_ONLY_TOOLS | {
@@ -32,6 +36,10 @@ STANDARD_TOOLS = READ_ONLY_TOOLS | {
     # Active-but-light scanners, same tier as nmap/nuclei above. Previously
     # absent from every set, so they were unreachable outside UNRESTRICTED.
     "nikto", "naabu", "wpscan", "whatweb-aggressive",
+    # Computer-use INPUT INJECTION: clicking and typing act on whatever is
+    # focused on the operator's real desktop, so they start at the same tier as
+    # other active actions and never lower.
+    "xdotool", "ydotool",
 }
 
 ELEVATED_TOOLS = STANDARD_TOOLS | {

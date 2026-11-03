@@ -225,6 +225,118 @@ def handler_custom(job: Any, ctx: Any) -> dict[str, Any]:
     }
 
 
+def handler_autopilot(job: Any, ctx: Any) -> dict[str, Any]:
+    """Autopilot berkala: langkah uji BERBATAS, disusun lalu dijalankan lalu dipelajari.
+
+    Gerbang yang dijaga:
+    * `authorized` wajib eksplisit (fail-closed, sama seperti handler_recon);
+    * opt-in destruktif DIBACA dari scope tersimpan saat job berjalan -- cron tidak
+      pernah menjadi jalan pintas untuk membukanya;
+    * metode pengubah data memakai aktor `executor` (butuh STANDARD_TESTING), metode
+      baca memakai aktor `recon` -- sehingga sesi read-only tetap read-only.
+    """
+    from wth_ai.hunt.autopilot import format_report, run_autopilot
+
+    target = job.target or ""
+    if not target:
+        return {"type": "autopilot", "status": "failed", "error": "no target"}
+    meta = getattr(job, "metadata", {}) or {}
+    if not bool(meta.get("authorized", False)):
+        return {"type": "autopilot", "status": "blocked",
+                "reason": "authorized flag required (fail-closed)"}
+    if ctx.should_stop():
+        return {"type": "autopilot", "status": "stopped"}
+
+    ctx.progress(10, 100, "autopilot: menyusun langkah")
+    try:
+        from wth_ai.config import WTHConfig
+        from wth_ai.models import SessionState
+        from wth_ai.permission_manager import PermissionManager
+        from wth_ai.scope_manager import ScopeManager
+        from wth_ai.terminal.bridge import AgentTerminalBridge
+    except Exception as exc:  # noqa: BLE001
+        return {"type": "autopilot", "status": "failed", "error": f"import: {exc}"}
+
+    config = WTHConfig.load()
+    session_id = meta.get("session_id") or f"autopilot-{job.job_id}"
+
+    # PermissionManager menerima MODE, bukan config. Versi pertama gua mengirim
+    # `PermissionManager(config)`, sehingga `mode` berisi objek config dan
+    # `mode_sufficient()` melempar "TypeError: unhashable type: 'WTHConfig'" -- SETIAP
+    # probe gagal dan hasilnya tampil sebagai status kosong (terukur di UAT CLI:
+    # langkah autopilot "dijalankan" tapi nol permintaan nyata sampai ke target).
+    # Mode diambil dari sesi tersimpan supaya job berjalan dengan izin yang sama
+    # seperti yang operator pakai, bukan default.
+    permission = PermissionManager()
+    saved_scope = None
+    try:
+        from wth_ai.session_store import SessionStore
+
+        saved_scope = SessionStore(config).load_latest()
+    except Exception:  # noqa: BLE001
+        saved_scope = None
+    if saved_scope is not None:
+        mode_value = getattr(saved_scope, "permission_mode", None)
+        if mode_value is not None:
+            try:
+                permission.set_mode(getattr(mode_value, "value", mode_value))
+            except Exception:  # noqa: BLE001
+                pass
+
+    # Scope bridge diisi SEBELUM bridge dibuat (bukan dimutasi sesudahnya): bridge
+    # memakai ScopeManager sendiri, dan tanpa target/in-scope di sana setiap probe
+    # berhenti di gate scope dengan status kosong.
+    scope_manager = ScopeManager()
+    scope_manager.set_scope(target=target, authorized=True, in_scope=[target])
+    bridge = AgentTerminalBridge(config, permission, scope_manager, session_id)
+
+    state = SessionState()
+    state.scope.target = target
+    state.scope.in_scope = [target]
+    state.scope.authorized = True
+    # Opt-in destruktif dari scope yang TERSIMPAN (hasil `/scope set destructive=yes`),
+    # bukan dari metadata job -- supaya cron tidak bisa membukanya sendiri.
+    try:
+        from wth_ai.session_store import SessionStore
+
+        latest = SessionStore(config).load_latest()
+        if latest is not None and getattr(latest, "scope", None) is not None:
+            state.scope.destructive_allowed = bool(
+                getattr(latest.scope, "destructive_allowed", False)
+            )
+    except Exception:  # noqa: BLE001
+        state.scope.destructive_allowed = False
+
+    def _probe(probe: dict[str, Any]) -> Any:
+        method = str(probe.get("method", "GET")).upper()
+        actor = "recon" if method in {"GET", "HEAD", "OPTIONS"} else "executor"
+        return bridge.dispatch_tool("http_probe", probe, actor=actor, approved=False)
+
+    steps = int(meta.get("steps", 6) or 6)
+    cycles = int(meta.get("cycles", 2) or 2)
+    ctx.progress(30, 100, "autopilot: menjalankan langkah berbatas")
+    report = run_autopilot(
+        target=target, run_probe=_probe, state=state,
+        max_cycles=max(1, min(6, cycles)), max_steps_per_cycle=max(1, min(20, steps)),
+        destructive_allowed=state.scope.destructive_allowed,
+    )
+    ctx.progress(90, 100, "autopilot: menyusun usulan berikutnya")
+    from wth_ai.hunt.proactive import propose_next_tests
+
+    proposals = propose_next_tests(findings=[], request_pairs=state.metadata.get("request_pairs", []))
+    ctx.progress(100, 100, "autopilot selesai")
+    ctx.log(f"autopilot: {report.ran} langkah dijalankan, {report.changed} perubahan")
+    return {
+        "type": "autopilot",
+        "status": "completed",
+        "target": target,
+        "report": report.to_dict(),
+        "summary": format_report(report),
+        "next_tests": [p.to_dict() for p in proposals],
+        "destructive_allowed": state.scope.destructive_allowed,
+    }
+
+
 def default_handlers() -> dict[str, Handler]:
     return {
         "recon": handler_recon,
@@ -232,4 +344,5 @@ def default_handlers() -> dict[str, Handler]:
         "report": handler_report,
         "provider_test": handler_provider_test,
         "custom": handler_custom,
+        "autopilot": handler_autopilot,
     }

@@ -31,21 +31,86 @@ TOOL_DEFINITIONS: dict[str, dict[str, Any]] = {
             "parameters": {"type": "object", "properties": {}},
         },
     },
+    "research": {
+        "type": "function",
+        "function": {
+            "name": "research",
+            "description": (
+                "Cari/pelajari informasi PUBLIK tentang teknologi atau kerentanan yang kamu temukan "
+                "di target (CVE, dokumentasi vendor, perilaku framework, write-up publik). Pakai ini "
+                "saat kamu belum tahu sesuatu tentang stack target. Hasilnya SELALU berstatus "
+                "KANDIDAT: informasi dari internet tidak pernah menjadi bukti tentang target ini, jadi "
+                "jangan pernah melaporkannya sebagai temuan tanpa verifikasi langsung."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "action": {
+                        "type": "string",
+                        "enum": ["search", "fetch", "browser", "notes"],
+                        "description": "search=kata kunci; fetch=ambil 1 URL; browser=URL butuh JS; notes=catatan sesi ini",
+                    },
+                    "query": {"type": "string", "description": "kata kunci untuk action=search"},
+                    "url": {"type": "string", "description": "URL absolut untuk action=fetch/browser"},
+                    "limit": {"type": "integer", "description": "jumlah hasil maksimum (default 8)"},
+                },
+                "required": ["action"],
+            },
+        },
+    },
+
+    "computer_use": {
+        "type": "function",
+        "function": {
+            "name": "computer_use",
+            "description": (
+                "Drive the operator's real desktop: observe (screenshot/windows/screen_size/"
+                "cursor) or act (click/move/type/key/focus). Observation is read-only; input "
+                "injection needs at least 'standard' permission and will not run in read-only/"
+                "plan mode. Use it to look at a browser, an app, or to confirm something "
+                "rendered -- not as a substitute for HTTP requests to a target."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "action": {
+                        "type": "string",
+                        "enum": [
+                            "detect", "screenshot", "windows", "screen_size", "cursor",
+                            "click", "move", "type", "key", "focus",
+                        ],
+                    },
+                    "x": {"type": "integer", "description": "X koordinat (click/move)"},
+                    "y": {"type": "integer", "description": "Y koordinat (click/move)"},
+                    "button": {"type": "integer", "description": "tombol mouse, default 1"},
+                    "text": {"type": "string", "description": "teks untuk action=type"},
+                    "combo": {"type": "string", "description": "key combo untuk action=key, mis. ctrl+l"},
+                    "window": {"type": "string", "description": "judul/id window untuk action=focus"},
+                    "path": {"type": "string", "description": "tujuan file PNG untuk action=screenshot"},
+                },
+                "required": ["action"],
+            },
+        },
+    },
+
     "permission_set": {
         "type": "function",
         "function": {
             "name": "permission_set",
-            "description": "Set permission mode for testing",
+            "description": (
+                "Set the permission preset. 'plan'/'read-only' = no changes; 'ask' = safe "
+                "default with confirmation; 'auto' = no prompts, bounded capability; 'yolo' = "
+                "no prompts + max capability (the target must still be authorized)."
+            ),
             "parameters": {
                 "type": "object",
                 "properties": {
                     "mode": {
                         "type": "string",
-                        # Real PermissionMode values. The previous enum listed
-                        # "read_only_recon"/"standard_testing"/"elevated_testing",
-                        # none of which `PermissionMode(value)` accepts -- so the
-                        # model could only ever set full_lab.
-                        "enum": ["read_only", "standard", "elevated", "full_lab", "unrestricted"],
+                        # Preset names are the CLI-facing vocabulary ("like any AI CLI").
+                        # The raw PermissionMode values still resolve through
+                        # `permission_presets.ALIASES`, so nothing that worked before breaks.
+                        "enum": ["plan", "read-only", "ask", "auto", "yolo"],
                     },
                 },
                 "required": ["mode"],
@@ -121,6 +186,24 @@ TOOL_DEFINITIONS: dict[str, dict[str, Any]] = {
                     "method": {"type": "string", "enum": ["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE"]},
                     "url": {"type": "string"},
                     "purpose": {"type": "string"},
+                    "body": {
+                        "type": "string",
+                        "description": (
+                            "Badan permintaan (form/JSON/teks). Skema lama TIDAK "
+                            "mencantumkan ini, jadi model tidak punya cara mengirim "
+                            "body padahal handler-nya menerima -- penghalang nyata "
+                            "untuk uji business logic."
+                        ),
+                    },
+                    "compare_to": {
+                        "type": "string",
+                        "description": (
+                            "TX id request sebelumnya. Hasilnya menyertakan DIFF "
+                            "(status/ukuran/isi/sifat error) supaya perubahan satu "
+                            "variabel bisa dibaca langsung -- ini jalur uji adaptif: "
+                            "ubah satu hal, lihat apa yang berubah di server."
+                        ),
+                    },
                     "headers": {
                         "type": "object",
                         "description": (
@@ -134,6 +217,38 @@ TOOL_DEFINITIONS: dict[str, dict[str, Any]] = {
                     },
                 },
                 "required": ["url"],
+            },
+        },
+    },
+    "propose_payload": {
+        "type": "function",
+        "function": {
+            "name": "propose_payload",
+            "description": (
+                "Ajukan payload BARU yang kamu susun sendiri (di luar katalog) untuk "
+                "situasi spesifik di engagement ini. Payload divalidasi: wajib memuat "
+                "proves + probe(url) dan cleanup bila destruktif. Yang berdampak massal "
+                "(blast_radius 'mass') tetap DISIMPAN sebagai dokumentasi tetapi TIDAK "
+                "pernah dijalankan mesin. Payload destruktif hanya jalan bila engagement "
+                "membuka opt-in; tanpa itu ia tersimpan dan tidak dieksekusi."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "vuln_class": {"type": "string"},
+                    "title": {"type": "string"},
+                    "proves": {"type": "string", "description": "Temuan apa yang dibuktikan."},
+                    "probe": {
+                        "type": "object",
+                        "description": "Argumen http_probe: method, url, body, headers.",
+                    },
+                    "blast_radius": {"type": "string", "enum": ["self", "single-object", "mass"]},
+                    "reversible": {"type": "boolean"},
+                    "cleanup": {"type": "string", "description": "Wajib bila mengubah/menghapus data."},
+                    "requires_destructive": {"type": "boolean"},
+                    "run_now": {"type": "boolean", "description": "Jalankan bila batas mengizinkan."},
+                },
+                "required": ["vuln_class", "title", "proves", "probe"],
             },
         },
     },

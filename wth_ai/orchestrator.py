@@ -101,7 +101,7 @@ class WTHOrchestrator:
         self.planner = PlannerAgent(self.config, self.client, self.skill_router, self.tool_registry)
         self.verifier = VerifierAgent(self.config, self.client)
         self.reporter = ReportBuilderAgent(self.config, self.client)
-        self.chat = ChatAgent(self.config, self.client, self.skills)
+        self.chat = ChatAgent(self.config, self.client, self.skills, context_builder=self._chat_context_builder)
         self.supervisor = SupervisorAgent(self.config, self.client)
         self.browser = BrowserController(headless=self.config.browser.headless)
         self.asset_graph = AssetGraph(self.state.session_id)
@@ -259,6 +259,189 @@ class WTHOrchestrator:
         self._persist()
         return self.state.session_id
 
+    def _chat_context_builder(self):
+        """ContextBuilder for ChatAgent, resolved lazily on every call.
+
+        `ChatAgent` is constructed BEFORE `asset_graph`/`learning` wiring in
+        `__init__`, so passing a ready-made builder would hand chat a
+        half-built graph. Building on demand also means a `new_session()`
+        swap is picked up without rewiring the agent.
+        """
+        from wth_ai.context.builder import ContextBuilder
+
+        return ContextBuilder(
+            action_memory=getattr(self, "action_memory", None),
+            asset_graph=getattr(self, "asset_graph", None),
+            learning=getattr(self, "learning", None),
+            skill_router=getattr(self, "skill_router", None),
+            jobs=self._jobs_recall_block,
+        )
+
+    def _jobs_recall_block(self, target: str) -> str:
+        """Recent job activity for `target`, for injection into agent context.
+
+        Read from the job store, so a brand-new session still knows that recon
+        already ran against this host in a previous one.
+        """
+        from wth_ai.jobs.recall import recall_block
+
+        return recall_block(limit=5, target=target)
+
+    def _learn_from_autopilot_step(self, step: Any) -> None:
+        """Catat teknik dari langkah autopilot yang BERBUKTI (punya TX)."""
+        if not getattr(step, "evidence_ref", ""):
+            return
+        try:
+            from wth_ai.skills.autowrite import SkillNote, record_skill
+
+            payload_class = ""
+            payload_id = str(step.probe.get("payload_id") or "")
+            if payload_id:
+                from wth_ai.hunt.payloads import get_payload
+
+                payload = get_payload(payload_id)
+                payload_class = getattr(payload, "vuln_class", "") if payload else ""
+            record_skill(SkillNote(
+                technique=str(step.title)[:80],
+                vuln_class=payload_class or "adaptive",
+                tech_stack=str(self.state.metadata.get("tech_profile", "")),
+                evidence=[f"[TX:{step.evidence_ref}]"],
+                pitfalls=[str(step.note)] if step.note else [],
+            ))
+        except Exception:  # noqa: BLE001
+            pass
+
+    def _handle_autopilot(self, args: list[str]) -> str:
+        """`/autopilot [langkah]` — jalankan langkah uji berbatas secara otonom."""
+        from wth_ai.hunt.autopilot import format_report, run_autopilot
+
+        target = self.state.scope.target
+        if not target:
+            return "Set target dulu: `/target <host>` (autopilot tidak menebak target)."
+        steps = int(args[0]) if args and args[0].isdigit() else 6
+        bridge = getattr(self, "terminal", None)
+        if bridge is None:
+            return "Bridge terminal tidak tersedia; jalankan lewat sesi interaktif."
+
+        def _probe(probe: dict[str, Any]) -> Any:
+            # Scope + denylist + rate limit + audit tetap berlaku; `approved=False`
+            # supaya gate destruktif yang memutuskan, bukan autopilot.
+            return bridge.dispatch_tool("http_probe", probe, actor="supervisor", approved=False)
+
+        report = run_autopilot(
+            target=target, run_probe=_probe, state=self.state,
+            max_cycles=2, max_steps_per_cycle=steps,
+            destructive_allowed=bool(getattr(self.state.scope, "destructive_allowed", False)),
+            learn=self._learn_from_autopilot_step,
+        )
+        self._persist()
+        return format_report(report)
+
+    def _handle_payloads(self, args: list[str]) -> str:
+        """`/payloads [kelas] [--destructive]` — katalog payload berbatas."""
+        from wth_ai.hunt.payloads import filter_payloads, format_payloads, get_payload
+
+        if args and args[0] == "gen":
+            goal = " ".join(args[2:]) if len(args) > 2 else "temukan bug pada alur ini"
+            vuln_class = args[1] if len(args) > 1 else "adaptive"
+            from wth_ai.hunt.generator import format_generation, generate_with_llm, save_generated
+
+            router = getattr(self, "client", None)
+            if router is None:
+                return "Router LLM tidak tersedia."
+            result = generate_with_llm(router, vuln_class=vuln_class, goal=goal,
+                                       tech_stack=str(self.state.metadata.get("tech_profile", "")))
+            if result.accepted:
+                path = save_generated(result.accepted)
+                result.saved_path = str(path) if path else ""
+            return format_generation(result)
+
+        if args and args[0] not in {"list", "semua"}:
+            payload = get_payload(args[0])
+            if payload is None:
+                return f"`{args[0]}` tidak ada di katalog. Pakai `/payloads` untuk melihat daftar."
+            lines = [
+                f"## `{payload.id}` — {payload.title}",
+                f"kelas: {payload.vuln_class} · blast: {payload.blast_radius} · "
+                f"reversibel: {'ya' if payload.reversible else 'tidak'}",
+                f"membuktikan: {payload.proves}",
+                f"probe: {payload.probe.get('method', 'GET')} {payload.probe.get('url', '')}",
+                f"pemulihan: {payload.cleanup or '(tidak ada perubahan data)'}",
+            ]
+            if payload.bounded_alternative:
+                lines.append(f"padanan berbatas: {payload.bounded_alternative}")
+            return "\n".join(lines)
+
+        destructive_allowed = bool(getattr(self.state.scope, "destructive_allowed", False))
+        items = filter_payloads(
+            None,
+            max_blast="single-object" if not destructive_allowed else "single-object",
+            include_destructive=destructive_allowed,
+        )
+        header = (
+            f"mode destruktif: {'AKTIF (opt-in)' if destructive_allowed else 'TERTUTUP'}"
+            " — `/scope set destructive=yes` untuk membukanya"
+        )
+        return header + "\n\n" + format_payloads(items)
+
+    def _handle_next(self, args: list[str]) -> str:
+        """`/next` — langkah uji berikutnya yang disusun dari temuan + sinyal respons."""
+        from wth_ai.hunt.proactive import format_next_tests, propose_next_tests
+
+        stored = self.state.metadata.get("next_tests") or []
+        if stored and not args:
+            class _Stored:
+                def __init__(self, data: dict) -> None:
+                    self.__dict__.update(data)
+                    self.priority = float(data.get("priority", 1.0))
+                    self.risk = str(data.get("risk", "low"))
+                    self.title = str(data.get("title", ""))
+                    self.rationale = str(data.get("rationale", ""))
+                    self.probe = data.get("probe", {})
+
+            return format_next_tests([_Stored(item) for item in stored])
+        pairs = self.state.metadata.get("request_pairs", [])
+        findings = []
+        try:
+            findings = [f.to_dict() if hasattr(f, "to_dict") else dict(f) for f in self.findings_db.list_findings()]
+        except Exception:  # noqa: BLE001
+            pass
+        return format_next_tests(propose_next_tests(findings=findings, request_pairs=pairs))
+
+    def _handle_eval_act(self, args: list[str]) -> str:
+        """`/eval act` — jalankan aksi self-improvement atas hasil pengukuran."""
+        from wth_ai.eval.act import act_on_report, format_actions
+
+        learning = getattr(self, "learning", None)
+        findings_db = getattr(self, "findings_db", None)
+        actions = act_on_report(None, learning=learning, findings_db=findings_db)
+        return format_actions(actions)
+
+    def _handle_usage(self, args: list[str]) -> str:
+        """`/usage` — token & biaya yang tercatat di mesin ini."""
+        from wth_ai.llm.usage import get_ledger
+
+        return get_ledger().format_summary()
+
+    def _handle_eval(self, args: list[str]) -> str:
+        """`/eval` — jalankan harness pengukuran self-improvement (offline).
+
+        Reports honestly when there is nothing to measure: an empty learning
+        store means "self-improvement" is an aspiration, not a demonstrated fact.
+        """
+        from wth_ai.eval import compare, format_report, load_latest, run
+
+        report, path = run()
+        previous = load_latest(exclude=path.name)
+        return format_report(report, comparison=compare(report, previous)) + f"\n\nLaporan: {path}"
+
+    def _handle_jobs(self, args: list[str]) -> str:
+        """`/jobs [target]` — riwayat job dari job store (bukan asset graph sesi)."""
+        from wth_ai.jobs.recall import agent_report, recent_jobs
+
+        target = " ".join(args).strip()
+        return agent_report(recent_jobs(limit=10, target=target))
+
     def _rewire_session_services(self) -> None:
         """Point every long-lived service at the CURRENT session's objects.
 
@@ -352,9 +535,15 @@ class WTHOrchestrator:
                 bus.emit("llm_start", role=role, provider=provider, model=model, meta=meta)
 
         def on_llm_tick(role: str, elapsed_s: int) -> None:
-            if trace and use_trace:
+            # Coarse interval: repainting the live panel every second pins the
+            # terminal viewport to the bottom, so a long recon could not be scrolled
+            # while it ran. `ui.live_refresh_seconds` (default 15) is the knob.
+            interval = getattr(getattr(self.config, "ui", None), "live_refresh_seconds", 15)
+            from wth_ai.cli.ui.tool_trace import should_update_elapsed
+
+            if trace and use_trace and should_update_elapsed(elapsed_s, interval):
                 trace.set_llm(f"llm {role} · waiting {elapsed_s}s…")
-            if stream and use_stream:
+            if stream and use_stream and should_update_elapsed(elapsed_s, interval):
                 stream.on_llm_tick(role, elapsed_s)
             if bus and verbose:
                 bus.emit("llm_tick", role=role, elapsed_s=elapsed_s)
@@ -781,6 +970,16 @@ class WTHOrchestrator:
                     updates.update({k: v for k, v in intent.items() if v is not None})
                 elif key in ("accounts", "test_accounts"):
                     updates["test_accounts"] = [v.strip() for v in val.split(",") if v.strip()]
+                elif key in ("destructive", "destructive_allowed"):
+                    # Opt-in eksplisit per engagement. Nilai teks dinormalkan ke bool,
+                    # kalau tidak `/scope set destructive=yes` tersimpan sebagai string
+                    # dan gate-nya membaca string truthy -- benar, tapi rapuh.
+                    enabled = val.lower() in {"yes", "true", "1", "on"}
+                    updates["destructive_allowed"] = enabled
+                    if enabled:
+                        notes = updates.get("notes") or self.state.scope.notes or ""
+                        if "destructive=on" not in notes:
+                            updates["notes"] = (notes + " destructive=on").strip()
                 else:
                     updates[key] = val
         self.scope_mgr.update_from_dict(updates)
@@ -788,16 +987,174 @@ class WTHOrchestrator:
         self._persist()
         return self.scope_mgr.display()
 
-    def _handle_permission(self, args: list[str]) -> str:
-        if not args:
-            return self.permission_mgr.display()
+    def _propose_next_after_finding(self, finding: Any) -> str:
+        """Proaktif: setelah ada temuan, susun langkah uji berikutnya.
+
+        Hasilnya disimpan di state.metadata supaya bisa dibaca `/next`, dipakai agent,
+        dan diprioritaskan oleh bobot hasil pengukuran (eval/act.py).
+        """
+        from wth_ai.hunt.proactive import format_next_tests, propose_next_tests
+
+        pairs = self.state.metadata.get("request_pairs", []) if hasattr(self, "state") else []
+        findings = []
         try:
-            self.permission_mgr.set_mode(args[0].lower())
-            self.state.permission_mode = self.permission_mgr.mode
-            self._persist()
-            return self.permission_mgr.display()
+            findings = [
+                f.to_dict() if hasattr(f, "to_dict") else dict(f)
+                for f in self.findings_db.list_findings()
+            ]
+        except Exception:  # noqa: BLE001
+            findings = []
+        if not findings:
+            findings = [finding if isinstance(finding, dict) else getattr(finding, "__dict__", {})]
+        proposals = propose_next_tests(findings=findings, request_pairs=pairs)
+        self.state.metadata["next_tests"] = [p.to_dict() for p in proposals]
+        return format_next_tests(proposals)
+
+    def _write_skill_from_finding(self, finding: Any) -> str:
+        """Tulis/perbarui skill otomatis dari temuan yang BERBUKTI. Tanpa bukti: tidak ada file."""
+        from wth_ai.skills.autowrite import note_from_finding, record_skill
+
+        note = note_from_finding(finding)
+        path = record_skill(note)
+        return str(path) if path else ""
+
+    def _record_learning_outcome(self, finding: Any, *, verified: bool) -> None:
+        """Record BOTH outcomes into the learning store.
+
+        Found by the eval harness: `record_from_finding` was called from exactly
+        one place in the codebase -- the `verified` branch. False positives went
+        only to `FindingsDB`, so the learning store could never contain a
+        failure and `success_rate()` was structurally incapable of reflecting
+        one: it was a tally of wins dressed up as a precision. Every downstream
+        consumer (`top_patterns`, `build_planner_context`, `engagement_nudge`)
+        inherited that bias.
+
+        `finding.cwe` is often empty and `title` can legitimately be empty (the
+        FINDING_CANDIDATE parser accepts `- title:` with no value), so the label
+        is derived defensively -- a bare `finding.title.split()[0]` used to
+        raise IndexError here and abort the whole `/verify` run.
+        """
+        tech = self.state.metadata.get("tech_profile", "generic_web")
+        self.learning.record_from_finding(
+            tech,
+            _finding_learning_label(finding),
+            verified=verified,
+            session_id=self.state.session_id,
+        )
+        if not verified:
+            # Temuan gugur tidak menghasilkan langkah lanjutan (tidak ada yang perlu
+            # dikejar) dan TIDAK menulis skill -- pelajaran dari false positive masuk
+            # lewat store learning, tempat backfill eval/act.py juga menulis.
+            return
+        # Proaktif: begitu ada temuan terverifikasi, susun langkah uji berikutnya dan
+        # simpan skill yang lahir dari buktinya. Keduanya dibungkus supaya kegagalan di
+        # sini tidak pernah menggagalkan pelaporan temuan itu sendiri.
+        try:
+            self._propose_next_after_finding(finding)
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            path = self._write_skill_from_finding(finding)
+            if path:
+                self.state.metadata.setdefault("auto_skills", []).append(path)
+        except Exception:  # noqa: BLE001
+            pass
+
+    def _handle_permission(self, args: list[str]) -> str:
+        """`/permission [mode]` — one word sets the whole safety policy.
+
+        Accepts the presets (`plan`, `read-only`, `ask`, `auto`, `yolo`) and the
+        raw `PermissionMode` values via aliases, so muscle memory from the old
+        spelling keeps working.
+        """
+        from wth_ai.permission_presets import apply_preset, describe_all
+
+        if not args:
+            return f"{self.permission_mgr.display()}\n\n{describe_all()}"
+        try:
+            preset = apply_preset(args[0].lower(), permission_mgr=self.permission_mgr)
         except ValueError as exc:
             return f"Error: {exc}"
+        self.state.permission_mode = self.permission_mgr.mode
+        self._persist()
+        return f"✓ Preset aktif: {preset.name} — {preset.summary}"
+
+    def _handle_research(self, args: list[str]) -> str:
+        """`/research <query>` · `/research url <URL>` · `/research notes`.
+
+        Research never needs approval (it reads public pages and touches no target
+        asset) but every result is rendered with its epistemic status attached,
+        so a search hit can never be mistaken for a confirmed finding.
+        """
+        from wth_ai.research import get_researcher
+
+        usage = (
+            "Pakai: /research <kata kunci>  |  /research url <URL>  |  /research browser <URL>  |  /research notes\n"
+            "Status hasil: KANDIDAT — informasi publik bukan bukti tentang target ini."
+        )
+        if not args:
+            return usage
+        researcher = get_researcher(self.state.session_id)
+        head = args[0].lower()
+        if head in ("url", "fetch") and len(args) > 1:
+            return researcher.report(researcher.fetch(args[1]))
+        if head == "browser" and len(args) > 1:
+            return researcher.report(researcher.browser_fetch(args[1]))
+        if head == "notes":
+            return researcher.context_block() or "Belum ada catatan riset di sesi ini."
+        return researcher.report(researcher.search(" ".join(args)))
+
+    def _handle_computer(self, args: list[str]) -> str:
+        """`/computer <action> [arg...]` — drive the real desktop.
+
+        Capability gating matches the agent path, but the APPROVAL dimension is
+        deliberately not re-asked here: an operator typing the command into the
+        REPL has already expressed intent, and prompting again is the kind of
+        friction that gets a guardrail switched off entirely. The agent path
+        (`computer_use` tool) still requires approval in `ask` mode.
+        """
+        from wth_ai.computer_use import INPUT_ACTIONS, ComputerUse
+        from wth_ai.models import PermissionMode
+
+        usage = (
+            "Pakai: /computer <aksi> [arg]\n"
+            "  observasi (read-only): detect · screenshot [path] · windows · screen_size · cursor\n"
+            "  input (butuh minimal preset 'ask'): click X Y · move X Y · type <teks> · key <combo> · focus <window>"
+        )
+        if not args or args[0] in ("help", "-h", "--help"):
+            return usage
+
+        action = args[0].lower()
+        rest = args[1:]
+
+        if action in INPUT_ACTIONS and not self.permission_mgr.mode_sufficient(
+            PermissionMode.STANDARD_TESTING
+        ):
+            return (
+                f"DITOLAK: '{action}' menyuntik input ke desktop. Sekarang mode "
+                f"{self.permission_mgr.mode.value}. Jalankan /permission ask (atau yolo) dulu."
+            )
+
+        kwargs: dict[str, Any] = {}
+        try:
+            if action in ("click", "move"):
+                kwargs = {"x": int(rest[0]), "y": int(rest[1])}
+            elif action == "type":
+                kwargs = {"text": " ".join(rest)}
+            elif action == "key":
+                kwargs = {"combo": rest[0]}
+            elif action == "focus":
+                kwargs = {"window": " ".join(rest)}
+            elif action == "screenshot" and rest:
+                kwargs = {"path": rest[0]}
+        except (IndexError, ValueError):
+            return f"Argumen tidak lengkap untuk '{action}'.\n{usage}"
+
+        result = ComputerUse().run_action(action, **kwargs)
+        note = ""
+        if action in INPUT_ACTIONS:
+            note = "  [input desktop — dijalankan atas perintah langsung operator]"
+        return result.describe() + note
 
     def _handle_approve(self, args: list[str]) -> str:
         if not args:
@@ -890,18 +1247,10 @@ class WTHOrchestrator:
             verdict = v.get("verdict", "needs_more_evidence")
             if verdict == "verified":
                 self.findings_db.update_finding_state(finding.id, FindingState.VERIFIED)
-                tech = self.state.metadata.get("tech_profile", "generic_web")
-                # `finding.cwe` is often empty and `title` can legitimately be
-                # empty (the FINDING_CANDIDATE block parser accepts `- title:`
-                # with no value), so a bare `finding.title.split()[0]` used to
-                # raise IndexError here -- which aborted the whole /verify run,
-                # not just this one finding's learning record.
-                self.learning.record_from_finding(
-                    tech, _finding_learning_label(finding),
-                    verified=True, session_id=self.state.session_id,
-                )
+                self._record_learning_outcome(finding, verified=True)
             elif verdict == "false_positive":
                 self.findings_db.update_finding_state(finding.id, FindingState.FALSE_POSITIVE)
+                self._record_learning_outcome(finding, verified=False)
             outputs.append(self.verifier.format_verification(v))
 
         self._sync_state_from_db()

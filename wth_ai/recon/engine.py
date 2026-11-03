@@ -29,9 +29,11 @@ from wth_ai.recon.adaptive import (
 )
 from wth_ai.recon.diff import diff_results
 from wth_ai.recon.model import ToolRun, ToolSpec
+from wth_ai.recon.http import is_private_literal as _is_private_literal
 from wth_ai.recon.normalizer import ReconNormalizer
 from wth_ai.recon.planner import ReconPlanner, detect_target_type
 from wth_ai.recon.registry import ReconToolRegistry
+from wth_ai.recon.parallel import run_specs_parallel
 from wth_ai.recon.runner import SafeToolRunner, write_runlog_entry
 from wth_ai.recon.tools.builtin import BuiltinContext, run_builtin
 from wth_ai.recon.tools.catalog import BUILTIN_TOOLS
@@ -124,7 +126,11 @@ class ReconEngine:
         )
         host = rhttp.host_of(target)
         base_url = rhttp.normalize_url(target)
-        ctx = BuiltinContext(target=target, host=host, base_url=base_url)
+        ctx = BuiltinContext(target=target, host=host, base_url=base_url,
+                       # Operator yang menamai alamat private/loopback sebagai target
+                       # adalah otorisasinya; guard SSRF tetap menolak alamat internal
+                       # yang tidak disebut. Tanpa ini, recon di lab lokal selalu 0 URL.
+                       allow_private=_is_private_literal(host))
         normalizer = ReconNormalizer()
         tool_runs: list[ToolRun] = []
 
@@ -187,15 +193,49 @@ class ReconEngine:
             log(f"adaptive refine: profile={post_match.profile} rules={post_match.matched_rules}")
         external_specs = filter_specs_by_adaptive(external_specs, post_match)
         external_specs = sort_specs_by_adaptive(external_specs, post_match)
-        for spec in external_specs:
-            if _halt():
-                stopped_early = True
-                log("recon: stop requested -- halting external tools (partial results kept)")
-                break
-            run = runner.run(spec, target=target, ctx=ctx)
+        # External tools are independent processes and were previously executed
+        # one at a time, so wall clock was the SUM of every round trip. They now
+        # run with bounded concurrency and a per-host start pacer; results still
+        # arrive here in plan order, on this thread, so progress/log callbacks and
+        # artifact ordering are unchanged. Builtins above stay sequential because
+        # they share `ctx` as a dependency chain.
+        from wth_ai.recon.parallel import HostRateLimiter, resolve_rps, resolve_workers
+
+        workers = resolve_workers(profile)
+        limiter = HostRateLimiter(resolve_rps(getattr(ctx, "rate_limit_rps", None)))
+        skipped_by_stop = {"n": 0}
+
+        def _on_result(spec: Any, run: ToolRun) -> None:
             _record(run)
             if run.status not in ("skipped",):
                 log(f"external {spec.name}: {run.status} ({len(run.normalized_items)} items)")
+
+        def _on_skip(spec: Any) -> None:
+            skipped_by_stop["n"] += 1
+
+        stopped_early = run_specs_parallel(
+            runner,
+            external_specs,
+            target=target,
+            ctx=ctx,
+            max_workers=workers,
+            limiter=limiter,
+            halt=_halt,
+            on_result=_on_result,
+            on_skip=_on_skip,
+        ) or stopped_early
+        if skipped_by_stop["n"]:
+            log(
+                f"recon: stop requested -- {skipped_by_stop['n']} external tool tidak dijalankan "
+                "(hasil yang sudah terkumpul tetap dipakai)"
+            )
+        if workers > 1:
+            st = limiter.stats()
+            log(
+                f"external: {workers} workers · {st['paced_starts']} tool yang menghadap target "
+                f"dipace {limiter.rps} start/detik, {st['unpaced_starts']} tool pasif/lokal "
+                "tanpa pacing"
+            )
         progress(90, 100, "enrichment done")
 
         # 5) normalize / scoring / diff -----------------------------------

@@ -25,10 +25,20 @@ _KEYLESS_PROVIDERS = frozenset({"custom", "9router"})
 
 
 def _normalize_base_url(provider_name: str, base_url: str | None) -> str:
-    raw = (base_url or DEFAULT_BASE_URLS.get(provider_name, DEFAULT_BASE_URLS["openai"])).rstrip("/")
+    raw = (base_url or "").strip()
+    if not raw:
+        # NEVER silently inherit another company's endpoint. `custom` means "the
+        # operator's own OpenAI-compatible endpoint"; defaulting it to
+        # api.openai.com sent a LAN gateway key to OpenAI -- measured: HTTP 401
+        # from openai.com ("Incorrect API key provided: sk-01088…5c4d") for a key
+        # that belongs to a local gateway. An empty URL now stays empty and the
+        # provider reports itself unavailable with that reason.
+        if provider_name == "custom":
+            return ""
+        raw = DEFAULT_BASE_URLS.get(provider_name, DEFAULT_BASE_URLS["openai"])
     if provider_name == "9router" and not raw.endswith("/v1"):
         raw = f"{raw}/v1"
-    return raw
+    return raw.rstrip("/")
 
 
 def _parse_response_json(text: str) -> dict[str, Any]:
@@ -114,6 +124,11 @@ class OpenAICompatProvider(BaseLLMProvider):
         return self.provider_name
 
     def available(self) -> bool:
+        # A key without an endpoint is not a usable provider: for `custom` the URL
+        # is the thing that says WHERE to talk, and guessing one is what leaked a
+        # gateway key to OpenAI.
+        if self.provider_name == "custom" and not self.base_url:
+            return False
         if self.api_key:
             return True
         # Self-hosted OpenAI-compatible endpoints (a local gateway, a custom
@@ -178,6 +193,7 @@ class OpenAICompatProvider(BaseLLMProvider):
         r = requests.post(url, headers=self._headers(), json=payload, timeout=timeout or self.default_timeout)
         raise_for_status(self.provider_name, model, url, r)
         data = _parse_response_json(r.text)
+        self._record_usage(data)
         return data["choices"][0]["message"]["content"]
 
     def chat_with_tools(
@@ -205,4 +221,5 @@ class OpenAICompatProvider(BaseLLMProvider):
         r = requests.post(url, headers=self._headers(), json=payload, timeout=timeout or self.default_timeout)
         raise_for_status(self.provider_name, model, url, r)
         data = _parse_response_json(r.text)
+        self._record_usage(data)
         return {"message": data["choices"][0]["message"], "model": model, "raw": data}

@@ -9,6 +9,93 @@ from typing import Any
 from wth_ai.agents.supervisor_context import SupervisorContext
 from wth_ai.engagement.mode import auto_approve_enabled
 from wth_ai.models import AssessmentPhase, ExecutorTask, FindingState, PermissionMode, sort_tasks_by_dependencies
+from wth_ai.permission_presets import apply_preset
+
+
+def _dispatch_computer_use(ctx: SupervisorContext, args: dict[str, Any], *, approved: bool) -> str:
+    """Computer use, gated twice: capability tier AND human approval.
+
+    Reading the screen (screenshot/windows/screen_size/cursor) is observation and
+    runs from read-only upward. Injecting input (click/move/type/key/focus) acts
+    on whatever window the operator currently has focused, so it needs at least
+    the `ask` preset's capability AND, unless approvals are disabled
+    (`auto`/`yolo`), an explicit approval -- exactly the tiering the presets
+    describe.
+    """
+    from wth_ai.computer_use import INPUT_ACTIONS, ComputerUse
+
+    action = str(args.get("action", "")).strip().lower()
+    if not action:
+        return "computer_use: argumen 'action' wajib."
+
+    if action in INPUT_ACTIONS:
+        if not ctx.permission_mgr.mode_sufficient(PermissionMode.STANDARD_TESTING):
+            return (
+                f"DITOLAK: '{action}' menyuntik input ke desktop operator dan butuh minimal preset "
+                f"'ask' (permission standard). Sekarang: {ctx.permission_mgr.mode.value}. "
+                f"Pakai /permission ask atau /permission yolo."
+            )
+        if not approved and not auto_approve_enabled(getattr(ctx, "config", None)):
+            return (
+                f"BUTUH APPROVAL: '{action}' akan menggerakkan mouse/keyboard operator. "
+                f"Setujui aksinya, atau jalankan /permission auto (atau yolo) kalau memang mau "
+                f"tanpa konfirmasi."
+            )
+
+    kwargs = {k: v for k, v in args.items() if k != "action"}
+    result = ComputerUse().run_action(action, **kwargs)
+
+    if ctx.action_memory is not None:
+        try:
+            ctx.action_memory.record(f"computer_use:{action}", kwargs, result.describe()[:400])
+        except Exception:  # noqa: BLE001 - memory is best-effort, never fatal
+            pass
+
+    if not result.ok:
+        return f"GAGAL {result.describe()} — jalankan action=detect untuk melihat backend yang terdeteksi."
+    return result.describe()
+
+
+def _dispatch_research(ctx: SupervisorContext, args: dict[str, Any]) -> str:
+    """Public-information research. No approval gate, deliberately.
+
+    Searching the web and reading a public page is read-only and touches no
+    target asset, so prompting for it would be friction with no safety value.
+    What it DOES get is the epistemic tag: every note is a candidate, and the
+    rendered output says so on every call.
+    """
+    from wth_ai.research import get_researcher
+
+    action = str(args.get("action", "")).strip().lower()
+    session_id = getattr(getattr(ctx, "state", None), "session_id", "") or ""
+    researcher = get_researcher(session_id)
+
+    if action == "search":
+        query = str(args.get("query", "")).strip()
+        if not query:
+            return "research: argumen 'query' wajib untuk action=search."
+        limit = int(args.get("limit", 8) or 8)
+        return researcher.report(researcher.search(query, limit=limit))
+
+    if action in ("fetch", "browser"):
+        url = str(args.get("url", "")).strip()
+        if not url:
+            return f"research: argumen 'url' wajib untuk action={action}."
+        note = researcher.fetch(url) if action == "fetch" else researcher.browser_fetch(url)
+        if not note.ok and action == "browser":
+            # A browser failure is not a dead end: say so and fall back.
+            fallback = researcher.fetch(url)
+            return (
+                f"{researcher.report(note)}\n\n"
+                f"— fallback fetch biasa: {researcher.report(fallback)}"
+            )
+        return researcher.report(note)
+
+    if action == "notes":
+        block = researcher.context_block()
+        return block or "Belum ada catatan riset di sesi ini."
+
+    return f"research: aksi tidak dikenal {action!r}. Pilihan: search, fetch, browser, notes."
 
 
 def dispatch_supervisor_tool(
@@ -75,18 +162,23 @@ def _dispatch(ctx: SupervisorContext, name: str, args: dict[str, Any], *, approv
     if name == "scope_show":
         return ctx.scope_mgr.display()
 
+    if name == "research":
+        return _dispatch_research(ctx, args)
+
+    if name == "computer_use":
+        return _dispatch_computer_use(ctx, args, approved=approved)
+
     if name == "permission_set":
-        mode = args.get("mode", "read_only_recon")
+        mode = str(args.get("mode", "ask"))
         try:
-            # `set_mode()` applies PERMISSION_ALIASES (so the legacy spellings
-            # still resolve) and reports the VALID list on failure.
-            # `PermissionMode(mode)` did neither, which is why three of the four
-            # modes the tool schema advertised came back as "Invalid mode".
-            pm = ctx.permission_mgr.set_mode(mode)
+            # `apply_preset` sets the three safety dimensions TOGETHER (tool
+            # ceiling + approval), so the mode can never end up half-applied.
+            # Raw PermissionMode values still resolve through ALIASES.
+            preset = apply_preset(mode, permission_mgr=ctx.permission_mgr)
         except ValueError as exc:
             return f"Invalid mode: {mode} — {exc}"
-        ctx.state.permission_mode = pm
-        return f"Permission mode: {pm.value}"
+        ctx.state.permission_mode = ctx.permission_mgr.mode
+        return f"Permission preset: {preset.name} — {preset.summary}"
 
     if name == "session_status":
         cov = ctx.asset_graph.coverage()
@@ -167,6 +259,44 @@ def _dispatch(ctx: SupervisorContext, name: str, args: dict[str, Any], *, approv
                 return f"Stored evidence [EV linked to TX:{tid}]"
         return "No vault or transcript"
 
+    if name == "propose_payload":
+        from wth_ai.hunt.generator import save_generated, validate_generated
+
+        payload, error = validate_generated(args)
+        if payload is None:
+            return f"PAYLOAD DITOLAK: {error}"
+        saved = save_generated([payload])
+        notes = [f"Payload `{payload.id}` diterima (blast={payload.blast_radius})."]
+        if saved:
+            notes.append(f"Tersimpan di {saved}.")
+        # Batas yang tidak bisa dilewati model: massal tidak pernah dijalankan.
+        if payload.blast_radius == "mass" or not payload.auto_runnable:
+            notes.append(
+                "TIDAK dijalankan: berdampak massal (dokumentasi saja). "
+                f"Padanan berbatas: {payload.bounded_alternative or 'belum dinyatakan'}"
+            )
+            return "\n".join(notes)
+        destructive_allowed = bool(getattr(getattr(ctx.state, "scope", None), "destructive_allowed", False))
+        if payload.requires_destructive and not destructive_allowed:
+            notes.append("TIDAK dijalankan: destruktif tapi engagement belum membuka opt-in "
+                         "(`/scope set destructive=yes`).")
+            return "\n".join(notes)
+        if not args.get("run_now", True):
+            notes.append("Tidak dijalankan atas permintaan (run_now=false).")
+            return "\n".join(notes)
+        auto = auto_approve_enabled(ctx.config)
+        method = str(payload.probe.get("method", "GET")).upper()
+        actor = "recon" if method in {"GET", "HEAD", "OPTIONS"} else "executor"
+        result = ctx.terminal.dispatch_tool("http_probe", dict(payload.probe),
+                                            actor=actor, approved=approved or auto)
+        if result.blocked:
+            notes.append(f"Diblokir: {result.block_reason}")
+            return "\n".join(notes)
+        notes.append(f"Dijalankan: {result.summary()}")
+        if result.analysis:
+            notes.append(result.analysis)
+        return "\n".join(notes)
+
     if name in ("http_probe", "run_shell"):
         auto = auto_approve_enabled(ctx.config)
         result = ctx.terminal.dispatch_tool(name, args, actor="supervisor", approved=approved or auto)
@@ -174,6 +304,31 @@ def _dispatch(ctx: SupervisorContext, name: str, args: dict[str, Any], *, approv
             if ctx.callbacks.on_approval_required:
                 ctx.callbacks.on_approval_required(result.transcript_id)
             return f"APPROVAL_REQUIRED:{result.transcript_id} — ask user to approve"
+        if name == "http_probe":
+            # Pengujian adaptif: agent perlu (a) SINYAL respons, (b) pembanding
+            # terhadap request sebelumnya, dan (c) pasangan request/response yang
+            # masuk ke rantai bukti supaya /verify dan scoring bisa memakainya.
+            from wth_ai.terminal.analysis import diff_responses, evidence_pair
+
+            parts = [result.summary()]
+            if result.analysis:
+                parts.append(result.analysis)
+            compare_to = str(args.get("compare_to") or "").strip()
+            if compare_to:
+                prior = ctx.terminal.transcripts.get(compare_to)
+                if prior:
+                    parts.append(diff_responses(prior, result.to_dict()))
+                else:
+                    parts.append(f"[DIFF vs TX] baseline {compare_to} tidak ditemukan")
+            if not result.blocked:
+                ctx.state.metadata.setdefault("request_pairs", []).append(
+                    evidence_pair(result, role=str(args.get("purpose") or "adaptive"))
+                )
+            if result.stdout:
+                parts.append(result.stdout[:3000])
+            elif result.stderr:
+                parts.append(result.stderr[:500])
+            return "\n".join(part for part in parts if part)
         return result.summary() + "\n" + (result.stdout[:3000] if result.stdout else result.stderr[:500])
 
     if name == "plan_hunt":

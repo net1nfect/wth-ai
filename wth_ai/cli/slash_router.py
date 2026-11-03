@@ -135,7 +135,21 @@ def build_slash_router(orch: Any) -> SlashRouter:
         return "\n".join(f"- {s.get('name', s)}" for s in orch.config.mcp.servers) or "No MCP servers."
 
     def _help(args: list[str]) -> str:
-        return get_platform_registry().help_text(args[0] if args else None)
+        # WU-118 (PRD-002 FR#1): logika compact/topic yang sama persis dengan
+        # SlashRouter.help_text() instance method -- sebelumnya orchestrator.
+        # handle_input()'s literal block punya logika ini (lebih pintar dari
+        # handler ini yang lama, yang cuma teruskan args[0] mentah), dua
+        # implementasi /help berbeda hidup berdampingan tanpa sinkron.
+        topic = args[0].strip().lower() if args else None
+        compact = topic not in {"full", "all", "verbose"}
+        cat = None if compact or topic in {None, "full", "all", "verbose"} else topic
+        return get_platform_registry().help_text(cat, compact=compact)
+
+    def _status(_args: list[str]) -> str:
+        return orch._status_summary("WTH-AI Status")
+
+    def _resume(args: list[str]) -> str:
+        return orch.resume(" ".join(args) if args else None)
 
     def _scope(args: list[str]) -> str:
         if args and args[0] == "set":
@@ -146,9 +160,34 @@ def build_slash_router(orch: Any) -> SlashRouter:
 
     handlers: dict[str, Handler] = {
         "/help": _help,
+        # WU-118 (PRD-002 FR#1): merged from the separate literal if/elif
+        # block that used to live in orchestrator.handle_input() -- these
+        # /-prefixed forms are now regular SlashRouter entries like every
+        # other command, dispatched through the SAME single mechanism.
+        # Bare-word (no `/`) fast-path for quit/exit/stop is UNCHANGED and
+        # still lives in handle_input() (SlashRouter.parse() structurally
+        # requires a `/` prefix, so the bare forms need a separate check).
+        "/quit": lambda _a: orch.request_quit(),
+        "/exit": lambda _a: orch.request_quit(),
+        "/stop": lambda _a: orch.supervisor.stop(),
+        "/new-session": lambda _a: f"Session baru: {orch.new_session()}",
+        "/resume": _resume,
+        "/doctor": lambda _a: orch.doctor.full_report(),
+        "/status": _status,
+        "/sessions": lambda _a: orch._list_sessions(),
         "/target": lambda a: handle_target(orch, a),
         "/scope": _scope,
         "/permission": orch._handle_permission,
+        "/computer": orch._handle_computer,
+        "/research": orch._handle_research,
+        "/jobs": orch._handle_jobs,
+        "/eval": orch._handle_eval,
+        "/usage": orch._handle_usage,
+        "/next": orch._handle_next,
+        "/payloads": orch._handle_payloads,
+        "/autopilot": orch._handle_autopilot,
+        "/eval act": orch._handle_eval_act,
+        "/yolo": lambda args: orch._handle_permission(["yolo"]),
         "/model": lambda a: handle_model(orch, a),
         "/provider": lambda a: handle_provider(orch, a),
         "/profile": lambda a: handle_profile(orch, a),

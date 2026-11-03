@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import sys
 import re
 from typing import TYPE_CHECKING
 
@@ -21,13 +22,31 @@ _META_FOOTER_RE = re.compile(r"\n+---\n\*model:.*\*$", re.DOTALL)
 
 
 def compact_enabled(config: WTHConfig | None = None) -> bool:
-    if os.environ.get("WTH_COMPACT", "").strip() in {"1", "true", "yes"}:
+    """Whether to render the plain one-line look.
+
+    Measured defect: this returned True unconditionally (the config default AND
+    the final fallback were both True), so the coloured masthead, the context row
+    and the live toolbar were unreachable for every operator -- the "modern" UI
+    was dead code unless someone flipped a config flag nobody knows about.
+
+    The honest rule: compact exists for pipes, logs and CI, where escape codes
+    are noise. On a real terminal the operator gets the full look. `WTH_COMPACT`
+    still overrides both ways.
+    """
+    env = os.environ.get("WTH_COMPACT", "").strip().lower()
+    if env in {"1", "true", "yes"}:
         return True
-    if os.environ.get("WTH_COMPACT", "").strip() in {"0", "false", "no"}:
+    if env in {"0", "false", "no"}:
         return False
-    if config is not None and getattr(config.ui, "compact", True):
+    if not sys.stdout.isatty():
         return True
-    return True
+    if config is not None:
+        ui = getattr(config, "ui", None)
+        if ui is not None and hasattr(ui, "compact"):
+            # An explicit setting wins -- auto-detection must not override a
+            # deliberate choice.
+            return bool(getattr(ui, "compact"))
+    return False
 
 
 def _plain_output(response: str) -> bool:

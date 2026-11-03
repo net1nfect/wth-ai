@@ -29,6 +29,9 @@ DEFAULT_JOB_TIMEOUTS: dict[str, int] = {
     "recon": 3600,
     "executor": 1800,
     "report": 900,
+    # Autopilot menjalankan beberapa langkah HTTP berbatas per cycle; batas waktu
+    # eksplisit supaya job tidak pernah ditandai gagal sementara langkahnya jalan.
+    "autopilot": 1800,
 }
 DEFAULT_TIMEOUT = 120
 

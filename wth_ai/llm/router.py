@@ -25,6 +25,9 @@ class LLMProviderRouter:
         # caller (or an operator reading the error) can see WHY each provider
         # was skipped or failed instead of only the last one's error.
         self.last_failures: list[str] = []
+        #: Set when the token budget has been reached in `warn` mode, so a caller
+        #: can surface it next to the answer.
+        self.budget_notice: str = ""
 
     def _get_or_create_provider(self, ptype: str) -> BaseLLMProvider:
         if ptype in self._providers:
@@ -93,6 +96,55 @@ class LLMProviderRouter:
             )
         self._providers[ptype] = p
         return p
+
+    def _budget_gate(self, role: str) -> None:
+        """Enforce the token budget BEFORE spending, not after.
+
+        `WTH_TOKEN_BUDGET` used to be reported and never enforced: the agent
+        could blow past it indefinitely, and the only place it appeared was the
+        summary you read afterwards. Modes: `warn` (default — one notice per run,
+        then continue), `stop` (refuse the call with an actionable message),
+        `off`.
+        """
+        try:
+            from wth_ai.llm.usage import BudgetExceeded, get_ledger
+
+            allowed, message = get_ledger().check_budget()
+        except Exception:  # noqa: BLE001 - accounting must never block a call
+            return
+        if allowed:
+            if message:
+                ledger = get_ledger()
+                self.budget_notice = message
+                if not getattr(ledger, "_warned", False):
+                    ledger._warned = True
+                    # Printed, not just stored: a warning the operator never sees
+                    # is the same as no warning, and this is an operator tool.
+                    import sys
+
+                    print(f"[budget] {message}", file=sys.stderr)
+            return
+        raise BudgetExceeded(f"[role={role}] {message}")
+
+    def _record_usage(self, role: str, provider_type: str, model: str, provider: Any) -> None:
+        """One ledger entry per answered call. Never fatal.
+
+        Providers return plain text, so their usage rides back on
+        `provider.last_usage`. A provider that reports nothing still records a
+        CALL with zero tokens: "not measured" is a fact the operator needs, and
+        omitting the call would understate spend.
+        """
+        try:
+            from wth_ai.llm.usage import get_ledger
+
+            get_ledger().record(
+                role=role,
+                provider=provider_type,
+                model=model,
+                usage=getattr(provider, "last_usage", None),
+            )
+        except Exception:  # noqa: BLE001 - accounting must never break a call
+            pass
 
     def _role_config(self, role: str) -> ProviderRoleConfig:
         if role == "supervisor":
@@ -173,6 +225,7 @@ class LLMProviderRouter:
         on_token: Callable[[str], None] | None = None,
         response_format: dict[str, Any] | None = None,
     ) -> tuple[str, str]:
+        self._budget_gate(role)
         self.require_available()
         rc = self._role_config(role)
         providers_to_try = [rc.type]
@@ -190,10 +243,14 @@ class LLMProviderRouter:
                     continue
                 primary = rc.model if ptype == rc.type else self._role_config(role).model
                 backup = rc.backup_model or primary
-                return provider.chat_with_fallback(
+                text, used_model = provider.chat_with_fallback(
                     primary, backup, messages,
                     timeout=timeout, stream=stream, on_token=on_token, response_format=response_format,
                 )
+                # Accounting runs on the SUCCESS path with the model that actually
+                # answered, so a failover is billed to the backup model.
+                self._record_usage(role, ptype, used_model, provider)
+                return text, used_model
             except Exception as exc:  # noqa: BLE001
                 last_err = exc
                 attempts.append(f"{ptype}: {type(exc).__name__}: {str(exc)[:160]}")
@@ -245,6 +302,7 @@ class LLMProviderRouter:
         tools: list[dict[str, Any]],
         timeout: int | None = None,
     ) -> dict[str, Any]:
+        self._budget_gate(role)
         if os.environ.get("WTH_TEST_MODE") == "1":
             user = messages[-1].get("content", "") if messages else ""
             rc = self._role_config(role)
