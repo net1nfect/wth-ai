@@ -18,6 +18,7 @@ from wth_ai.permission_manager import PermissionManager
 from wth_ai.policy.engine import denylist_match, high_risk_match
 from wth_ai.scope_manager import ScopeManager
 from wth_ai.workspace import wth_home
+from wth_ai.running_actions import get_running_actions, kill_process_tree
 
 def redact_secrets(text: str) -> str:
     """WU-203: delegate to canonical `wth_ai.redaction.redact_secrets`
@@ -118,23 +119,34 @@ class ExecuteRpcServer:
         with tempfile.TemporaryDirectory(prefix="wth-exec-") as tmp:
             script = Path(tmp) / "run.py"
             script.write_text(code, encoding="utf-8")
+            # Popen (bukan subprocess.run) supaya PID/process-group tercatat ke
+            # RunningActionRegistry: code-exec yang sedang berjalan harus bisa
+            # dibunuh kill-switch, dan timeout tidak boleh meninggalkan anak.
+            proc = subprocess.Popen(
+                ["python3", str(script)],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                cwd=tmp,
+                env={"PATH": os.environ.get("PATH", ""), "HOME": tmp},
+                shell=False,
+                start_new_session=(os.name != "nt"),
+            )
+            action_id = get_running_actions().register(proc.pid, label="rpc:code-exec")
             try:
-                proc = subprocess.run(
-                    ["python3", str(script)],
-                    capture_output=True,
-                    text=True,
-                    timeout=int(req.get("timeout", 30)),
-                    cwd=tmp,
-                    env={"PATH": os.environ.get("PATH", ""), "HOME": tmp},
-                    shell=False,
-                )
-            except subprocess.TimeoutExpired:
-                return {"status": "timeout", "stdout": "", "stderr": ""}
+                try:
+                    stdout_raw, stderr_raw = proc.communicate(timeout=int(req.get("timeout", 30)))
+                except subprocess.TimeoutExpired:
+                    kill_process_tree(proc)
+                    proc.communicate()
+                    return {"status": "timeout", "stdout": "", "stderr": ""}
+            finally:
+                get_running_actions().unregister(action_id)
             return {
                 "status": "success" if proc.returncode == 0 else "failed",
-                "exit_code": proc.returncode,
-                "stdout": redact_secrets(proc.stdout[:8000]),
-                "stderr": redact_secrets(proc.stderr[:8000]),
+                "exit_code": proc.returncode or 0,
+                "stdout": redact_secrets(stdout_raw[:8000]),
+                "stderr": redact_secrets(stderr_raw[:8000]),
             }
 
     def _audit(self, *, status: str, target: str, lang: str, code: str, reason: str) -> None:

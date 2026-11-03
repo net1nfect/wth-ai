@@ -5,12 +5,11 @@ from __future__ import annotations
 import os
 import re
 import shlex
-import signal
 import subprocess
 import threading
 from typing import Callable
 
-from wth_ai.running_actions import get_running_actions
+from wth_ai.running_actions import get_running_actions, kill_process_tree
 
 MAX_OUTPUT_BYTES = 512_000
 
@@ -36,25 +35,6 @@ def tokenize_command(command: str) -> list[str]:
         return shlex.split(command, posix=os.name != "nt")
     except ValueError:
         return command.split()
-
-
-def _kill_process_tree(proc: subprocess.Popen) -> None:
-    """SIGKILL seluruh process group `proc` (anak-cucu ikut), fallback `proc.kill()`.
-
-    Valid karena kedua jalur spawn memakai `start_new_session=True` — anak jadi
-    leader group-nya sendiri (`pgid == pid`). Membunuh satu PID saja meninggalkan
-    anak-cucunya hidup (kelas bug sama dengan pipe-timeout WU-108).
-    """
-    if hasattr(os, "killpg"):
-        try:
-            os.killpg(proc.pid, signal.SIGKILL)
-            return
-        except OSError:
-            pass
-    try:
-        proc.kill()
-    except OSError:
-        pass
 
 
 def run_argv(
@@ -100,7 +80,7 @@ def run_argv(
 
             def _kill_on_timeout() -> None:
                 timed_out.set()
-                _kill_process_tree(proc)
+                kill_process_tree(proc)
 
             watchdog = threading.Timer(timeout, _kill_on_timeout)
             watchdog.daemon = True
@@ -138,7 +118,7 @@ def run_argv(
             try:
                 stdout_raw, stderr_raw = proc.communicate(timeout=timeout)
             except subprocess.TimeoutExpired:
-                _kill_process_tree(proc)
+                kill_process_tree(proc)
                 proc.communicate()
                 return "", f"timeout after {timeout}s", 124
             return (

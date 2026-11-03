@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import os
 import subprocess
+import threading
 import time
 
 os.environ.setdefault("WTH_SKIP_SETUP", "1")
@@ -264,3 +265,115 @@ class TestKillSwitchSurfaces:
                 proc.kill()
                 proc.wait()
             reset_running_actions()
+
+
+class TestKillSwitchCoverageExtensions:
+    """F1 lanjutan: recon/runner + rpc/execute_server ikut ter-registrasi."""
+
+    def test_recon_run_bounded_registers_during_run_and_cleans_after(self):
+        from types import SimpleNamespace
+
+        from wth_ai.recon.runner import SafeToolRunner
+
+        reset_running_actions()
+        fake_self = SimpleNamespace(
+            _spawn=lambda argv, **kw: subprocess.Popen(argv, **kw),
+            timeout=10,
+            raw_dir=None,
+        )
+        result: list = []
+        thread = threading.Thread(
+            target=lambda: result.append(SafeToolRunner._run_bounded(fake_self, ["sleep", "0.5"]))
+        )
+        thread.start()
+        seen = 0
+        deadline = time.monotonic() + 3
+        while time.monotonic() < deadline:
+            seen = get_running_actions().active_count()
+            if seen:
+                break
+            time.sleep(0.01)
+        assert seen == 1, f"recon spawn tidak ter-registrasi (count={seen})"
+        snap = get_running_actions().snapshot()
+        assert snap[0]["label"].startswith("recon:")
+        thread.join(timeout=10)
+        assert result and result[0][2] == 0
+        assert get_running_actions().active_count() == 0
+        reset_running_actions()
+
+    def test_recon_timeout_kills_whole_process_tree(self):
+        from types import SimpleNamespace
+
+        from wth_ai.recon.runner import SafeToolRunner
+
+        reset_running_actions()
+        fake_self = SimpleNamespace(
+            _spawn=lambda argv, **kw: subprocess.Popen(argv, **kw),
+            timeout=1,
+            raw_dir=None,
+        )
+        cmd = [
+            "python3", "-c",
+            "import subprocess,time; p=subprocess.Popen(['sleep','30']); print(p.pid, flush=True); time.sleep(30)",
+        ]
+        got: dict = {}
+
+        def _run() -> None:
+            try:
+                SafeToolRunner._run_bounded(fake_self, cmd)
+            except subprocess.TimeoutExpired:
+                got["timeout"] = True
+
+        thread = threading.Thread(target=_run)
+        thread.start()
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline and "pid" not in got:
+            snap = get_running_actions().snapshot()
+            if snap:
+                got["pid"] = snap[0]["pid"]
+            time.sleep(0.01)
+        assert "pid" in got, "proses recon tidak ter-registrasi sebelum timeout"
+        thread.join(timeout=15)
+        assert got.get("timeout"), "timeout tidak ter-raise"
+        assert get_running_actions().active_count() == 0
+        # seluruh group benar-benar hilang (parent di-reap, cucu di-kill)
+        gone = False
+        end = time.monotonic() + 5
+        while time.monotonic() < end:
+            try:
+                os.killpg(got["pid"], 0)
+            except ProcessLookupError:
+                gone = True
+                break
+            time.sleep(0.05)
+        assert gone, "process-group masih ada setelah timeout kill"
+        reset_running_actions()
+
+    def test_rpc_execute_registers_and_cleans(self):
+        from wth_ai.models import PermissionMode
+        from wth_ai.rpc.execute_server import ExecuteRpcServer
+
+        reset_running_actions()
+        srv = ExecuteRpcServer()
+        srv.scope.set_scope(target="example.com", authorized=True, in_scope=["example.com"])
+        srv.perms.set_mode(PermissionMode.STANDARD_TESTING)
+        result: list = []
+        thread = threading.Thread(
+            target=lambda: result.append(
+                srv.execute({"target": "example.com", "code": "import time; time.sleep(0.6); print('ok')"})
+            )
+        )
+        thread.start()
+        seen = 0
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline:
+            seen = get_running_actions().active_count()
+            if seen:
+                break
+            time.sleep(0.01)
+        assert seen == 1, f"rpc code-exec tidak ter-registrasi (count={seen})"
+        assert get_running_actions().snapshot()[0]["label"] == "rpc:code-exec"
+        thread.join(timeout=15)
+        assert result and result[0]["status"] == "success", result
+        assert get_running_actions().active_count() == 0
+        reset_running_actions()
