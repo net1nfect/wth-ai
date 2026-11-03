@@ -36,6 +36,11 @@ cara untuk menghentikan paksa proses yang sedang jalan.
   timeout. `kill_process_tree()` diangkat jadi fungsi publik
   `wth_ai/running_actions.py` (dipakai shell_runner + recon + rpc; satu
   implementasi, bukan salinan).
+* **Slice 3 (2026-11-04)**: sisa spawn site disapu — `mcp/manager.py`
+  (server MCP stdio), `tools/installer.py` (install sampai 600s),
+  `intel/feed.py` (nuclei update 120s), `computer_use/session.py`,
+  `terminal/backends/docker.py` — semuanya `Popen` + `start_new_session`
+  + register/unregister + kill seluruh tree saat timeout.
 
 ## 3. Keputusan desain (dan alternatif yang ditolak)
 
@@ -72,19 +77,22 @@ permukaan kill-switch (`/stop` membunuh proses terdaftar; `shutdown()`
 membunuh + melaporkan di pesan).
 
 Slice 2 menambah **3 test** (recon register/clean; recon timeout benar-benar
-menghapus process-group; rpc code-exec register/clean). Suite penuh:
-**1364 passed / 0 failed**; bandit `-ll` clean. Kompatibilitas
+menghapus process-group; rpc code-exec register/clean). Slice 3 menambah
+**5 test** (satu per spawn site baru — proses panjang nyata, dicek
+ter-registrasi saat berjalan lalu bersih). Suite penuh:
+**1369 passed / 0 failed**; bandit `-ll` clean. Kompatibilitas
 lama yang dijaga: `test_worker_and_shell_timeout_reliability` (WU-108),
 `test_agent_loop_interrupt` (WU-106 parsial), `test_quit`,
 `test_roadmap_platform` — semua hijau.
 
 ## 5. Batasan & sisa (jujur — anti-overclaim)
 
-* **Spawn site lain belum diregistrasi** (pola sama tinggal diterapkan):
-  `mcp/manager.py` (server MCP), `computer_use/session.py`, `tools/installer.py`,
-  `intel/feed.py`, `terminal/backends/docker.py`. Yang SUDAH terjangkau:
-  `shell_runner` (= `run_shell` agent), `recon/runner` (tools recon eksternal),
-  `rpc/execute_server` (code-exec).
+* **Spawn site in-process: SEMUA tersapu** — `shell_runner` (`run_shell`
+  agent), `recon/runner` (tools recon eksternal), `rpc/execute_server`
+  (code-exec), `mcp/manager` (server MCP), `tools/installer` (install),
+  `intel/feed` (nuclei update), `computer_use/session`,
+  `terminal/backends/docker`. Tersisa: `tools/pipeline.py` (multi-proses,
+  punya `_kill_all` sendiri) — registrasi kecil sebagai follow-up.
 * **Flag persisten `runtime/killswitch.json` + entry point CLI/signal
   terpisah** (bisa mematikan walau proses utama stuck) = lingkup F20.
 * **`/stop` membunuh SEMUA proses terdaftar** (global), bukan per-task —
@@ -97,7 +105,14 @@ lama yang dijaga: `test_worker_and_shell_timeout_reliability` (WU-108),
 ```
 wth_ai/running_actions.py                registry + kill_all (baru)
 wth_ai/shell_runner.py                   start_new_session + register + kill-tree
+wth_ai/recon/runner.py                   idem (tools eksternal)
+wth_ai/rpc/execute_server.py             idem (code-exec)
+wth_ai/mcp/manager.py                    idem (server MCP; stop() unregister)
+wth_ai/tools/installer.py                idem (install sampai 600s)
+wth_ai/intel/feed.py                     idem (nuclei update)
+wth_ai/computer_use/session.py           idem
+wth_ai/terminal/backends/docker.py       idem
 wth_ai/agents/supervisor.py              /stop → kill_all
 wth_ai/orchestrator.py                   shutdown → kill_all + laporan
-tests/test_running_actions_registry.py   14 test
+tests/test_running_actions_registry.py   22 test
 ```
