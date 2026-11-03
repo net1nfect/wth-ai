@@ -28,6 +28,10 @@ class LLMProviderRouter:
         #: Set when the token budget has been reached in `warn` mode, so a caller
         #: can surface it next to the answer.
         self.budget_notice: str = ""
+        #: `finish_reason` dari panggilan chat_for_role terakhir ("length" =
+        #: respons terpotong di max_tokens). ChatAgent memakainya untuk
+        #: memberi tahu operator, bukan diam-diam mengirim teks setengah jadi.
+        self.last_finish_reason: str = ""
 
     def reset_provider_cache(self) -> None:
         """Lepas instance provider yang di-cache.
@@ -260,6 +264,7 @@ class LLMProviderRouter:
                 # Accounting runs on the SUCCESS path with the model that actually
                 # answered, so a failover is billed to the backup model.
                 self._record_usage(role, ptype, used_model, provider)
+                self.last_finish_reason = getattr(provider, "last_finish_reason", "") or ""
                 return text, used_model
             except Exception as exc:  # noqa: BLE001
                 last_err = exc

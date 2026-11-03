@@ -298,6 +298,12 @@ def _subcommands_from_usage(usage: str) -> list[str]:
     if end <= start:
         return []
     inner = usage[start + 1:end]
+    # Grup TANPA `|` adalah PLACEHOLDER argumen (`/resume [id]`), bukan daftar
+    # subcommand. Measured bug dari sesi operator: `/resume` membuka menu
+    # satu-item berlabel "id" (aksi `/resume id`), dan Esc dari menu itu
+    # membuat turn kosong -- "/resume" tampak tidak bereaksi sama sekali.
+    if "|" not in inner:
+        return []
     words: list[str] = []
     for part in inner.split("|"):
         part = part.strip()

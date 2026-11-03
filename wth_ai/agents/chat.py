@@ -124,6 +124,12 @@ class ChatAgent(BaseLLMAgent):
         # `prompts/chat_system.txt` already asked for hypothesis/evidence
         # separation and was routinely ignored, because nothing checked.
         guarded, violations = veracity.sanitize_claims(raw)
+        if (getattr(self.client, "last_finish_reason", "") or "") == "length":
+            guarded = (
+                f"{guarded}\n\n⚠ **Respons terpotong** — model berhenti di batas "
+                f"`max_tokens` ({self.config.models.max_tokens}). Naikkan budget: "
+                f"`/effort high` (atau `/effort ultra`), lalu ulangi pertanyaannya."
+            )
         result: dict[str, Any] = {
             "raw": guarded,
             "model": model,

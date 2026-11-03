@@ -118,6 +118,10 @@ class OpenAICompatProvider(BaseLLMProvider):
         self.temperature = temperature
         self.max_tokens = max_tokens
         self.default_timeout = default_timeout
+        #: `finish_reason` dari respons terakhir ("length" = terpotong di
+        #: max_tokens). Dulu dibuang total, jadi output yang terpotong di tengah
+        #: kalimat tidak bisa dibedakan dari output yang selesai.
+        self.last_finish_reason = ""
 
     @property
     def name(self) -> str:
@@ -195,6 +199,7 @@ class OpenAICompatProvider(BaseLLMProvider):
         raise_for_status(self.provider_name, model, url, r)
         data = _parse_response_json(r.text)
         self._record_usage(data)
+        self.last_finish_reason = str((data.get("choices") or [{}])[0].get("finish_reason") or "")
         return data["choices"][0]["message"]["content"]
 
     def chat_with_tools(
@@ -224,4 +229,5 @@ class OpenAICompatProvider(BaseLLMProvider):
         raise_for_status(self.provider_name, model, url, r)
         data = _parse_response_json(r.text)
         self._record_usage(data)
+        self.last_finish_reason = str((data.get("choices") or [{}])[0].get("finish_reason") or "")
         return {"message": data["choices"][0]["message"], "model": model, "raw": data}
