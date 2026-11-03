@@ -14,3 +14,16 @@ node_modules/
 .DS_Store
 *.db
 .cursor/
+
+# Runtime / operasional (data di disk, bukan di version control)
+.hermes/
+logs/**/*.jsonl
+logs/**/*.log
+data/cli_history
+data/engagements/**
+!data/engagements/.gitkeep
+data/sessions/*.json
+data/sessions/*.bak
+wth-results/**
+reports/**
+!reports/.gitkeep
