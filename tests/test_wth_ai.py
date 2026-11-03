@@ -313,22 +313,49 @@ def test_param_ranker():
     assert ranked[0].score >= ranked[-1].score
 
 
-def test_vuln_idor_executor_probes_without_accounts():
-    """Kontrak BERUBAH (disengaja, atas permintaan operator).
+def test_vuln_idor_executor_probes_without_accounts(monkeypatch):
+    """Kontrak BERUBAH (disengaja, atas permintaan operator) + HERMETIS.
 
     Dulu: tanpa 2 akun uji -> `blocked`, dan pengujian IDOR berhenti. Itu memblokir
     kasus yang paling umum di dunia nyata: endpoint terbuka yang membocorkan objek
     milik orang lain tanpa perlu login sama sekali. Sekarang executor melakukan
     object-swap tanpa akun (id -> tetangganya) dan melaporkan berdasarkan bukti.
+
+    Hermetis: versi lama test ini mengirim request NYATA ke https://x.com — suite
+    jadi bergantung jaringan DAN menghubungi host pihak ketiga setiap kali dijalankan
+    (ketahuan saat suite dijalankan dengan jaringan eksternal diblokir: satu-satunya
+    test yang gagal). `requests.get` kini di-stub: dua respons objek berbeda dari
+    server imajiner, sehingga jalur bukti yang sama diuji tanpa jaringan.
     """
+    import requests as requests_mod
+
     from wth_ai.executor.vuln.idor import IdorExecutor
     from wth_ai.models import ExecutorTask, PermissionMode, SessionState
+
+    calls: list[str] = []
+
+    class _FakeResp:
+        def __init__(self, body: str) -> None:
+            self.status_code = 200
+            self.text = body
+            self.headers = {"Content-Type": "application/json"}
+
+    def _fake_get(url, *args, **kwargs):
+        calls.append(url)
+        if url.endswith("/1"):
+            return _FakeResp('{"id": 1, "name": "objek-satu", "role": "user", "note": "milik user satu"}')
+        return _FakeResp('{"id": 2, "name": "objek-dua", "role": "user", "note": "DATA MILIK USER LAIN"}')
+
+    monkeypatch.setattr(requests_mod, "get", _fake_get)
+
     state = SessionState()
-    task = ExecutorTask(id="T1", goal="idor", target="https://x.com/api/1", permission_required=PermissionMode.STANDARD_TESTING)
+    task = ExecutorTask(id="T1", goal="idor", target="https://idor-target.test/api/1", permission_required=PermissionMode.STANDARD_TESTING)
     result = IdorExecutor(state).execute(task)
     assert result.status != "blocked", "IDOR tidak boleh lagi berhenti karena tidak ada akun uji"
+    assert len(calls) == 2, f"object-swap harus menguji dua objek (id + tetangganya), calls={calls}"
     assert "tanpa akun" in result.output_summary.lower() or "object-swap" in result.output_summary.lower(), \
         result.output_summary
+    assert result.risk == "high", "dua objek 200 yang berbeda dan berisi field objek harus berisiko high"
 
 
 def test_vuln_idor_executor_says_so_when_there_is_no_object_to_swap():
