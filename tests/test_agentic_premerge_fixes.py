@@ -584,21 +584,32 @@ def _permission_set_enum() -> list[str]:
     return TOOL_DEFINITIONS["permission_set"]["function"]["parameters"]["properties"]["mode"]["enum"]
 
 
-def test_permission_set_schema_only_advertises_real_modes():
-    """The schema listed `read_only_recon` / `standard_testing` /
-    `elevated_testing`, none of which are PermissionMode values -- so the model
-    could only ever successfully set `full_lab`."""
-    real = {p.value for p in PermissionMode}
-    advertised = set(_permission_set_enum())
-    assert advertised <= real, f"schema mengiklankan mode yang tidak ada: {sorted(advertised - real)}"
-    assert "read_only" in advertised and "standard" in advertised
+def test_permission_set_schema_advertises_the_cli_presets():
+    """The enum is now the CLI-facing vocabulary (plan/read-only/ask/auto/yolo).
+
+    The invariant that matters is unchanged: every advertised value must resolve.
+    The historical failure was an enum listing spellings that raised ValueError,
+    so only one mode could ever be set.
+    """
+    from wth_ai.permission_presets import PRESETS, resolve_preset
+
+    advertised = _permission_set_enum()
+    assert set(advertised) <= set(PRESETS), f"schema mengiklankan mode asing: {advertised}"
+    for value in advertised:
+        assert resolve_preset(value).name == value
 
 
-def test_every_advertised_permission_mode_actually_applies():
+def test_every_advertised_permission_mode_actually_applies(monkeypatch):
+    monkeypatch.setenv("WTH_UNRESTRICTED", "0")
+    monkeypatch.setenv("WTH_AUTO_APPROVE", "0")
     from wth_ai.permission_manager import PermissionManager
+    from wth_ai.permission_presets import apply_preset
 
     for value in _permission_set_enum():
-        assert PermissionManager().set_mode(value).value == value
+        mgr = PermissionManager()
+        preset = apply_preset(value, permission_mgr=mgr)
+        assert preset.name == value
+        assert mgr.mode is preset.permission
 
 
 def test_legacy_permission_mode_spellings_still_resolve():
@@ -943,4 +954,24 @@ def test_router_builds_custom_provider_from_config():
     assert isinstance(provider, OpenAICompatProvider)
     assert provider.base_url == "http://127.0.0.1:20128/v1"
     assert provider.name == "custom"
+
+# --------------------------------------------------------------------------- #
+# 14. Recon coverage was capped arbitrarily low (loosened on request)
+# --------------------------------------------------------------------------- #
+def test_profile_caps_were_raised_and_max_profile_exists():
+    """`recon-only` used to cap at 30 tools while the registry holds hundreds,
+    so the operator's coverage was decided by an arbitrary ceiling rather than
+    by what is installed and allowed."""
+    from wth_ai.recon.planner import PROFILE_CAP, ReconPlanner
+    from wth_ai.recon.registry import ReconToolRegistry
+
+    assert PROFILE_CAP["recon-only"] > 30
+    assert PROFILE_CAP["default"] > 40
+    assert PROFILE_CAP["high-quality"] > 70
+    assert "max" in PROFILE_CAP
+
+    registry = ReconToolRegistry()
+    plan = ReconPlanner(registry).plan("example.com", profile="max")
+    assert plan.selected, "profile max tidak memilih tool apa pun"
+    assert len(plan.selected) <= PROFILE_CAP["max"]
 

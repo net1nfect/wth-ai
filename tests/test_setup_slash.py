@@ -14,11 +14,14 @@ from wth_ai.orchestrator import WTHOrchestrator
 
 
 def test_target_slash_url():
+    """WU-011 (AGENT-01): "/target <url>" saja TIDAK menyebut otorisasi apa
+    pun -- sebelumnya default authorized=True (bug), sekarang fail-closed."""
     orch = WTHOrchestrator(WTHConfig(), fresh=True)
     out = orch.handle_input("/target https://test.example.com/login")
     assert "test.example.com" in out
     assert orch.state.scope.target == "test.example.com"
-    assert orch.state.scope.authorized is True
+    assert orch.state.scope.authorized is False
+    assert "authorized=no" in out
 
 
 def test_target_show():
