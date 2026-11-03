@@ -104,9 +104,13 @@ spawn, bukan regresi repo.
 
 - **Listener DNS belum ada.** MVP = HTTP. DNS callback butuh port 53/priv atau
   proxy DNS — kandidat kerja terpisah.
-- **Belum auto-wired** ke `_try_mcp_oob` (`wth_ai/executor/vuln/ssrf.py`);
-  executor SSRF masih memakai jalur MCP lama. Kerja kandidat berikutnya:
-  arahkan `_try_mcp_oob` ke `get_oob_service()`.
+- **Auto-wire executor SSRF: SELESAI.** `wth_ai/executor/vuln/ssrf.py` kini
+  memanggil `_try_oob_callback()` yang memakai `get_oob_service()` bila listener
+  hidup, dan mundur ke MCP lama bila tidak. Jaminan anti-regresi: saat listener
+  mati, executor **tidak menambah HTTP apa pun** (kontrak `call_count <= 2` di
+  `test_vuln_executor_scope_guard.py` tetap hijau); executor juga tidak pernah
+  membuka listener sendiri (itu keputusan operator). Bukti: 4 test di
+  `tests/test_ssrf_oob_wiring.py`.
 - **Belum scope/taint-gated** (F1 belum ada). Mitigasi saat ini: loopback +
   token acak 16-byte. Saat F1 hadir, hit harus masuk audit chain + taint.
 - **Belum ada auto-report** — hit jadi `[TX:...]`; wiring ke report = F16.
