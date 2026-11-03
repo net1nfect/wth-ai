@@ -30,6 +30,12 @@ cara untuk menghentikan paksa proses yang sedang jalan.
   * `/quit` dan shutdown lain → `WTHOrchestrator.shutdown()` memanggil
     `kill_all()` **sebelum** `supervisor.stop()`, dan melaporkan jumlahnya di
     pesan penutup ("N proses latar dihentikan").
+* **Slice 2 (2026-11-04)**: `wth_ai/recon/runner.py::_run_bounded` (spawn tool
+  eksternal) dan `rpc/execute_server.py` (code-exec) kini ikut ter-registrasi —
+  `start_new_session=True` + register/unregister + kill seluruh tree saat
+  timeout. `kill_process_tree()` diangkat jadi fungsi publik
+  `wth_ai/running_actions.py` (dipakai shell_runner + recon + rpc; satu
+  implementasi, bukan salinan).
 
 ## 3. Keputusan desain (dan alternatif yang ditolak)
 
@@ -65,7 +71,9 @@ saat berjalan; timeout tetap 124 + registry bersih; jalur non-streaming),
 permukaan kill-switch (`/stop` membunuh proses terdaftar; `shutdown()`
 membunuh + melaporkan di pesan).
 
-Suite penuh: **1361 passed / 0 failed**; bandit `-ll` clean. Kompatibilitas
+Slice 2 menambah **3 test** (recon register/clean; recon timeout benar-benar
+menghapus process-group; rpc code-exec register/clean). Suite penuh:
+**1364 passed / 0 failed**; bandit `-ll` clean. Kompatibilitas
 lama yang dijaga: `test_worker_and_shell_timeout_reliability` (WU-108),
 `test_agent_loop_interrupt` (WU-106 parsial), `test_quit`,
 `test_roadmap_platform` — semua hijau.
@@ -73,10 +81,10 @@ lama yang dijaga: `test_worker_and_shell_timeout_reliability` (WU-108),
 ## 5. Batasan & sisa (jujur — anti-overclaim)
 
 * **Spawn site lain belum diregistrasi** (pola sama tinggal diterapkan):
-  `recon/runner.py::_run_bounded` (tools recon — kandidat berikutnya),
-  `rpc/execute_server.py`, `mcp/manager.py`, `computer_use/session.py`,
-  `tools/installer.py`, `intel/feed.py`, `terminal/backends/docker.py`.
-  Kill-switch baru menjangkau jalur `shell_runner` (= `run_shell` agent).
+  `mcp/manager.py` (server MCP), `computer_use/session.py`, `tools/installer.py`,
+  `intel/feed.py`, `terminal/backends/docker.py`. Yang SUDAH terjangkau:
+  `shell_runner` (= `run_shell` agent), `recon/runner` (tools recon eksternal),
+  `rpc/execute_server` (code-exec).
 * **Flag persisten `runtime/killswitch.json` + entry point CLI/signal
   terpisah** (bisa mematikan walau proses utama stuck) = lingkup F20.
 * **`/stop` membunuh SEMUA proses terdaftar** (global), bukan per-task —
