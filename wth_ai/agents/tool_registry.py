@@ -274,6 +274,26 @@ TOOL_DEFINITIONS: dict[str, dict[str, Any]] = {
             },
         },
     },
+    "oob_dns": {
+        "type": "function",
+        "function": {
+            "name": "oob_dns",
+            "description": (
+                "Callback DNS (out-of-band tanpa HTTP): untuk blind XXE/SSRF/RCE yang "
+                "memicu resolusi nama. Menyalakan listener DNS (loopback) dan "
+                "mengembalikan hostname callback <token>.oob.local yang HARUS di-resolve "
+                "target bila uji berhasil; hasil resolve dicatat sebagai hit lewat "
+                "oob_check. Host/port tidak bisa diubah dari argumen tool."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "port": {"type": "integer", "description": "Port DNS (default 5353 unprivileged; 53 butuh hak root)."},
+                },
+                "required": [],
+            },
+        },
+    },
     "oob_check": {
         "type": "function",
         "function": {
@@ -443,8 +463,8 @@ TOOL_DEFINITIONS: dict[str, dict[str, Any]] = {
 
 ACTOR_TOOLS: dict[str, list[str]] = {
     "supervisor": list(TOOL_DEFINITIONS.keys()),
-    "planner": ["query_graph", "http_probe", "store_evidence", "scope_show", "session_status", "oob_create", "oob_check"],
-    "executor": ["query_graph", "http_probe", "run_shell", "store_evidence", "oob_create", "oob_check"],
+    "planner": ["query_graph", "http_probe", "store_evidence", "scope_show", "session_status", "oob_create", "oob_dns", "oob_check"],
+    "executor": ["query_graph", "http_probe", "run_shell", "store_evidence", "oob_create", "oob_dns", "oob_check"],
     "recon": ["query_graph", "http_probe", "run_shell", "recon_list_tools", "recon_run_tool", "recon_finalize"],
 }
 

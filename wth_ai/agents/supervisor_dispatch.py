@@ -89,6 +89,31 @@ def _dispatch_oob_create(ctx: SupervisorContext, args: dict[str, Any]) -> str:
     )
 
 
+def _dispatch_oob_dns(ctx: SupervisorContext, args: dict[str, Any]) -> str:
+    """Nyalakan listener DNS callback (F2) dan kembalikan hostname-nya.
+
+    Sama seperti `oob_create`: tidak menyentuh target, tidak punya parameter
+    host — membuka DNS ke jaringan tetap keputusan operator.
+    """
+    from wth_ai.oob import get_oob_service
+
+    svc = get_oob_service()
+    port = args.get("port")
+    st = svc.start_dns(port=int(port) if port is not None else None)
+    entry = svc.create(
+        label=f"dns:{getattr(ctx.state, 'session_id', '')[:8] or 'cb'}",
+        session_id=getattr(getattr(ctx, "state", None), "session_id", ""),
+        target=getattr(getattr(getattr(ctx, "state", None), "scope", None), "target", ""),
+    )
+    return (
+        f"DNS callback listener aktif di {st['host']}:{st['port']} (query={st['queries']}).\n"
+        f"hostname callback: {entry['dns']}\n"
+        f"token: {entry['token']}\n"
+        "Kirim hostname itu ke vektor (mis. entity XML SYSTEM, URL berisi hostname, perintah "
+        "yang memicu resolusi), lalu panggil oob_check(token=...) untuk melihat hit."
+    )
+
+
 def _dispatch_oob_check(ctx: SupervisorContext, args: dict[str, Any]) -> str:
     """Periksa hit callback; bila ada, simpan sebagai transcript [TX:...]."""
     from wth_ai.oob import format_hits, get_oob_service
@@ -222,6 +247,9 @@ def _dispatch(ctx: SupervisorContext, name: str, args: dict[str, Any], *, approv
 
     if name == "oob_create":
         return _dispatch_oob_create(ctx, args)
+
+    if name == "oob_dns":
+        return _dispatch_oob_dns(ctx, args)
 
     if name == "oob_check":
         return _dispatch_oob_check(ctx, args)
