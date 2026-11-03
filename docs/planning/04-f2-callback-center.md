@@ -20,13 +20,14 @@ Modul baru `wth_ai/oob/`:
 | `store.py` | `OOBStore` — registry token (JSON) + log interaksi (JSONL) di `$WTH_HOME/oob/`; TTL live; redaksi kanonik; cap ukuran |
 | `server.py` | `OOBCallbackServer` — listener HTTP stdlib (semua metode), uniform-200, loopback default |
 | `service.py` | `OOBCallbackService` + singleton `get_oob_service()` per-`WTH_HOME`; `format_hits`; `record_as_transcript` (hit → `[TX:...]`) |
+| `dns.py` | `DNSListener` — parser/encoder DNS mini (stdlib), jawaban statis A/TXT, token dari label pertama |
 
 Permukaan pemakaian:
 
-- **Operator (slash):** `/oob start|stop|status|new|list|hits|clear`
+- **Operator (slash):** `/oob start|stop|status|new|list|hits|clear` + `/oob dns [start|stop|status]`
   (terdaftar di `wth_ai/cli/slash_router.py` + `wth_ai/platform/registry.py`).
-- **Agent (tool):** `oob_create` (buat token + URL) dan `oob_check`
-  (periksa hit; bila ada → transcript `[TX:...]`).
+- **Agent (tool):** `oob_create` (token + URL), `oob_dns` (listener DNS +
+  hostname callback), dan `oob_check` (periksa hit; bila ada → transcript `[TX:...]`).
   Terdaftar di `wth_ai/agents/tool_registry.py` (`TOOL_DEFINITIONS` +
   `ACTOR_TOOLS["planner"]` + `ACTOR_TOOLS["executor"]`), di-dispatch di
   `wth_ai/agents/supervisor_dispatch.py` (`_dispatch_oob_create`,
@@ -39,6 +40,8 @@ Alur tipikal:
 /oob new ssrf-url-param --ttl 30 → url http://127.0.0.1:<port>/c/<token>
 <kirim URL ke parameter/vektor>  → target memanggil balik; hit tercatat
 /oob hits <token>                → hit ditampilkan + disimpan sebagai [TX:...]
+/oob dns start                   → listener DNS (127.0.0.1:5353)
+<target resolve <token>.oob.local> → hit DNS tercatat (tanpa HTTP)
 ```
 
 ## 3. Keputusan desain (dan alasannya)
@@ -69,6 +72,12 @@ Alur tipikal:
 8. **Tanpa approval gate untuk `oob_create`.** Membuat token + listener
    loopback tidak menyentuh target apa pun; gate di sini hanya gesekan.
 9. **Deteksi wildcard via `ipaddress`, bukan literal.** URL display mengganti host wildcard (`0.0.0.0`/`::`) ke loopback tanpa menulis literal bind-address di kode — bandit tetap bersih tanpa `# nosec`.
+10. **DNS: selalu jawab, tanpa rekursi, token = label pertama.** Query apa pun
+    (termasuk token tak dikenal) dicatat dan dijawab dari data statis — resolver
+    pemanggil tidak boleh menggantung, dan jawaban berbeda akan jadi oracle.
+    Tidak ada forwarding: listener bukan resolver, jadi tidak bisa dipakai
+    amplifikasi. Default `127.0.0.1:5353` unprivileged; `:53` hanya lewat
+    argumen eksplisit operator.
 
 ## 4. Bukti verifikasi
 
@@ -87,8 +96,11 @@ hanya `127.0.0.1` port ephemeral, tanpa jaringan eksternal):
 10. `test_tool_registry_exposes_oob_tools` — registry + ACTOR_TOOLS.
 11. `test_slash_oob_command_is_routable_and_works` — `/oob` end-to-end via orchestrator.
 
-Suite penuh: **1333 passed / 0 failed** (3× berturut-turut), termasuk run
-dengan jaringan eksternal diblokir.
+`tests/test_oob_dns.py` — **10 test** (roundtrip encoder/parser, A & TXT
+selalu dijawab, token tak dikenal tetap dicatat, stop bersih, token dari label
+pertama, plus wiring service → tool agent → slash).
+
+Suite penuh: **1347 passed / 0 failed**.
 
 ### Catatan harness (penting untuk sesi berikutnya)
 
@@ -102,8 +114,10 @@ spawn, bukan regresi repo.
 
 ## 5. Batasan & sisa (jujur — anti-overclaim)
 
-- **Listener DNS belum ada.** MVP = HTTP. DNS callback butuh port 53/priv atau
-  proxy DNS — kandidat kerja terpisah.
+- **Listener DNS: SELESAI.** `wth_ai/oob/dns.py` — jawaban statis (A→127.0.0.1,
+  TXT penanda), token = label pertama qname (`<token>.oob.local`), bind default
+  `127.0.0.1:5353`, tanpa rekursi. Permukaan: `/oob dns start|stop` + tool
+  `oob_dns`. Bukti: 10 test di `tests/test_oob_dns.py`.
 - **Auto-wire executor SSRF: SELESAI.** `wth_ai/executor/vuln/ssrf.py` kini
   memanggil `_try_oob_callback()` yang memakai `get_oob_service()` bila listener
   hidup, dan mundur ke MCP lama bila tidak. Jaminan anti-regresi: saat listener
@@ -123,8 +137,10 @@ spawn, bukan regresi repo.
 wth_ai/oob/__init__.py      ekspor paket
 wth_ai/oob/store.py         OOBStore (token + interactions)
 wth_ai/oob/server.py        OOBCallbackServer (HTTP listener)
+wth_ai/oob/dns.py           DNSListener + parser/encoder DNS mini
 wth_ai/oob/service.py       OOBCallbackService + singleton + format + TX
 tests/test_oob_callback.py  11 test
+tests/test_oob_dns.py       10 test
 ```
 
 Titik wiring: `wth_ai/agents/tool_registry.py`,
