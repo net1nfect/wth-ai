@@ -113,6 +113,23 @@ def _default_commands() -> list[PlatformCommand]:
         PlatformCommand("/status", "/status", "Session status", "meta"),
         PlatformCommand("/doctor", "/doctor", "Health check", "meta"),
         PlatformCommand("/quit", "/quit", "Exit WTH-AI and stop active work", "meta", ("/exit",)),
+        # Command yang sudah lama ada di SlashRouter.handlers tapi TIDAK pernah
+        # didaftarkan di sini. Akibatnya: menu completion, panel /help, dan sweep
+        # otomatis (yang menyusuri registry) tidak pernah melihatnya -- `/usage`,
+        # `/next`, `/payloads`, `/autopilot`, `/eval act` lolos dari UAT pertama gua
+        # karena alasan ini. Registry adalah daftar tampilan, tapi kalau ia tidak
+        # lengkap, ketidakkonsistenan jadi senyap.
+        PlatformCommand("/usage", "/usage", "Token & biaya yang tercatat", "meta"),
+        PlatformCommand("/next", "/next", "Langkah uji berikutnya yang disusun AI", "hunt"),
+        PlatformCommand("/jobs", "/jobs [target]", "Job store: rekam jejak recon/executor", "meta"),
+        PlatformCommand("/payloads", "/payloads [id|gen <kelas> <tujuan>]", "Katalog payload (berbatas)", "hunt"),
+        PlatformCommand("/autopilot", "/autopilot [langkah]", "Jalankan langkah uji berbatas otonom", "hunt"),
+        PlatformCommand("/eval act", "/eval act", "Jalankan aksi self-improvement", "meta"),
+        PlatformCommand("/eval", "/eval [run|history|act]", "Pengukuran self-improvement", "meta"),
+        PlatformCommand("/research", "/research [search|fetch|notes] <q>", "Riset publik (bukan bukti target)", "intel"),
+        PlatformCommand("/computer", "/computer [detect|screenshot|windows|click|type]", "Kendali desktop", "tools"),
+        PlatformCommand("/scan", "/scan [target]", "Recon cepat satu perintah", "recon"),
+        PlatformCommand("/yolo", "/yolo", "Preset tanpa konfirmasi (scope tetap wajib)", "safety"),
         PlatformCommand("/stop", "/stop", "Stop agent (stay in session)", "meta"),
         PlatformCommand("/sessions", "/sessions", "List saved sessions", "session"),
         PlatformCommand("/new-session", "/new-session", "Start new session", "session"),
