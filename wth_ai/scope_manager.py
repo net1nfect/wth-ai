@@ -48,6 +48,24 @@ class ScopeManager:
             return (parsed.hostname or target).lower().rstrip(".")
         return target.split("/")[0].split(":")[0].lower().rstrip(".")
 
+    def _normalize_pattern(self, pattern: str) -> str:
+        """Buang skema/port/path dari POLA in-scope, wildcard dipertahankan.
+
+        Terukur dari UAT: `/target 127.0.0.1:34621` menyimpan pola mentah bertanda port,
+        sementara host yang diperiksa sudah dinormalisasi (port dibuang) -- sehingga host
+        itu TIDAK PERNAH cocok dengan scope-nya sendiri dan setiap aksi diblokir
+        ("Blocked: Host 127.0.0.1 tidak cocok dengan in-scope list"). Target lokal dan
+        staging dengan port adalah kasus normal, jadi ini bug, bukan salah operator.
+        """
+        text = (pattern or "").strip()
+        wildcard = text.startswith("*.")
+        if wildcard:
+            text = text[2:]
+        host = self._normalize_host(text)
+        if not host:
+            return (pattern or "").strip().lower()
+        return f"*.{host}" if wildcard else host
+
     def _host_matches_pattern(self, host: str, pattern: str) -> bool:
         host = host.lower()
         pattern = pattern.lower().strip()
@@ -64,12 +82,13 @@ class ScopeManager:
         host = self._normalize_host(target)
 
         for out in self.scope.out_of_scope:
-            if self._path_matches(target, out) or self._host_matches_pattern(host, out):
+            if self._path_matches(target, out) or self._host_matches_pattern(host, self._normalize_pattern(out)):
                 return False, f"Target explicitly out of scope: {out}"
 
         if self.scope.in_scope:
             for pattern in self.scope.in_scope:
-                if self._host_matches_pattern(host, pattern) or self._path_matches(target, pattern):
+                normalized = self._normalize_pattern(pattern)
+                if self._host_matches_pattern(host, normalized) or self._path_matches(target, pattern):
                     return True, f"Covered by in-scope pattern: {pattern}"
             return False, f"Host {host} tidak cocok dengan in-scope list"
 
