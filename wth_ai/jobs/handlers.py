@@ -259,7 +259,36 @@ def handler_autopilot(job: Any, ctx: Any) -> dict[str, Any]:
 
     config = WTHConfig.load()
     session_id = meta.get("session_id") or f"autopilot-{job.job_id}"
-    bridge = AgentTerminalBridge(config, PermissionManager(config), ScopeManager(), session_id)
+
+    # PermissionManager menerima MODE, bukan config. Versi pertama gua mengirim
+    # `PermissionManager(config)`, sehingga `mode` berisi objek config dan
+    # `mode_sufficient()` melempar "TypeError: unhashable type: 'WTHConfig'" -- SETIAP
+    # probe gagal dan hasilnya tampil sebagai status kosong (terukur di UAT CLI:
+    # langkah autopilot "dijalankan" tapi nol permintaan nyata sampai ke target).
+    # Mode diambil dari sesi tersimpan supaya job berjalan dengan izin yang sama
+    # seperti yang operator pakai, bukan default.
+    permission = PermissionManager()
+    saved_scope = None
+    try:
+        from wth_ai.session_store import SessionStore
+
+        saved_scope = SessionStore(config).load_latest()
+    except Exception:  # noqa: BLE001
+        saved_scope = None
+    if saved_scope is not None:
+        mode_value = getattr(saved_scope, "permission_mode", None)
+        if mode_value is not None:
+            try:
+                permission.set_mode(getattr(mode_value, "value", mode_value))
+            except Exception:  # noqa: BLE001
+                pass
+
+    # Scope bridge diisi SEBELUM bridge dibuat (bukan dimutasi sesudahnya): bridge
+    # memakai ScopeManager sendiri, dan tanpa target/in-scope di sana setiap probe
+    # berhenti di gate scope dengan status kosong.
+    scope_manager = ScopeManager()
+    scope_manager.set_scope(target=target, authorized=True, in_scope=[target])
+    bridge = AgentTerminalBridge(config, permission, scope_manager, session_id)
 
     state = SessionState()
     state.scope.target = target
