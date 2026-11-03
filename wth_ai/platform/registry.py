@@ -14,6 +14,41 @@ class PlatformCommand:
     aliases: tuple[str, ...] = ()
 
 
+#: Category order + one-line human description. The palette used to show bare
+#: category names ("meta", "hunt", ...) with a "N command" hint, so a new operator
+#: could not tell where to start or what a group was for. Order is the workflow
+#: order; the description explains the group. `START_HERE` is the recommended path
+#: surfaced on the palette's first level.
+CATEGORY_ORDER: tuple[str, ...] = (
+    "setup", "safety", "recon", "hunt", "intel", "tools", "skills", "subagents",
+    "mcp", "session", "meta", "platform",
+)
+
+CATEGORY_DESCRIPTIONS: dict[str, str] = {
+    "setup": "setel target, scope, permission, model",
+    "safety": "preset izin & batas operasi",
+    "recon": "petakan attack surface",
+    "hunt": "rencana → eksekusi → verifikasi → laporan",
+    "intel": "graph aset & riset publik",
+    "tools": "tool, browser, callback center, doctor",
+    "skills": "skill pack & aktivasi",
+    "subagents": "worker terspesialisasi",
+    "mcp": "server MCP eksternal",
+    "session": "simpan / lanjutkan / keluar",
+    "meta": "status, biaya, pengukuran",
+    "platform": "gateway, cron, memory, mode",
+}
+
+#: Recommended first-run path, shown at the top of the palette so "/" is never a
+#: dead-end of 60 near-identical rows.
+START_HERE: tuple[tuple[str, str], ...] = (
+    ("/target", "1. set target + otorisasi"),
+    ("/scope", "2. perjelas in/out of scope"),
+    ("/permission", "3. pilih mode izin"),
+    ("/recon", "4. petakan attack surface"),
+    ("/hunt", "5. jalankan engagement loop"),
+)
+
 SUBAGENT_SPECS: tuple[dict[str, str], ...] = (
     {"id": "recon", "desc": "Bounded reconnaissance"},
     {"id": "injection", "desc": "SQLi, CMD, SSTI analysis"},
@@ -44,6 +79,33 @@ class PlatformRegistry:
             names.extend(cmd.aliases)
         return sorted(set(names))
 
+    @staticmethod
+    def category_title(category: str) -> str:
+        """Nama pendek untuk kolom label palette & menu ("MCP", "Skills")."""
+        return {"mcp": "MCP"}.get(category or "", (category or "").title() or "Lainnya")
+
+    def category_label(self, category: str) -> str:
+        """Human label for a category: "recon · petakan attack surface"."""
+        desc = CATEGORY_DESCRIPTIONS.get(category, "")
+        return f"{category} · {desc}" if desc else category
+
+    def suggestions(self, text: str, limit: int = 5) -> list[str]:
+        """Closest command names for a mistyped/unknown `/command`.
+
+        Two cheap signals, strongest first: prefix, then substring, then
+        subsequence (`/rcn` -> `/recon`). Returns names only, ranked, so the
+        caller can render them as a short list rather than a wall of rows.
+        """
+        q = (text or "").strip().lstrip("/").lower()
+        if not q:
+            return []
+        names = [c.name for c in self.commands]
+        prefix = [n for n in names if n.lstrip("/").lower().startswith(q)]
+        substring = [n for n in names if q in n.lstrip("/").lower() and n not in prefix]
+        subseq = [n for n in names if _subsequence_local(q, n.lstrip("/").lower())
+                  and n not in prefix and n not in substring]
+        return (prefix + substring + subseq)[:limit]
+
     def search(self, query: str, limit: int = 20) -> list[PlatformCommand]:
         q = query.lower().lstrip("/")
         if not q:
@@ -65,14 +127,25 @@ class PlatformRegistry:
         return [n for n in self.all_slash_names() if n.startswith(token) and n != token][:15]
 
     def help_text(self, category: str | None = None, *, compact: bool = True) -> str:
+        """Palette (`compact`), satu kategori, atau daftar lengkap.
+
+        Kategori tak dikenal TIDAK lagi diam-diam menampilkan halaman kosong:
+        jatuh kembali ke palette + daftar kategori yang valid.
+        """
         if compact and not category:
             return self._help_compact()
+        present = {c.category for c in self.commands}
+        if category and category not in present:
+            order = {c: i for i, c in enumerate(CATEGORY_ORDER)}
+            valid = " · ".join(sorted(present, key=lambda c: order.get(c, 99)))
+            return self._help_compact() + f"\n\n(kategori `{category}` tidak ada — pilihan: {valid})"
         lines = ["# WTH-AI Slash Commands", ""]
-        cats = sorted({c.category for c in self.commands})
+        order = {c: i for i, c in enumerate(CATEGORY_ORDER)}
+        cats = sorted(present, key=lambda c: order.get(c, 99))
         for cat in cats:
             if category and cat != category:
                 continue
-            lines.append(f"## {cat.title()}")
+            lines.append(f"## {self.category_label(cat)}")
             for cmd in self.commands:
                 if cmd.category != cat:
                     continue
@@ -80,24 +153,38 @@ class PlatformRegistry:
                 lines.append(f"  usage: `{cmd.usage}`")
             lines.append("")
         lines.append("Natural language (no `/`) → supervisor chat.")
-        lines.append("`/help full` — daftar lengkap per command.")
+        lines.append("`/help full` — daftar lengkap · `/help <kategori>` — per kategori.")
         return "\n".join(lines)
 
     def _help_compact(self) -> str:
-        return "\n".join([
-            "WTH-AI — ketik `/help full` untuk detail per command",
+        """Palette alur-kerja: mulai di sini → kategori-kategori → tips.
+
+        Dulu ini daftar tetap berisi sebagian command; sekarang tiap kategori
+        menyebutkan JUMLAH command + deskripsi satu baris, dan blok "mulai di
+        sini" menjawab pertanyaan pertama operator baru ("harus ngapain dulu?").
+        """
+        by_cat: dict[str, list[str]] = {}
+        for cmd in self.commands:
+            by_cat.setdefault(cmd.category, []).append(cmd.name)
+        order = {c: i for i, c in enumerate(CATEGORY_ORDER)}
+
+        lines = [
+            f"WTH-AI · {len(self.commands)} command — `/help full` daftar lengkap · `/help <kategori>` per kategori",
             "",
-            "Setup     /target · /scope · /permission · /model · /provider · /ui · /config · /status",
-            "Recon     /recon · /recon plan · /recon quick · /recon watch · /graph",
-            "Hunt      /plan · /hunt · /execute · /verify · /report · /findings",
-            "Tools     /tools · /doctor · /browser · /tools install",
-            "Skills    /skills · /skill",
-            "MCP       /mcp list · /mcp status",
-            "Session   /new-session · /resume · /quit · /stop",
-            "",
-            "Permission: read_only · standard · elevated (alias active_test) · full_lab · unrestricted",
-            "Chat tanpa `/` → diskusi; recon/hunt pakai slash di atas.",
-        ])
+            "▶ MULAI DI SINI",
+        ]
+        lines += [f"   {cmd:<14} {step}" for cmd, step in START_HERE]
+        lines.append("")
+        for cat in sorted(by_cat, key=lambda c: order.get(c, 99)):
+            names = by_cat[cat]
+            label = CATEGORY_DESCRIPTIONS.get(cat, "")
+            head = f"{self.category_title(cat):<9} {label}".rstrip()
+            lines.append(f"{head}  ({len(names)})")
+            lines.append(f"   {' · '.join(names[:8])}" + (" …" if len(names) > 8 else ""))
+        lines.append("")
+        lines.append("Permission: read_only · standard · elevated (alias active_test) · full_lab · unrestricted")
+        lines.append("Chat tanpa `/` → diskusi; `/` di mode interaktif → menu; Esc membatalkan menu.")
+        return "\n".join(lines)
 
     def subagent_list_text(self) -> str:
         lines = ["# Subagents", ""]
@@ -105,6 +192,14 @@ class PlatformRegistry:
             lines.append(f"- **{spec['id']}** — {spec['desc']}")
         lines.append("\nRun: `/subagents run <id>`")
         return "\n".join(lines)
+
+
+def _subsequence_local(needle: str, haystack: str) -> bool:
+    """`needle` muncul di `haystack` berurutan (tidak harus berdampingan)."""
+    if not needle:
+        return False
+    it = iter(haystack)
+    return all(ch in it for ch in needle)
 
 
 def _default_commands() -> list[PlatformCommand]:

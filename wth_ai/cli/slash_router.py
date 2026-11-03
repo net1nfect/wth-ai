@@ -12,6 +12,38 @@ from wth_ai.platform.registry import get_platform_registry
 Handler = Callable[[list[str]], str]
 
 
+def _render_help(topic: str | None = None) -> str:
+    """Satu implementasi untuk semua permukaan `/help` (router + handler)."""
+    registry = get_platform_registry()
+    t = (topic or "").strip().lower()
+    if not t:
+        return registry.help_text(compact=True)
+    if t in {"full", "all", "verbose"}:
+        return registry.help_text(compact=False)
+    return registry.help_text(t, compact=False)
+
+
+def _unknown_command_message(cmd: str) -> str:
+    """Pesan untuk command tak dikenal, dengan saran terdekat bila ada.
+
+    Sebelumnya selalu "Unknown command. Try /help or Ctrl+P" tanpa satu pun
+    petunjuk command yang MIRIP, padahal salah ketik (`/recon` -> `/rcon`) adalah
+    kasus paling umum. Sekarang: daftar pendek saran + arah ke /help.
+    """
+    try:
+        from wth_ai.platform.registry import get_platform_registry
+
+        picks = get_platform_registry().suggestions(cmd, limit=5)
+    except Exception:  # noqa: BLE001 - pesan error tidak boleh ikut error
+        picks = []
+    if picks:
+        lines = [f"Command `{cmd}` tidak dikenal. Mungkin maksudmu:"]
+        lines += [f"  {p}" for p in picks]
+        lines.append("Ketik `/help` untuk daftar lengkap, atau `/` untuk menu (mode interaktif).")
+        return "\n".join(lines)
+    return f"Command `{cmd}` tidak dikenal. Ketik `/help` untuk daftar lengkap, atau `/` untuk menu."
+
+
 @dataclass
 class SlashRouter:
     """Route `/command` input to orchestrator handlers."""
@@ -45,15 +77,32 @@ class SlashRouter:
         cmd, args = self.parse(text)
         if not cmd:
             return None
+        # Bare `/` (atau `/` + spasi): bukan command. Di REPL interaktif ini sudah
+        # ditangkap jadi menu; di mode plain/gateway jangan jadi "Unknown command `/`"
+        # yang bikin bingung -- arahkan ke daftar, bukan error.
+        if cmd == "/":
+            return self.help_text()
         handler = self.handlers.get(cmd)
         if handler:
             return handler(args)
-        return f"Unknown command `{cmd}`. Try `/help` or Ctrl+P palette."
+        return _unknown_command_message(cmd)
 
     def help_text(self, topic: str | None = None) -> str:
-        compact = topic not in {"full", "all", "verbose"}
-        cat = None if compact or topic in {None, "full", "all", "verbose"} else topic
-        return self.registry.help_text(cat, compact=compact)
+        """`/help` palette · `/help full` semua · `/help <kategori>` kategori itu.
+
+        Bug lama (ditemukan saat UX pass): cabang `cat` di sini TIDAK PERNAH
+        reachable -- `compact` selalu True untuk topic selain full/all/verbose,
+        dan `cat` di-nol-kan begitu `compact` True. Jadi `/help setup` diam-diam
+        menampilkan compact biasa. Sekarang topic non-kata-kunci diperlakukan
+        sebagai nama kategori (registry memberi fallback + daftar valid bila
+        kategori tidak ada).
+        """
+        t = (topic or "").strip().lower()
+        if not t:
+            return self.registry.help_text(compact=True)
+        if t in {"full", "all", "verbose"}:
+            return self.registry.help_text(compact=False)
+        return self.registry.help_text(t, compact=False)
 
     def complete(self, partial: str) -> list[str]:
         return self.registry.complete(partial)
@@ -135,15 +184,11 @@ def build_slash_router(orch: Any) -> SlashRouter:
         return "\n".join(f"- {s.get('name', s)}" for s in orch.config.mcp.servers) or "No MCP servers."
 
     def _help(args: list[str]) -> str:
-        # WU-118 (PRD-002 FR#1): logika compact/topic yang sama persis dengan
-        # SlashRouter.help_text() instance method -- sebelumnya orchestrator.
-        # handle_input()'s literal block punya logika ini (lebih pintar dari
-        # handler ini yang lama, yang cuma teruskan args[0] mentah), dua
-        # implementasi /help berbeda hidup berdampingan tanpa sinkron.
-        topic = args[0].strip().lower() if args else None
-        compact = topic not in {"full", "all", "verbose"}
-        cat = None if compact or topic in {None, "full", "all", "verbose"} else topic
-        return get_platform_registry().help_text(cat, compact=compact)
+        # UX pass: logika topic dipusatkan di satu fungsi (sebelumnya tiga salinan
+        # dengan bug yang sama -- `/help <kategori>` selalu jatuh ke compact).
+        from wth_ai.cli.slash_router import _render_help
+
+        return _render_help(args[0] if args else None)
 
     def _status(_args: list[str]) -> str:
         return orch._status_summary("WTH-AI Status")

@@ -408,6 +408,11 @@ _MEASURED_ARG_LEAVES = (
 
 def _leaf(command: str, verb: str):
     for category in build_command_menu():
+        if category.label.startswith("\u25b6"):
+            # Shortcut "mulai di sini" (UX pass): jalan pintas ke command populer,
+            # BUKAN definisi command-nya -- anak-anaknya leaf dengan action
+            # langsung dan tanpa subcommand. Pencarian definisi harus melewatinya.
+            continue
         for cmd in category.children:
             if cmd.label == command:
                 return next((c for c in cmd.children if c.label == verb), None)
