@@ -29,26 +29,39 @@ class Skill:
         return text[:max_chars]
 
 
+DEFAULT_SOURCES: tuple[str, ...] = ("openclaw", "local", "wth")
+
+
 @dataclass
 class SkillRegistry:
-    """Index skills from multiple directories."""
+    """Index skills from multiple directories.
+
+    ``sources`` memilih direktori mana yang dipindai. Default historis
+    (``openclaw``, ``local``, ``wth``) tidak berubah; test dapat mempersempitnya
+    supaya hasil tidak bergantung pada isi ``$WTH_HOME/skills`` mesin.
+    """
 
     openclaw_path: Path = field(default_factory=lambda: Path.home() / ".openclaw/workspace/skills")
     local_path: Path = field(default_factory=lambda: Path("skills"))
     skills: dict[str, Skill] = field(default_factory=dict)
+    sources: tuple[str, ...] = DEFAULT_SOURCES
 
     def discover(self) -> int:
         self.skills.clear()
         count = 0
-        sources = [("openclaw", self.openclaw_path), ("local", self.local_path)]
+        candidates: dict[str, Path] = {
+            "openclaw": self.openclaw_path,
+            "local": self.local_path,
+        }
         # Skill otomatis hidup di $WTH_HOME/skills (ditulis `skills/autowrite.py`).
         # Tanpa dimasukkan ke sini, skill hasil self-improvement tidak pernah terbaca.
         try:
             from wth_ai.workspace import wth_home
 
-            sources.append(("wth", wth_home() / "skills"))
+            candidates["wth"] = wth_home() / "skills"
         except Exception:  # noqa: BLE001
             pass
+        sources = [(name, candidates[name]) for name in self.sources if name in candidates]
         for source, base in sources:
             if not base.exists():
                 continue

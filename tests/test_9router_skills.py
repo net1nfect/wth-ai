@@ -32,7 +32,7 @@ def test_ninerouter_skill_ids_count():
 
 
 def test_discover_all_9router_skills(skills_dir: Path):
-    reg = SkillRegistry(local_path=skills_dir, openclaw_path=Path("/nonexistent"))
+    reg = SkillRegistry(local_path=skills_dir, openclaw_path=Path("/nonexistent"), sources=("local",))
     count = reg.discover()
     assert count == 8
     for skill_id in NINEROUTER_SKILL_IDS:
@@ -43,7 +43,7 @@ def test_discover_all_9router_skills(skills_dir: Path):
 
 
 def test_9router_entry_skill_content(skills_dir: Path):
-    reg = SkillRegistry(local_path=skills_dir, openclaw_path=Path("/nonexistent"))
+    reg = SkillRegistry(local_path=skills_dir, openclaw_path=Path("/nonexistent"), sources=("local",))
     reg.discover()
     entry = reg.get("9router")
     assert entry is not None
@@ -55,7 +55,7 @@ def test_9router_entry_skill_content(skills_dir: Path):
 def test_skills_doctor_reports_9router(skills_dir: Path):
     cfg = WTHConfig()
     cfg.skills.local_path = skills_dir
-    reg = SkillRegistry(local_path=skills_dir, openclaw_path=Path("/nonexistent"))
+    reg = SkillRegistry(local_path=skills_dir, openclaw_path=Path("/nonexistent"), sources=("local",))
     hub = SkillHub(cfg, reg)
     out = hub.doctor()
     assert "9router pack: 8/8" in out
@@ -64,7 +64,7 @@ def test_skills_doctor_reports_9router(skills_dir: Path):
 def test_sync_9router_skips_when_present(skills_dir: Path):
     cfg = WTHConfig()
     cfg.skills.local_path = skills_dir
-    reg = SkillRegistry(local_path=skills_dir, openclaw_path=Path("/nonexistent"))
+    reg = SkillRegistry(local_path=skills_dir, openclaw_path=Path("/nonexistent"), sources=("local",))
     hub = SkillHub(cfg, reg)
     out = hub.sync_9router()
     assert "Skipped" in out
@@ -72,7 +72,7 @@ def test_sync_9router_skips_when_present(skills_dir: Path):
 
 
 def test_skills_search_9router(skills_dir: Path):
-    reg = SkillRegistry(local_path=skills_dir, openclaw_path=Path("/nonexistent"))
+    reg = SkillRegistry(local_path=skills_dir, openclaw_path=Path("/nonexistent"), sources=("local",))
     reg.discover()
     hits = reg.search("9router", limit=8)
     ids = {s.id for s in hits}
