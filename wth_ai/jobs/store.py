@@ -193,9 +193,70 @@ class JobStore:
 
     # --- queue helpers ---
 
+    # Priority ordering expressed in SQL so the whole table is considered, not
+    # an in-Python sort over an already-truncated window.
+    _PRIORITY_ORDER_SQL = (
+        "CASE priority WHEN 'high' THEN 0 WHEN 'low' THEN 2 ELSE 1 END"
+    )
+
     def next_queued(self) -> Job | None:
-        jobs = self.list_jobs(status="queued", limit=1000)
-        if not jobs:
+        """Read-only preview of the next queued job (does NOT claim it)."""
+        with self._conn() as conn:
+            row = conn.execute(
+                f"SELECT job_id FROM jobs WHERE status = 'queued' "
+                f"ORDER BY {self._PRIORITY_ORDER_SQL}, created_at ASC LIMIT 1"
+            ).fetchone()
+        return self.get_job(row["job_id"]) if row else None
+
+    def claim_next_queued(self) -> Job | None:
+        """Atomically claim the highest-priority, oldest queued job.
+
+        Two defects fixed together:
+
+        - **Atomicity.** `JobQueue.dequeue()` used to run `next_queued()`
+          (a SELECT) and then a SEPARATE `update_status(...)` UPDATE keyed only
+          on `job_id`, with no status predicate. Two workers sharing a store
+          could both see the same `queued` row before either write landed, and
+          both proceeded to execute it (verified: the same job id returned
+          twice and run twice). The claim is now one IMMEDIATE transaction whose
+          UPDATE carries `WHERE status = 'queued'` plus a rowcount check, so
+          exactly one caller can win.
+
+        - **FIFO leak.** `next_queued()` read `list_jobs(status="queued",
+          limit=1000)` -- the 1000 NEWEST rows by `created_at DESC` -- and only
+          then sorted by priority/age. With a backlog over 1000 jobs the oldest
+          queued job fell outside that window and could not run until the queue
+          drained below it. Ordering now happens in SQL over the whole table.
+        """
+        now = _now()
+        self.db_path.parent.mkdir(parents=True, exist_ok=True)
+        # isolation_level=None => autocommit; the transaction is managed
+        # explicitly below so BEGIN IMMEDIATE actually takes a write lock.
+        conn = sqlite3.connect(self.db_path, timeout=30, isolation_level=None)
+        conn.row_factory = sqlite3.Row
+        job_id: str | None = None
+        try:
+            conn.execute("BEGIN IMMEDIATE")
+            row = conn.execute(
+                f"SELECT job_id FROM jobs WHERE status = 'queued' "
+                f"ORDER BY {self._PRIORITY_ORDER_SQL}, created_at ASC LIMIT 1"
+            ).fetchone()
+            if row is not None:
+                cur = conn.execute(
+                    "UPDATE jobs SET status = 'running', "
+                    "started_at = COALESCE(started_at, ?), updated_at = ? "
+                    "WHERE job_id = ? AND status = 'queued'",
+                    (now, now, row["job_id"]),
+                )
+                if cur.rowcount == 1:
+                    job_id = row["job_id"]
+            conn.execute("COMMIT")
+        except sqlite3.Error:
+            try:
+                conn.execute("ROLLBACK")
+            except sqlite3.Error:
+                pass
             return None
-        jobs.sort(key=lambda j: (PRIORITY_RANK.get(j.priority, 1), j.created_at))
-        return jobs[0]
+        finally:
+            conn.close()
+        return self.get_job(job_id) if job_id else None

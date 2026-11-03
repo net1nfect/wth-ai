@@ -10,19 +10,31 @@ from wth_ai.models import AttackSurface, utc_now
 
 
 class EngagementMemory:
-    """Persistent engagement knowledge beyond flat SessionState."""
+    """Persistent engagement knowledge beyond flat SessionState.
 
-    def __init__(self, session_id: str, base_dir: Path | None = None) -> None:
+    WU-113 (ADR-004): `assets`/`routes` genuinely overlap with `AssetGraph`
+    (the actual duplication ADR-004 calls out for merging). `asset_graph`
+    is an optional post-construction reference (see orchestrator.py --
+    `AssetGraph` is constructed AFTER `EngagementMemory` in `__init__`
+    ordering, so it can't be a required constructor arg without reordering
+    unrelated code); when wired, `context_block()` auto-syncs from it first
+    so callers no longer need to remember to call `sync_from_graph()`
+    themselves for the data to be fresh. `controllers`/`middleware`/
+    `trust_boundaries` REMOVED here -- verified dead via full-codebase grep
+    before removal: initialized, (de)serialized, but never populated by
+    ANY method (`update_from_recon`/`sync_from_graph`/`update_from_executor`
+    never touch them) and never read outside this file either.
+    """
+
+    def __init__(self, session_id: str, base_dir: Path | None = None, *, asset_graph: Any = None) -> None:
         self.session_id = session_id
         home = base_dir or Path("data/engagements")
         self.path = home / session_id / "memory.json"
         self.path.parent.mkdir(parents=True, exist_ok=True)
+        self.asset_graph = asset_graph
         self.assets: list[str] = []
         self.routes: list[dict[str, Any]] = []
-        self.controllers: list[str] = []
-        self.middleware: list[str] = []
         self.input_surfaces: list[dict[str, Any]] = []
-        self.trust_boundaries: list[str] = []
         self.rejected_hypotheses: list[dict[str, Any]] = []
         self.evidence_gaps: list[dict[str, Any]] = []
         self.iteration: int = 0
@@ -35,10 +47,7 @@ class EngagementMemory:
         data = json.loads(self.path.read_text(encoding="utf-8"))
         self.assets = data.get("assets", [])
         self.routes = data.get("routes", [])
-        self.controllers = data.get("controllers", [])
-        self.middleware = data.get("middleware", [])
         self.input_surfaces = data.get("input_surfaces", [])
-        self.trust_boundaries = data.get("trust_boundaries", [])
         self.rejected_hypotheses = data.get("rejected_hypotheses", [])
         self.evidence_gaps = data.get("evidence_gaps", [])
         self.iteration = data.get("iteration", 0)
@@ -53,10 +62,7 @@ class EngagementMemory:
             "updated_at": utc_now(),
             "assets": self.assets,
             "routes": self.routes,
-            "controllers": self.controllers,
-            "middleware": self.middleware,
             "input_surfaces": self.input_surfaces,
-            "trust_boundaries": self.trust_boundaries,
             "rejected_hypotheses": self.rejected_hypotheses,
             "evidence_gaps": self.evidence_gaps,
             "iteration": self.iteration,
@@ -87,7 +93,16 @@ class EngagementMemory:
             if node.type in (NodeType.ENDPOINT, NodeType.HOST):
                 routes.append({"path": node.label, "type": node.type.value})
         self.assets = list(dict.fromkeys(self.assets + labels[:100]))
-        self.routes.extend(routes[:50])
+        # WU-113: dedupe by path -- plain extend() previously accumulated a
+        # duplicate entry on EVERY repeated sync_from_graph() call (already
+        # live pre-existing bug across multiple /hunt invocations in one
+        # session; made auto-called from context_block() below, so fixing
+        # it here is a prerequisite for that being safe to call repeatedly).
+        existing_paths = {r["path"] for r in self.routes}
+        for r in routes[:50]:
+            if r["path"] not in existing_paths:
+                self.routes.append(r)
+                existing_paths.add(r["path"])
         self.save()
 
     def update_from_executor(self, result: dict[str, Any]) -> None:
@@ -105,6 +120,13 @@ class EngagementMemory:
         self.save()
 
     def context_block(self) -> str:
+        # WU-113 (ADR-004): auto-sync from asset_graph when wired, so
+        # assets/routes are always fresh relative to the graph without every
+        # caller needing to remember to call sync_from_graph() first --
+        # this is the actual "merge" in spirit (EngagementMemory stops being
+        # a second, independently-maintainable copy of graph data).
+        if self.asset_graph is not None:
+            self.sync_from_graph(self.asset_graph)
         parts = [
             f"ITERATION: {self.iteration}",
             f"TECH_PROFILE: {self.tech_profile}",

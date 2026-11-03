@@ -69,6 +69,18 @@ class AgentToolLoop:
         transcripts: list[str] = []
 
         for iteration in range(self.max_iters):
+            # WU-106: interrupt-check BEFORE the (potentially slow) LLM call
+            # -- self.supervisor_ctx.stopped was write-only before this WU
+            # (SupervisorAgent.stop()/`/stop` set it, nothing ever read it).
+            # Guarded by `is not None`: non-supervisor loops (e.g.
+            # ExecutorAgent._execute_with_tools()) don't pass supervisor_ctx
+            # at all -- no stop mechanism wired for those yet, unaffected.
+            if self.supervisor_ctx is not None and self.supervisor_ctx.stopped:
+                gr = self.grounding.validate_claims("Stopped by user (/stop)", transcript_ids=transcripts)
+                return {
+                    "content": gr.text, "transcripts": transcripts,
+                    "grounded": gr.grounded, "violations": ["stopped_by_user"],
+                }
             role = "planner" if actor == "supervisor" else actor
             if role not in {"planner", "executor", "verifier", "supervisor", "recon", "code", "reporter", "fallback"}:
                 role = "planner"

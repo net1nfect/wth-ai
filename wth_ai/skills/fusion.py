@@ -128,5 +128,5 @@ class SkillFusionEngine:
     def build_context(self, user_input: str, **kwargs: Any) -> str:
         return self.fuse(user_input, **kwargs).to_context()
 
-    def detect_intent(self, user_input: str) -> str:
-        return self.router.detect_intent(user_input)
+    def detect_intent(self, user_input: str, *, session_state: Any = None) -> str:
+        return self.router.detect_intent(user_input, session_state=session_state)

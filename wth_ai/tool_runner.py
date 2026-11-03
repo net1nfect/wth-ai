@@ -5,12 +5,15 @@ from __future__ import annotations
 import re
 import subprocess
 import time
-from typing import Any
+from typing import Any, TYPE_CHECKING
 
 from wth_ai.config import WTHConfig
 from wth_ai.models import ExecutorResult, ExecutorTask, PermissionMode
 from wth_ai.permission_manager import PermissionManager
 from wth_ai.scope_manager import ScopeManager
+
+if TYPE_CHECKING:
+    from wth_ai.evidence.vault import EvidenceVault
 
 
 class ToolRunner:
@@ -25,6 +28,10 @@ class ToolRunner:
         self.config = config
         self.permission = permission
         self.scope = scope
+        # WU-117 (PRD-009): set post-construction by callers (orchestrator.py,
+        # jobs/orchestrator_bridge.py) -- not a constructor param because both
+        # callers build EvidenceVault AFTER ToolRunner in their init order.
+        self.evidence_vault: "EvidenceVault | None" = None
 
     def execute_task(
         self,
@@ -73,7 +80,11 @@ class ToolRunner:
             command = plan.get("command", "").strip()
             if not command:
                 continue
-            check = self.permission.check_command(command, required_mode=task.permission_required)
+            # P0 exit-review fix (HIGH): thread `approved` -- lihat catatan
+            # sama di terminal/bridge.py::run_shell().
+            check = self.permission.check_command(
+                command, required_mode=task.permission_required, approved=approved,
+            )
             if check["risk"] in {"high", "critical"}:
                 max_risk = check["risk"]
             if not check["allowed"]:
@@ -107,6 +118,29 @@ class ToolRunner:
             if err:
                 errors.append(self.scope.redact_secrets(err[:5000]))
             observations.append(f"Exit code {code} for: {command.split()[0] if command else 'cmd'}")
+
+            # WU-117 (PRD-009): stop_condition dead field sebelumnya (LLM
+            # tetap diminta mengisi tiap plan, tapi tidak pernah dibaca kode
+            # manapun untuk keputusan). Wiring: simpan pair request/response
+            # ke evidence_vault tiap command (sebelumnya TIDAK PERNAH
+            # tersimpan dari jalur ToolRunner ini sama sekali -- gap
+            # tersendiri, sekaligus tertutup), lalu kalau stop_condition
+            # diisi DAN evidence_schema task sudah terpenuhi, hentikan sisa
+            # command_plan lebih awal alih-alih tetap menjalankan semuanya.
+            if self.evidence_vault is not None:
+                self.evidence_vault.store(
+                    finding_id=task.id,
+                    request={"command": command},
+                    response={"stdout": (output or "")[:2000], "stderr": (err or "")[:2000], "exit_code": code},
+                    evidence_schema=task.evidence_schema,
+                )
+                if task.stop_condition and task.evidence_schema:
+                    satisfied, _missing = self.evidence_vault.validate_schema(task.id, task.evidence_schema)
+                    if satisfied:
+                        observations.append(f"stop_condition met early: {task.stop_condition}")
+                        time.sleep(1.0 / max(self.scope.scope.rate_limit_rps, 0.1))
+                        break
+
             time.sleep(1.0 / max(self.scope.scope.rate_limit_rps, 0.1))
 
         status = "success" if not errors else "failed"

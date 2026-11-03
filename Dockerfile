@@ -26,7 +26,7 @@ USER wth
 
 ENV WTH_HOME=/data/wth-ai
 ENV PYTHONUNBUFFERED=1
-ENV WTH_UNRESTRICTED=1
+ENV WTH_UNRESTRICTED=0
 
 ENTRYPOINT ["/app/docker/entrypoint.sh"]
 CMD ["wth-ai", "worker", "run", "--no-drain"]

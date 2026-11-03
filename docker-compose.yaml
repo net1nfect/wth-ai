@@ -5,7 +5,7 @@ services:
     env_file: .env
     environment:
       WTH_HOME: /data/wth-ai
-      WTH_UNRESTRICTED: "1"
+      WTH_UNRESTRICTED: "0"
       ROUTER9_BASE_URL: http://9router:20128/v1
       OLLAMA_BASE_URL: http://ollama:11434
     volumes:
@@ -20,7 +20,7 @@ services:
     env_file: .env
     environment:
       WTH_HOME: /data/wth-ai
-      WTH_UNRESTRICTED: "1"
+      WTH_UNRESTRICTED: "0"
       ROUTER9_BASE_URL: http://9router:20128/v1
     volumes:
       - wth-home:/data/wth-ai

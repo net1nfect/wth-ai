@@ -5,6 +5,7 @@ from __future__ import annotations
 import re
 from typing import Any
 
+from wth_ai.models import AssessmentPhase
 from wth_ai.skills.registry import Skill, SkillRegistry
 
 INTENT_SKILL_MAP: dict[str, list[str]] = {
@@ -84,10 +85,19 @@ class SkillRouter:
         parts.append("=== END SKILLS ===")
         return "\n".join(parts)
 
-    def detect_intent(self, user_input: str) -> str:
+    def detect_intent(self, user_input: str, *, session_state: Any = None) -> str:
         text = user_input.strip().lower()
         if text.startswith("/"):
             return "command"
+        # WU-119 (PRD-002): session-aware fallback -- perbaikan SATU kondisi,
+        # BUKAN classifier baru (router multi-kategori di atas ReAct yang
+        # sudah adaptif ditolak eksplisit, lihat WTH-AI-MASTER-ARCHITECTURE.md
+        # §CLI). Follow-up percakapan tanpa keyword assess_patterns eksplisit
+        # tapi dalam sesi dengan target+phase aktif -> "assess", bukan default
+        # lama "chat" (yang sebelumnya membuat user diam-diam kehilangan akses
+        # tool di tengah sesi hunt aktif -- ChatAgent tidak tool-calling).
+        if session_state and session_state.scope.target and session_state.current_phase != AssessmentPhase.INTAKE:
+            return "assess"
         chat_patterns = [
             r"^(hi|halo|hallo|hello|hey|hai)\b",
             r"^(apa|what|bagaimana|how|bisa|can you|tolong|help)\b",

@@ -7,9 +7,11 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from wth_ai.agents import BaseLLMAgent, load_prompt
+from wth_ai.agents import BaseLLMAgent, build_messages, load_prompt
 from wth_ai.config import WTHConfig
 from wth_ai.findings_db import FindingsDB
+from wth_ai.llm.errors import LLMError
+from wth_ai.llm.model_io import ModelRequest
 from wth_ai.models import SessionState
 from wth_ai.llm.router import LLMProviderRouter
 
@@ -41,17 +43,19 @@ class ReportBuilderAgent(BaseLLMAgent):
         if poc_blocks:
             prompt += f"\n\nInclude these PoC blocks in the report:\n{poc_blocks}"
         if self.client.available():
-            _, backup = self.client.model_for_role("reporter")
-            primary, _ = self.client.model_for_role("reporter")
-            raw, _ = self._call(
-                primary,
-                backup,
-                self.system_prompt,
-                [],
-                prompt,
+            # WU-109 (PRD-013) pilot migration: generate() (canonical
+            # ModelRequest/ModelResponse) menggantikan pemanggilan _call lama
+            # di sini -- satu-satunya agent yang sudah role= eksplisit &
+            # bersih, risiko migrasi terendah (lihat scope decision WU-109
+            # di WORK-UNITS.md).
+            response = self.client.generate(ModelRequest(
                 role="reporter",
-            )
-            return raw
+                messages=build_messages(self.system_prompt, [], prompt),
+            ))
+            if response.status != "success":
+                msg = response.error.get("message") if response.error else "report generation failed"
+                raise LLMError(msg)
+            return response.content
         import os
         if os.environ.get("WTH_TEST_MODE") == "1":
             return self._offline_report(state, findings_db)

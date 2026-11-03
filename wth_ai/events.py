@@ -37,6 +37,21 @@ EVENT_TYPES: tuple[str, ...] = (
     "recon.change_detected",
     "recon.report_ready",
     "recon.completed",
+    # WU-105/WU-006: LoopStateMachine._emit_invalid() has called
+    # bus.emit("invalid_state_transition", ...) since WU-006, but this type
+    # was never added here -- make_event() raised ValueError on EVERY call,
+    # silently swallowed by _emit_invalid()'s own try/except (added
+    # defensively so a broken bus never breaks the state machine itself),
+    # so the event never once reached a real subscriber. Found while
+    # wiring AuditLogSink for this WU.
+    "invalid_state_transition",
+    # WU-104: emitted by ExecuteRpcServer for EVERY code-execution decision
+    # (blocked or run) on the live gateway UDS socket -- gives the arbitrary-
+    # code-exec surface a durable audit trail via EventBus + AuditLogSink
+    # (security invariant #10: audit for risk >= MEDIUM). MUST be registered
+    # here or make_event() raises ValueError and the emit is silently
+    # swallowed (exact bug the invalid_state_transition entry above records).
+    "rpc.code_execution",
 )
 
 # Default severity per event type (info unless noted).
@@ -49,6 +64,8 @@ _DEFAULT_SEVERITY: dict[str, str] = {
     "job.failed": "error",
     "finding.high_priority": "warning",
     "integration.error": "error",
+    "invalid_state_transition": "warning",
+    "rpc.code_execution": "warning",
 }
 
 # Maps event type -> notification-rule key used in integration config.

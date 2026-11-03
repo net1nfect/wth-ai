@@ -2,10 +2,18 @@
 
 from __future__ import annotations
 
+import os
 from typing import Any
 from uuid import uuid4
 
-from wth_ai.models import Finding, FindingState, Hypothesis, utc_now
+from wth_ai.models import (
+    Finding,
+    FindingState,
+    Hypothesis,
+    InvalidFindingStateTransitionError,
+    finding_state_transition_allowed,
+    utc_now,
+)
 
 
 class FindingsDB:
@@ -59,6 +67,13 @@ class FindingsDB:
         finding = self.findings[finding_id]
         if isinstance(state, str):
             state = FindingState(state) if state in {s.value for s in FindingState} else finding.state
+        if not finding_state_transition_allowed(finding.state, state):
+            if os.environ.get("WTH_TEST_MODE") == "1" or os.environ.get("WTH_STRICT_SM") == "1":
+                raise InvalidFindingStateTransitionError(
+                    f"Illegal finding state transition for {finding_id}: "
+                    f"{finding.state.value} -> {state.value}"
+                )
+            return finding  # clamp: unchanged, not corrupted, not pretended-successful
         finding.state = state
         finding.updated_at = utc_now()
         for key, value in kwargs.items():

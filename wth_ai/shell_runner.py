@@ -6,6 +6,7 @@ import os
 import re
 import shlex
 import subprocess
+import threading
 from typing import Callable
 
 MAX_OUTPUT_BYTES = 512_000
@@ -59,13 +60,39 @@ def run_argv(
                 cwd=cwd,
                 env=base_env,
             )
-            stdout_lines: list[str] = []
-            assert proc.stdout is not None
-            for line in proc.stdout:
-                line = line.rstrip("\n")
-                stdout_lines.append(line)
-                on_line(line)
-            proc.wait(timeout=timeout)
+            # WU-108: `for line in proc.stdout:` blocks reading until the
+            # pipe hits EOF (process exits) -- it has NO timeout of its own,
+            # so `timeout` was completely ineffective for a hung process that
+            # never closes stdout (proc.wait(timeout=...) below is only ever
+            # reached AFTER that loop already finished, i.e. after the
+            # process already exited). A watchdog timer kills the process
+            # after `timeout` seconds regardless of what the blocking read
+            # is doing -- killing it closes the pipe, which makes the `for`
+            # loop see EOF and return promptly instead of hanging forever.
+            timed_out = threading.Event()
+
+            def _kill_on_timeout() -> None:
+                timed_out.set()
+                try:
+                    proc.kill()
+                except OSError:
+                    pass
+
+            watchdog = threading.Timer(timeout, _kill_on_timeout)
+            watchdog.daemon = True
+            watchdog.start()
+            try:
+                stdout_lines: list[str] = []
+                assert proc.stdout is not None
+                for line in proc.stdout:
+                    line = line.rstrip("\n")
+                    stdout_lines.append(line)
+                    on_line(line)
+                proc.wait(timeout=timeout)
+            finally:
+                watchdog.cancel()
+            if timed_out.is_set():
+                return "", f"timeout after {timeout}s", 124
             stderr = (proc.stderr.read() if proc.stderr else "") or ""
             stdout = redact_output("\n".join(stdout_lines))[:max_bytes]
             return stdout, redact_output(stderr)[:max_bytes], proc.returncode or 0

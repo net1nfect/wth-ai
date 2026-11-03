@@ -138,8 +138,11 @@ def autopilot_group(target: str | None, steps: int, cycles: int, dry_run: bool, 
         from wth_ai.cron.store import CronStore
 
         store = CronStore()
-        entry = store.add(target=chosen, schedule=f"every {every}",
-                          job_type="autopilot", profile="recon-only")
+        try:
+            entry = store.add(target=chosen, schedule=f"every {every}",
+                              job_type="autopilot", profile="recon-only")
+        except ValueError as exc:
+            raise click.ClickException(str(exc))
         click.echo(f"Cron autopilot terdaftar: {entry.cron_id} · {entry.schedule} · target {chosen}")
         click.echo("Ticker akan menjalankan autopilot berbatas sesuai jadwal. "
                    "Gerbang destruktif tetap dibaca dari scope saat job berjalan.")
@@ -1039,9 +1042,10 @@ def cron_list() -> None:
         return
     for e in entries:
         flag = "on" if e.enabled else "off"
+        why = f" (disabled: {e.meta['disabled_reason']})" if not e.enabled and e.meta.get("disabled_reason") else ""
         click.echo(
             f"- {e.cron_id} [{flag}] {e.job_type} {e.target} "
-            f"schedule={e.schedule} profile={e.profile} next={e.next_run_at or '-'}"
+            f"schedule={e.schedule} profile={e.profile} next={e.next_run_at or '-'}{why}"
         )
 
 
@@ -1054,7 +1058,10 @@ def cron_add(target: str, schedule: str, job_type: str, profile: str) -> None:
     """Add a cron entry."""
     from wth_ai.cron.store import CronStore
 
-    entry = CronStore().add(job_type, target, schedule, profile=profile)
+    try:
+        entry = CronStore().add(job_type, target, schedule, profile=profile)
+    except ValueError as exc:
+        raise click.ClickException(str(exc))
     click.echo(f"Added cron {entry.cron_id}: {job_type} {target} ({schedule})")
 
 
@@ -1247,6 +1254,13 @@ def _run_recon_job(
 ) -> None:
     """Create a recon job and drain the worker (never bypasses the job system)."""
     from wth_ai.cli.recon_commands import format_job_summary, run_recon_job, sync_graph_after_recon
+    from wth_ai.recon.planner import is_valid_recon_target
+
+    ok, why = is_valid_recon_target(target)
+    if not ok:
+        click.echo(f"Ditolak: {why}.")
+        click.echo("  Contoh: wth recon run example.com --profile recon-only")
+        return
 
     config = _load_config(config_path)
     mgr = _job_manager(config_path)
@@ -1259,9 +1273,13 @@ def _run_recon_job(
     except Exception:
         pass
     click.echo(f"Created recon job for {target} (profile={profile}) — running...")
-    j, done = run_recon_job(
-        mgr, target, profile, realtime=realtime, session_id=session_id,
-    )
+    try:
+        j, done = run_recon_job(
+            mgr, target, profile, realtime=realtime, session_id=session_id,
+        )
+    except ValueError as exc:
+        click.echo(f"Ditolak: {exc}.")
+        return
     if j.status == "failed":
         click.echo(f"Rejected: {j.error} (job {j.job_id})")
         return

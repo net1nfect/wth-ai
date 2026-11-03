@@ -67,10 +67,17 @@ class WTHDiscordBot:
             text = self.commands.handle(name, args, role=role, enforce_role=True)
             await interaction.response.send_message(text[:DISCORD_MAX])
 
+        def _make_group_cmd(name: str):
+            # WU-016: app_commands.Group.command() butuh coroutine function ASLI
+            # (introspeksi callback.__globals__/signature untuk bangun parameter
+            # slash command) -- lambda maupun functools.partial gagal (yang
+            # pertama bukan coroutine function, yang kedua tidak punya __globals__).
+            async def _cmd(interaction: "discord.Interaction") -> None:
+                await run(interaction, name)
+            return _cmd
+
         for cmd in ("status", "jobs", "settings", "help"):
-            group.command(name=cmd, description=f"WTH {cmd}")(
-                lambda interaction, n=cmd: run(interaction, n)
-            )
+            group.command(name=cmd, description=f"WTH {cmd}")(_make_group_cmd(cmd))
 
         @group.command(name="approve", description="Approve a pending request")
         async def _approve(interaction: "discord.Interaction", approval_id: str) -> None:
@@ -126,8 +133,20 @@ class WTHDiscordBot:
                 return
             if self.client.user and self.client.user.mentioned_in(message):
                 text = message.content.replace(f"<@{self.client.user.id}>", "").strip()
-                if text:
-                    await self._reply(message, text)
+                if not text:
+                    return
+                role = self._member_role_from_message(message)
+                if role != "owner":
+                    await message.reply(
+                        "Permission denied: hanya role 'owner' yang boleh mengakses agent "
+                        "penuh lewat bot (free-text/mention)."
+                    )
+                    return
+                await self._reply(message, text)
+
+    def _member_role_from_message(self, message: "discord.Message") -> str:
+        names = [r.name for r in getattr(getattr(message, "author", None), "roles", [])]
+        return resolve_discord_role(names, self.config.integrations.discord.role_permissions)
 
     async def _handle_slash(self, interaction: discord.Interaction, command: str) -> None:
         if not discord_allowed(
@@ -136,6 +155,16 @@ class WTHDiscordBot:
             channel_id=interaction.channel_id if interaction.channel_id else None,
         ):
             await interaction.response.send_message("Channel/guild tidak diizinkan.", ephemeral=True)
+            return
+        # WU-009 (NET-01): /doctor, /recon, /plan, /graph memberi akses sesi
+        # orchestrator PENUH (setara operator CLI) -- sebelumnya tanpa role-check
+        # sama sekali. Hanya role "owner" yang boleh.
+        role = self._member_role(interaction)
+        if role != "owner":
+            await interaction.response.send_message(
+                f"Permission denied: role '{role}' tidak boleh mengakses agent penuh lewat bot.",
+                ephemeral=True,
+            )
             return
         await interaction.response.defer(thinking=True)
         result = await asyncio.to_thread(

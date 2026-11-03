@@ -52,6 +52,7 @@ def build_executor_stack(state: SessionState) -> dict[str, Any]:
     terminal = AgentTerminalBridge(config, perm_mgr, scope_mgr, state.session_id)
     graph = AssetGraph(state.session_id)
     vault = EvidenceVault(state.session_id)
+    tool_runner.evidence_vault = vault  # WU-117: wiring stop_condition, lihat orchestrator.py
     executor = ExecutorAgent(
         config, client, tool_runner, manifest_runner,
         terminal=terminal, evidence_vault=vault, asset_graph=graph,
@@ -76,7 +77,12 @@ def build_executor_stack(state: SessionState) -> dict[str, Any]:
 def run_executor_job(job: Any, ctx: Any) -> dict[str, Any]:
     """Execute queued tasks from session state (authorized, standard+)."""
     meta = getattr(job, "metadata", {}) or {}
-    if not bool(meta.get("authorized", True)):
+    # WU-008 exit-review finding: default False, bukan True. Fail-closed law
+    # (MISSING -> DENY), konsisten dengan WU-011's authorized:bool=False
+    # pattern -- sebelumnya landmine: unreachable hari ini (tidak ada caller
+    # yang membuat job type="executor"), tapi akan fail-open diam-diam begitu
+    # WU P1 (WU-101/WU-103) mewiring caller yang lupa set metadata.authorized.
+    if not bool(meta.get("authorized", False)):
         return {"type": "executor", "status": "failed", "error": "not authorized"}
 
     state = load_session_for_job(job)

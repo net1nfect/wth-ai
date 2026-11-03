@@ -34,6 +34,19 @@ def resolve_discord_role(member_role_names: list[str], role_permissions: dict[st
     return "viewer"
 
 
+def resolve_telegram_role(user_id: str | int, owner_user_ids: list[str]) -> str:
+    """Resolve a Telegram user's WTH role from an explicit owner allowlist.
+
+    Telegram has no equivalent of Discord's guild-role system, so identity is
+    a bare numeric user_id -- WU-009 (NET-01): previously every chat member
+    was treated as role="owner" unconditionally. Falls back to ``viewer``
+    (least privilege) when the user is not in ``owner_user_ids``.
+    """
+    if str(user_id) in owner_user_ids:
+        return "owner"
+    return "viewer"
+
+
 def _resolve_token(token_ref: str | None) -> str | None:
     """Resolve a ``vault:<name>`` token reference to its secret (or pass through)."""
     if not token_ref:

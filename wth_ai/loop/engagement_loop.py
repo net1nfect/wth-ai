@@ -8,8 +8,9 @@ from wth_ai.ctf.packs import ctf_wordlists, suggest_challenge_type
 from wth_ai.engagement.mode import EngagementMode, get_engagement_mode
 from wth_ai.brain.chain_planner import ChainPlanner
 from wth_ai.brain.hypothesis_engine import HypothesisEngine
+from wth_ai.events import get_event_bus
 from wth_ai.executor.evidence import EvidencePipeline
-from wth_ai.loop.state_machine import EngagementStateMachine, LoopState
+from wth_ai.loop.state_machine import LoopState, LoopStateMachine
 from wth_ai.models import AttackSurface, ExecutorTask, FindingState
 
 if TYPE_CHECKING:
@@ -21,7 +22,10 @@ class EngagementLoop:
 
     def __init__(self, orchestrator: WTHOrchestrator) -> None:
         self.orch = orchestrator
-        self.sm = EngagementStateMachine()
+        # WU-105: wire the process-wide global bus so invalid_state_transition
+        # (WU-006) actually reaches a subscriber (AuditLogSink) -- previously
+        # LoopStateMachine() was constructed with no bus at all here.
+        self.sm = LoopStateMachine(bus=get_event_bus())
         self.evidence = EvidencePipeline()
         self.hypothesis_engine = HypothesisEngine()
         self.chain_planner = ChainPlanner()
@@ -40,7 +44,7 @@ class EngagementLoop:
         if not orch.state.scope.target:
             return "Set scope first: `/target domain.com` atau `/scope set target=domain.com authorized=yes`"
 
-        self.sm.state = LoopState.RECON
+        self.sm.transition(LoopState.RECON)
         force_recon = "force" in goal.lower() or not orch.asset_graph.coverage().get("nodes")
         if force_recon or not orch.state.metadata.get("last_recon"):
             orch.state.metadata.pop("last_recon", None)
@@ -66,7 +70,7 @@ class EngagementLoop:
         for iteration in range(1, max_iterations + 1):
             memory.iteration = iteration
             memory.save()
-            self.sm.state = LoopState.PLANNING
+            self.sm.transition(LoopState.PLANNING)
             cov_before = orch.asset_graph.coverage().get("coverage_pct", 0)
 
             plan_input = (
@@ -103,7 +107,7 @@ class EngagementLoop:
                 f"(coverage {cov_before}% → target higher)"
             )
 
-            self.sm.state = LoopState.EXECUTING
+            self.sm.transition(LoopState.EXECUTING)
             for task_dict in orch.state.task_queue[:3]:
                 task = ExecutorTask.from_dict(task_dict)
                 result = orch.executor.execute_module(task, orch.state)
@@ -114,7 +118,13 @@ class EngagementLoop:
                 orch.state.completed_tasks.append(result.to_dict())
                 lines.append(f"- Task {task.id} ({task.evidence_schema.get('type', task.module)}): {result.status}")
 
-                self.sm.state = LoopState.VERIFYING
+                # WU-006: verifikasi per-task tetap terjadi di sini (logic tidak
+                # berubah) -- tapi transisi state machine ke VERIFYING dipindah
+                # ke SEKALI setelah seluruh batch task_queue[:3] selesai (lihat
+                # bawah), bukan per-task. EXECUTING/VERIFYING merepresentasikan
+                # fase iterasi ini secara keseluruhan (bisa >1 task per batch),
+                # bukan mikro-state per-task -- TRANSITIONS tidak mendefinisikan
+                # VERIFYING->EXECUTING untuk task berikutnya dalam batch yang sama.
                 candidates = self.evidence.to_findings_candidates(
                     self.evidence.from_executor_result(result)
                 )
@@ -149,16 +159,17 @@ class EngagementLoop:
                         memory.add_evidence_gap(finding.id, replan or "more evidence needed")
                         lines.append(f"  ? NEEDS EVIDENCE: {finding.title}")
 
+            self.sm.transition(LoopState.VERIFYING)
             cov = orch.asset_graph.coverage()
             lines.append(f"- Graph coverage: {cov.get('coverage_pct', 0)}%")
             verified = [f for f in orch.findings_db.findings.values() if f.state == FindingState.VERIFIED]
             if any(f.severity in {"critical", "high"} for f in verified):
                 lines.append("\nHigh/critical verified — moving to report")
                 break
-            self.sm.state = LoopState.REPLANNING
+            self.sm.transition(LoopState.REPLANNING)
             orch.state.task_queue = []
 
-        self.sm.state = LoopState.REPORTING
+        self.sm.transition(LoopState.REPORTING)
         report = orch._report()
         lines.append("\n## Report")
         lines.append(report[:3000])

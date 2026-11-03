@@ -70,6 +70,7 @@ class VerifierAgent(BaseLLMAgent):
             self.system_prompt,
             [],
             prompt,
+            role="verifier",
         )
         return self._parse_verification(raw, finding.id, model)
 

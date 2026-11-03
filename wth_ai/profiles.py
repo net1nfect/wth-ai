@@ -90,7 +90,11 @@ def builtin_presets() -> dict[str, dict[str, Any]]:
             "active_provider": "9router",
             "engagement_mode": "bug_bounty",
             "models": _roles_for("9router", defaults),
-            "safety": {"default_permission": "full_lab", "require_authorized": False, "unrestricted": True},
+            # WU-003: require_authorized (dimensi 1, target authorization) SENGAJA
+            # tidak lagi bisa di-set preset -- itu keputusan per-engagement manusia,
+            # bukan pilihan template. unrestricted di sini HANYA mempengaruhi
+            # capability ceiling (dimensi 2), tidak lagi membypass authorization.
+            "safety": {"default_permission": "full_lab", "unrestricted": True},
             "recon": {"profile": "high-quality", "rate_limit_rps": 0},
             "tuning": {"max_tokens": 8192, "temperature": 0.3},
         },
@@ -98,7 +102,11 @@ def builtin_presets() -> dict[str, dict[str, Any]]:
             "active_provider": "9router",
             "engagement_mode": "ctf",
             "models": _roles_for("9router", defaults),
-            "safety": {"default_permission": "full_lab", "require_authorized": False, "unrestricted": True},
+            # WU-003: require_authorized (dimensi 1, target authorization) SENGAJA
+            # tidak lagi bisa di-set preset -- itu keputusan per-engagement manusia,
+            # bukan pilihan template. unrestricted di sini HANYA mempengaruhi
+            # capability ceiling (dimensi 2), tidak lagi membypass authorization.
+            "safety": {"default_permission": "full_lab", "unrestricted": True},
             "recon": {"profile": "high-quality", "rate_limit_rps": 0},
             "tuning": {"max_tokens": 8192, "temperature": 0.4},
         },

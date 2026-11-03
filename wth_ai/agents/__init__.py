@@ -72,7 +72,7 @@ class BaseLLMAgent:
         history: list[dict[str, str]],
         user: str,
         *,
-        role: str = "planner",
+        role: str,
         timeout: int | None = None,
         on_token: Callable[[str], None] | None = None,
     ) -> tuple[str, str]:
