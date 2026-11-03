@@ -166,6 +166,7 @@ def _default_commands() -> list[PlatformCommand]:
         PlatformCommand("/tools", "/tools [list|install|doctor|show|enable|disable|available|missing] [args]", "Tool registry", "tools"),
         PlatformCommand("/mcp", "/mcp [list|status|tools]", "MCP servers", "mcp"),
         PlatformCommand("/browser", "/browser <url>", "Browser probe", "tools"),
+        PlatformCommand("/oob", "/oob [start|stop|new|list|hits] [args]", "Callback center: bukti blind SSRF/XXE/RCE", "tools"),
         PlatformCommand("/gateway", "/gateway status", "Gateway daemon health", "platform"),
         PlatformCommand("/cron", "/cron [list|add|remove] [args]", "Scheduled jobs", "platform"),
         PlatformCommand("/memory", "/memory [show|search|edit] [args]", "FTS + MEMORY.md", "platform"),

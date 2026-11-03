@@ -47,6 +47,7 @@ from wth_ai.skills.registry import SkillRegistry
 from wth_ai.skills.fusion import SkillFusionEngine
 from wth_ai.cli.recon_wizard import ReconWizard
 from wth_ai.terminal.bridge import AgentTerminalBridge
+from wth_ai.oob import get_oob_service
 from wth_ai.tool_runner import ToolRunner
 
 
@@ -104,6 +105,7 @@ class WTHOrchestrator:
         self.chat = ChatAgent(self.config, self.client, self.skills, context_builder=self._chat_context_builder)
         self.supervisor = SupervisorAgent(self.config, self.client)
         self.browser = BrowserController(headless=self.config.browser.headless)
+        self.oob = get_oob_service()
         self.asset_graph = AssetGraph(self.state.session_id)
         self.hypothesis_engine = HypothesisEngine()
         self.chain_planner = ChainPlanner()
@@ -1103,6 +1105,109 @@ class WTHOrchestrator:
         if head == "notes":
             return researcher.context_block() or "Belum ada catatan riset di sesi ini."
         return researcher.report(researcher.search(" ".join(args)))
+
+    def _handle_oob(self, args: list[str]) -> str:
+        """`/oob [status|start|stop|new|list|hits|clear] [args]` — Callback Center (F2)."""
+        from wth_ai.oob import format_hits
+
+        oob = self.oob
+        action = args[0].lower() if args else "status"
+
+        if action in {"status", "show"}:
+            st = oob.status()
+            lines = [f"OOB Callback Center — {'RUNNING' if st['running'] else 'stopped'}"]
+            if st["running"]:
+                lines.append(f"base: {st['base_url']}  (bind {st['host']}:{st['port']})")
+            lines.append(
+                f"token total: {st['tokens_total']} · token terbuka: {st['tokens_open']} · "
+                f"interaksi: {st['hits_total']}"
+            )
+            lines.append("pakai: /oob start · /oob new <label> · /oob list · /oob hits [token]")
+            return "\n".join(lines)
+
+        if action == "start":
+            host = port = None
+            for i, a in enumerate(args):
+                if a == "--host" and i + 1 < len(args):
+                    host = args[i + 1]
+                elif a == "--port" and i + 1 < len(args):
+                    try:
+                        port = int(args[i + 1])
+                    except ValueError:
+                        return "Nilai --port harus angka."
+            st = oob.start(host=host, port=port)
+            note = "" if host in (None, "127.0.0.1", "localhost") else (
+                "\ncatatan: listener terbuka ke jaringan — pastikan hanya pada lab yang kamu miliki."
+            )
+            return f"OOB listener aktif di {st['base_url']} (bind {st['host']}:{st['port']}).{note}"
+
+        if action == "stop":
+            return "OOB listener dihentikan." if oob.stop() else "OOB listener memang tidak sedang jalan."
+
+        if action == "new":
+            label = args[1] if len(args) > 1 and not args[1].startswith("--") else "callback"
+            ttl = None
+            for i, a in enumerate(args):
+                if a == "--ttl" and i + 1 < len(args):
+                    try:
+                        ttl = int(args[i + 1])
+                    except ValueError:
+                        return "Nilai --ttl harus angka (menit)."
+            if not oob.running:
+                oob.start()
+            entry = oob.create(
+                label=label,
+                ttl_minutes=ttl,
+                session_id=self.state.session_id,
+                target=self.state.scope.target,
+            )
+            return (
+                f"Token OOB `{label}` dibuat (kedaluwarsa {entry['expires_at']}):\n"
+                f"  url   : {entry['url']}\n"
+                f"  token : {entry['token']}\n"
+                "Kirim URL itu ke parameter/vektor yang diuji (blind SSRF/XXE/RCE/blind XSS), "
+                "lalu jalankan `/oob hits <token>`."
+            )
+
+        if action == "list":
+            items = oob.store.list_tokens()
+            if not items:
+                return "Belum ada token OOB. Buat dengan `/oob new <label>`."
+            rows = ["## Token OOB"]
+            for t in items:
+                flag = "[expired] " if t.get("expired") else ""
+                rows.append(
+                    f"- {flag}{t.get('label') or '(tanpa label)'} · token {str(t.get('token'))[:10]}… · "
+                    f"{t.get('hits', 0)} hit · exp {t.get('expires_at')}"
+                )
+            return "\n".join(rows)
+
+        if action == "hits":
+            if len(args) > 1 and args[1] != "all":
+                token = args[1]
+                entry = oob.store.get_token(token) or {"token": token, "label": ""}
+                hits = oob.store.hits(token)
+                if not hits:
+                    return f"Belum ada hit untuk token {token[:10]}…. Cek: URL callback persis sama? target benar-benar menghubunginya?"
+                tx = oob.record_as_transcript(self.terminal.transcripts, token=token, entry=entry, hits=hits)
+                return f"{format_hits(entry, hits)}\n\nbukti transcript: [TX:{tx}]"
+            recent = oob.store.recent_hits(limit=20)
+            if not recent:
+                return "Belum ada interaksi apa pun."
+            rows = ["## Interaksi OOB terakhir"]
+            for r in recent:
+                suffix = f"?{r['query']}" if r.get("query") else ""
+                rows.append(
+                    f"- {r.get('ts', '?')} | token {str(r.get('token'))[:10] or '(tanpa token)'} | "
+                    f"{r.get('method', '?')} {r.get('path', '')}{suffix}"
+                )
+            return "\n".join(rows)
+
+        if action == "clear":
+            removed = oob.store.clear_expired()
+            return f"{removed} token kedaluwarsa dibersihkan (riwayat interaksi tetap disimpan sebagai bukti)."
+
+        return "OOB: aksi tidak dikenal — pakai status|start|stop|new|list|hits|clear."
 
     def _handle_computer(self, args: list[str]) -> str:
         """`/computer <action> [arg...]` — drive the real desktop.
