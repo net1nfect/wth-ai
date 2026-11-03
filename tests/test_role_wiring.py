@@ -48,6 +48,17 @@ def _fresh_orch_with_spy():
     orch = WTHOrchestrator(WTHConfig.load(), fresh=True)
     spy = RoleSpy()
     orch.client.chat_for_role = spy
+
+    # `PlannerAgent.plan()` mencoba jalur JSON (`chat_json_for_role`) LEBIH DULU,
+    # dan jalur itu TIDAK melewati `chat_for_role`. Tanpa mock eksplisit di sini,
+    # test ini membuat panggilan LLM NYATA ke endpoint operator: kalau endpoint
+    # hidup dan model menjawab JSON valid, fallback teks tidak terjadi -> spy
+    # kosong -> flaky; kalau endpoint tak terjangkau, fallback terjadi -> pass
+    # (kondisi CI). Mock ini memaksa jalur yang deterministik dan bebas jaringan.
+    def _json_unavailable(role, messages, *, timeout=None):
+        raise RuntimeError("json path disabled in test_role_wiring (no network)")
+
+    orch.client.chat_json_for_role = _json_unavailable  # type: ignore[method-assign]
     return orch, spy
 
 
