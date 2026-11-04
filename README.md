@@ -456,6 +456,8 @@ Untuk agen dan operator baru. Versi mesin-baca: [`llms.txt`](llms.txt).
 | `wth disclosure F-001 --bundle out/bundle` | `out/disclosure/F-001.md` |
 | `wth kb build --source DIR` / `wth kb search Q` | KB CVE lokal (FTS5) |
 | `wth ot plan --host H --block holding:0:10` | rencana baca Modbus (tanpa koneksi) |
+| `wth sandbox plan --workspace-file notes.txt` | argv `docker run` (mount ro, tidak dijalankan) |
+| `wth visual cluster shots/` | klaster screenshot (perceptual hash, tanpa Pillow) |
 | `wth interactive --redteam --mode plan` | TUI mode agen |
 | `wth kill` | flag `$WTH_HOME/runtime/KILL` (worker berhenti ≤2 detik) |
 

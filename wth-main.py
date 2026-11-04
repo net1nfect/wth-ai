@@ -475,6 +475,81 @@ def kb_search(query: str, limit: int) -> None:
                    f"{row['product'] or '-'}  {row['summary'][:80]}")
 
 
+@cli.group("sandbox")
+def sandbox_group() -> None:
+    """Pratinjau sandbox container — argv saja, tidak pernah dijalankan di sini."""
+
+
+@sandbox_group.command("plan")
+@click.option("--workspace-file", "workspace_files", multiple=True,
+              help="File yang di-mount read-only ke /work/<nama> (boleh diulang).")
+@click.option("--mount", "mounts", multiple=True,
+              help="Mount tambahan SRC:DST[:ro|rw] (boleh diulang).")
+@click.option("--image", default="", help="Override image (dukung image@sha256:...).")
+@click.option("--network", default="", help="Override nama network lab.")
+@click.argument("command", nargs=-1)
+def sandbox_plan(workspace_files: tuple[str, ...], mounts: tuple[str, ...],
+                 image: str, network: str, command: tuple[str, ...]) -> None:
+    """Cetak argv `docker run` untuk sandbox. Tidak menjalankan docker."""
+    import shlex
+
+    from wth_ai.containment import SandboxSpec
+
+    extra: list[str] = []
+    for raw in mounts:
+        parts = raw.split(":")
+        if len(parts) < 2:
+            raise click.ClickException(f"mount tidak valid: {raw} (SRC:DST[:ro|rw])")
+        spec = raw if len(parts) > 2 else f"{raw}:ro"
+        extra.append(spec)
+    for path in workspace_files:
+        source = _user_path(path)
+        if not source.exists():
+            raise click.ClickException(f"workspace file tidak ada: {source}")
+        extra.append(f"{source}:/work/{source.name}:ro")
+
+    kwargs: dict = {"extra_mounts": tuple(extra)}
+    if image:
+        kwargs["image"] = image
+    if network:
+        kwargs["network"] = network
+    spec = SandboxSpec(**kwargs)
+    argv = spec.docker_args(list(command) or ["sh", "-lc", "true"])
+    click.echo(" ".join(shlex.quote(token) for token in argv))
+    click.echo(f"sandbox: {len(extra)} mount · destructive=False · tidak dijalankan")
+
+
+@cli.group("visual")
+def visual_group() -> None:
+    """Recon visual — clustering screenshot tanpa dependency gambar."""
+
+
+@visual_group.command("cluster")
+@click.argument("directory")
+@click.option("--threshold", default=6, show_default=True,
+              help="Jarak Hamming maksimum agar dianggap satu klaster.")
+@click.option("--out", default="", help="Tulis hasil JSON ke path ini.")
+def visual_cluster(directory: str, threshold: int, out: str) -> None:
+    """Kelompokkan PNG di DIRECTORY berdasarkan perceptual hash."""
+    from wth_ai.recon.visual import scan_directory
+
+    root = _user_path(directory)
+    if not root.is_dir():
+        raise click.ClickException(f"direktori tidak ada: {root}")
+    result = scan_directory(root, threshold=threshold)
+    click.echo(f"visual: {result['total']} gambar · {len(result['clusters'])} klaster"
+               f" · terbesar {result['largest_cluster']} · dilewati {len(result['skipped'])}")
+    for index, group in enumerate(result["clusters"][:10], start=1):
+        click.echo(f"  klaster {index}: {group['size']} gambar "
+                   f"(mis. {Path(group['members'][0]).name})")
+    if out:
+        target = _user_path(out)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(json.dumps(result, indent=2, ensure_ascii=False) + "\n",
+                          encoding="utf-8")
+        click.echo(f"visual: {target}")
+
+
 @cli.group("ot")
 def ot_group() -> None:
     """Recon OT/ICS — hanya baca, tidak pernah menulis ke PLC."""

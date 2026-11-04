@@ -70,6 +70,15 @@ gate yang mengharuskan exit 2 pada fixture bertemuan high.
 (FC 1–4, `destructive=False`) tanpa membuka koneksi. FC 5/6/15/16 ditolak
 (`DestructiveBlocked`).
 
+## Sandbox dan recon visual
+
+- `wth sandbox plan --workspace-file F --mount SRC:DST:ro -- CMD` mencetak argv
+  `docker run` (cap-drop ALL, no-new-privileges, read-only, network lab) tanpa
+  menjalankan docker. Ini pengganti `--workspace-file` yang ditunda.
+- `wth visual cluster DIR --out out/clusters.json` mengelompokkan PNG memakai
+  difference hash 64-bit + toleransi kecerahan. PNG dibaca sendiri (zlib), jadi
+  tidak butuh Pillow; PNG 16-bit/interlaced dilewati dengan alasan.
+
 ## MCP
 
 Server bisa datang dari `mcp.json` (`{"servers": {...}}` atau `mcpServers` gaya
