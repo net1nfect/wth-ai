@@ -98,19 +98,23 @@ TOOL_DEFINITIONS: dict[str, dict[str, Any]] = {
         "function": {
             "name": "permission_set",
             "description": (
-                "Set the permission preset. 'plan'/'read-only' = no changes; 'ask' = safe "
-                "default with confirmation; 'auto' = no prompts, bounded capability; 'yolo' = "
-                "no prompts + max capability (the target must still be authorized)."
+                "Set the permission mode. 'read_only' = no changes; 'standard' = safe default "
+                "with confirmation; 'elevated' = more active tests; 'full_lab' = disposable "
+                "local/CTF only; 'unrestricted' = no prompts + max capability (the target must "
+                "still be authorized). CLI presets (plan/read-only/ask/auto/yolo) resolve to "
+                "these through `permission_presets.ALIASES`."
             ),
             "parameters": {
                 "type": "object",
                 "properties": {
                     "mode": {
                         "type": "string",
-                        # Preset names are the CLI-facing vocabulary ("like any AI CLI").
-                        # The raw PermissionMode values still resolve through
-                        # `permission_presets.ALIASES`, so nothing that worked before breaks.
-                        "enum": ["plan", "read-only", "ask", "auto", "yolo"],
+                        # The enum lists the REAL PermissionMode values. It used to list
+                        # preset names and legacy spellings ('read_only_recon',
+                        # 'standard_testing', 'elevated_testing'), none of which
+                        # PermissionManager.set_mode() accepts -- so the model could
+                        # only ever set 'full_lab' and every other call raised.
+                        "enum": ["read_only", "standard", "elevated", "full_lab", "unrestricted"],
                     },
                 },
                 "required": ["mode"],

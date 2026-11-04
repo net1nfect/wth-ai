@@ -84,7 +84,15 @@ class SkillRouter:
         parts.append("=== END SKILLS ===")
         return "\n".join(parts)
 
-    def detect_intent(self, user_input: str) -> str:
+    def detect_intent(self, user_input: str, session_state: Any | None = None) -> str:
+        """Classify a turn as ``command``/``chat``/``assess``.
+
+        `session_state` (WU-119) makes the fallback session-aware: a follow-up
+        such as "yang tadi gimana?" carries no keyword, so keyword-only routing
+        sent it to chat *in the middle of a live engagement*. When the session
+        already has a target and has left INTAKE, an otherwise-unclassified
+        turn belongs to the assessment, not to small talk.
+        """
         text = user_input.strip().lower()
         if text.startswith("/"):
             return "command"
@@ -108,4 +116,15 @@ class SkillRouter:
         for pat in assess_patterns:
             if re.search(pat, text):
                 return "assess"
-        return "chat"
+        return "assess" if _mid_engagement(session_state) else "chat"
+
+
+def _mid_engagement(session_state: Any | None) -> bool:
+    """Whether the session already has a target and has left the intake phase."""
+    if session_state is None:
+        return False
+    scope = getattr(session_state, "scope", None)
+    target = getattr(scope, "target", "") if scope is not None else ""
+    phase = getattr(session_state, "current_phase", None)
+    phase_value = getattr(phase, "value", phase)
+    return bool(target) and phase_value not in (None, "", "intake")

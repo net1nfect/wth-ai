@@ -337,6 +337,7 @@ class UsageLedger:
         data = self.summary(entries=entries)
         if not data["calls"]:
             return (
+                "Pemakaian token\n"
                 "Belum ada pemakaian tercatat.\n"
                 "Catatan: provider yang tidak mengirim blok usage tetap tercatat sebagai 1 call "
                 "dengan 0 token -- itu bukan 'gratis', itu 'tidak terukur'."

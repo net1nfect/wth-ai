@@ -422,3 +422,19 @@ config/         # wth_config.yaml
 ## Versi
 
 **v1.0.0** — First public release: realtime execution, setup wizard, multi-provider LLM, Discord/Telegram bots
+
+---
+
+## Lisensi
+
+MIT — lihat [LICENSE](LICENSE). Ringkasnya: bebas dipakai, dimodifikasi, dan
+didistribusikan (termasuk untuk hackathon/komersial) selama notice copyright
+dan izin disertakan.
+
+Lisensi ini **hanya** mengatur hak cipta perangkat lunak. Ia tidak memberi izin
+untuk menguji sistem milik orang lain: setiap penggunaan di luar target milik
+sendiri/lab/CTF harus punya otorisasi tertulis dari pemilik target.
+
+Kontributor yang tercatat di riwayat git: Idham Akbar, Augie Aristito Azka, dan
+kontributor lain. Jika proyek ini akan didistribusikan ulang, pastikan semua
+pemegang hak cipta menyetujui lisensi yang dipilih.

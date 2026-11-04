@@ -46,16 +46,20 @@ class ManifestToolRunner(ToolRunner):
     check = self.permission.check_command(cmd)
     if not check["allowed"]:
       return "", check["reason"], 1
+    # argv-only execution. This used to be `subprocess.run(cmd, shell=True)`,
+    # which handed a model-authored `args` string straight to /bin/sh: a `;` or
+    # `$(...)` in the arguments ran as a second command, outside every gate
+    # except the substring denylist. `run_command` tokenizes and never spawns a
+    # shell, matching `ToolRunner._run_command` (the path `wth doctor` checks).
+    from wth_ai.shell_runner import run_command
+
     try:
-      proc = subprocess.run(
+      return run_command(
         cmd,
-        shell=True,
-        capture_output=True,
-        text=True,
         timeout=timeout or self.config.tools.timeout_seconds,
-        cwd=cwd,
+        cwd=str(cwd) if cwd else None,
+        max_bytes=self.config.tools.max_output_bytes,
       )
-      return proc.stdout, proc.stderr, proc.returncode
     except subprocess.TimeoutExpired:
       return "", f"Timeout after {timeout}s", 124
 
