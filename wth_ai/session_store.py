@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from wth_ai.config import WTHConfig
+from wth_ai.workspace import wth_home
 from wth_ai.models import SessionState
 
 
@@ -14,7 +15,7 @@ class SessionStore:
     """JSON file-backed session persistence."""
 
     def __init__(self, config: WTHConfig) -> None:
-        self.dir = Path(config.session.state_dir)
+        self.dir = wth_home() / config.session.state_dir
         self.dir.mkdir(parents=True, exist_ok=True)
         self.auto_save = config.session.auto_save
 
