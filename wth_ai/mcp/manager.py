@@ -13,7 +13,8 @@ from typing import Any
 
 from wth_ai.config import WTHConfig
 from wth_ai.mcp.client import MCPToolResult
-from wth_ai.mcp.config import MCPServerSpec, parse_mcp_servers
+from wth_ai.mcp.config import (MANIFEST_NAME, MCPServerSpec, load_manifest,
+                               merge_manifest, parse_mcp_servers)
 from wth_ai.vault import SecretVault, is_vault_ref, mask_secret
 
 
@@ -116,7 +117,12 @@ class MCPClientManager:
     def __init__(self, config: WTHConfig | None = None) -> None:
         self.config = config or WTHConfig.load()
         self.enabled = self.config.mcp.enabled
-        self.servers = parse_mcp_servers(self.config.mcp.servers)
+        manifest_path = Path(os.environ.get("WTH_MCP_MANIFEST",
+                                            Path.cwd() / MANIFEST_NAME))
+        self.manifest_path = manifest_path
+        manifest = load_manifest(manifest_path)
+        self.servers = parse_mcp_servers(
+            merge_manifest(self.config.mcp.servers, manifest))
         self._connections: dict[str, _StdioMCPConnection] = {}
         self._audit_path = Path(os.environ.get("WTH_HOME", Path.home() / ".wth-ai")) / "logs" / "mcp_audit.jsonl"
 

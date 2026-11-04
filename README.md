@@ -438,3 +438,35 @@ sendiri/lab/CTF harus punya otorisasi tertulis dari pemilik target.
 Kontributor yang tercatat di riwayat git: Idham Akbar, Augie Aristito Azka, dan
 kontributor lain. Jika proyek ini akan didistribusikan ulang, pastikan semua
 pemegang hak cipta menyetujui lisensi yang dipilih.
+
+---
+
+## Referensi cepat
+
+Untuk agen dan operator baru. Versi mesin-baca: [`llms.txt`](llms.txt).
+
+| Perintah | Yang ditulis |
+|---|---|
+| `wth scope --target H --cidr C --authorized [--spec openapi.json]` | `$WTH_HOME/scope_card.json` |
+| `wth scan --offline-demo --out out` | `out/run.json`, `out/findings.sarif`, `out/vulnerabilities/`, `out/bundle/` |
+| `wth scan -n --fail-on high` | exit 0 bersih / 1 error / 2 ada temuan |
+| `wth scan --scope-mode diff --diff-base origin/main` | hanya file PR yang jadi target |
+| `wth verify out/bundle` | hitung ulang sha256; satu byte berubah → exit 1 |
+| `wth report --format html\|sarif\|json\|id\|pdf` | laporan dari bundel |
+| `wth disclosure F-001 --bundle out/bundle` | `out/disclosure/F-001.md` |
+| `wth kb build --source DIR` / `wth kb search Q` | KB CVE lokal (FTS5) |
+| `wth ot plan --host H --block holding:0:10` | rencana baca Modbus (tanpa koneksi) |
+| `wth interactive --redteam --mode plan` | TUI mode agen |
+| `wth kill` | flag `$WTH_HOME/runtime/KILL` (worker berhenti ≤2 detik) |
+
+Artefak bukti: `docs/EVIDENCE.md`. Demo 5 menit: `docs/DEMO.md`.
+Cara kerja mode & kapabilitas: `docs/MODES.md`. Pemasangan tertutup: `docs/AIRGAP.md`.
+
+### Mengapa repo ini sempat tidak bisa dijalankan
+
+Delapan modul internal pernah tidak ikut ter-commit (`redaction`, `llm/model_io`,
+`llm/model_catalog`, `policy/capability`, `policy/profiles_builtin`, `audit`,
+`broker/models`, `broker/broker`), sehingga 25 dari 65 modul test gagal di-import.
+Modul-modul itu sekarang ada, dependensinya dideklarasikan (`beautifulsoup4`,
+`lxml`, `pydantic`), dan `pytest tests -q` hijau. Riwayat lengkap ada di commit
+`fix(foundation)`.

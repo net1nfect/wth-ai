@@ -1,5 +1,10 @@
 """OT/Modbus: recon hanya baca, write ditolak, dan tidak ada koneksi nyata."""
 
+import os
+import subprocess
+import sys
+from pathlib import Path
+
 from wth_ai.ot import modbus
 from wth_ai.ot.modbus import (DestructiveBlocked, READ_FUNCTIONS, WRITE_FUNCTIONS,
                               build_read_request, build_write_request, plan_reads)
@@ -33,6 +38,41 @@ def test_plan_reads_returns_only_read_requests():
     assert requests
     assert all(request.destructive is False for request in requests)
     assert {request.unit for request in requests} == {2}
+
+
+def test_cli_ot_plan_prints_reads_only(tmp_path):
+    import os
+    import subprocess
+    import sys
+
+    repo = Path(__file__).resolve().parents[1]
+    env = {**os.environ, "WTH_SKIP_SETUP": "1", "WTH_PLAIN": "1",
+           "WTH_HOME": str(tmp_path / "home")}
+    proc = subprocess.run([sys.executable, str(repo / "wth-main.py"), "ot", "plan",
+                           "--host", "172.28.0.10", "--unit", "2",
+                           "--block", "holding:0:4"],
+                          cwd=tmp_path, capture_output=True, text=True,
+                          timeout=180, env=env)
+    assert proc.returncode == 0, proc.stderr
+    assert "1 permintaan baca" in proc.stdout
+    assert "destructive=False" in proc.stdout
+    assert "tidak ada koneksi dibuka" in proc.stdout
+
+
+def test_cli_ot_plan_rejects_bad_block(tmp_path):
+    import os
+    import subprocess
+    import sys
+
+    repo = Path(__file__).resolve().parents[1]
+    env = {**os.environ, "WTH_SKIP_SETUP": "1", "WTH_PLAIN": "1",
+           "WTH_HOME": str(tmp_path / "home")}
+    proc = subprocess.run([sys.executable, str(repo / "wth-main.py"), "ot", "plan",
+                           "--host", "172.28.0.10", "--block", "holding-0-4"],
+                          cwd=tmp_path, capture_output=True, text=True,
+                          timeout=180, env=env)
+    assert proc.returncode != 0
+    assert "tidak valid" in (proc.stdout + proc.stderr)
 
 
 def test_bad_inputs_are_rejected():

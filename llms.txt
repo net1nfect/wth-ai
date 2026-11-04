@@ -21,7 +21,8 @@ ini untuk agen/koding asisten: perintah utama, artefak, dan kontrak exit code.
   (tidak mengunduh). `wth kb search Q` tanpa hasil => exit 1.
 - `wth verify DIR/bundle`
   Menghitung ulang sha256 manifest; satu byte berubah → exit 1.
-- `wth report --bundle DIR/bundle --format html|sarif|json`
+- `wth report --bundle DIR/bundle --format html|sarif|json|id|pdf`
+  `id` = laporan Bahasa Indonesia; `pdf` = satu file tanpa dependency baru.
 - `wth kb status` / `wth kb get CVE-YYYY-NNNN`
   CVE yang tidak ada di DB → exit 2.
 - `wth skill list` / `wth skill install <git-url>`
@@ -65,8 +66,15 @@ gate yang mengharuskan exit 2 pada fixture bertemuan high.
 
 ## OT/ICS
 
-`wth_ai/ot/modbus.py` hanya menyusun permintaan baca (FC 1–4); FC 5/6/15/16
-ditolak (`DestructiveBlocked`). Tidak ada koneksi yang dibuka modul ini.
+`wth ot plan --host H --unit 1 --block holding:0:10` mencetak rencana baca
+(FC 1–4, `destructive=False`) tanpa membuka koneksi. FC 5/6/15/16 ditolak
+(`DestructiveBlocked`).
+
+## MCP
+
+Server bisa datang dari `mcp.json` (`{"servers": {...}}` atau `mcpServers` gaya
+Claude Desktop) di direktori kerja atau `WTH_MCP_MANIFEST`. Config YAML menang
+bila namanya sama. Setiap `call_tool(mode=...)` digerbangi kapabilitas MCP.
 
 ## Batasan
 

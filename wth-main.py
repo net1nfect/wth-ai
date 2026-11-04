@@ -345,13 +345,14 @@ def verify_cmd(bundle: str) -> None:
 @cli.command("report")
 @click.option("--bundle", default="out/bundle", show_default=True)
 @click.option("--format", "fmt", default="html", show_default=True,
-              type=click.Choice(["html", "sarif", "json", "id"]))
+              type=click.Choice(["html", "sarif", "json", "id", "pdf"]))
 @click.option("--out", default="", help="Path keluaran (default: di dalam out/).")
 def report_cmd(bundle: str, fmt: str, out: str) -> None:
-    """Tulis laporan dari bundel (html statis / sarif / json / id)."""
+    """Tulis laporan dari bundel (html statis / sarif / json / id / pdf)."""
     from wth_ai.redteam.models import Finding
     from wth_ai.reporting import html as html_report
     from wth_ai.reporting.id_report import write_id_report
+    from wth_ai.reporting.pdf import write_pdf
     from wth_ai.reporting.sarif import build_sarif
 
     root = _user_path(bundle)
@@ -360,7 +361,9 @@ def report_cmd(bundle: str, fmt: str, out: str) -> None:
         raise click.ClickException(f"tidak ada {findings_path}")
     findings = [Finding.from_dict(row) for row in
                 json.loads(findings_path.read_text(encoding="utf-8"))]
-    default_name = "report-id.md" if fmt == "id" else f"report.{fmt if fmt != 'html' else 'html'}"
+    default_name = ("report-id.md" if fmt == "id"
+                    else "report.pdf" if fmt == "pdf"
+                    else f"report.{fmt if fmt != 'html' else 'html'}")
     base = _user_path(out) if out else root.parent / default_name
     if fmt == "html":
         path = html_report.write_html(root, base)
@@ -375,6 +378,14 @@ def report_cmd(bundle: str, fmt: str, out: str) -> None:
         run_meta = (json.loads(run_meta_path.read_text(encoding="utf-8"))
                     if run_meta_path.is_file() else {})
         path = write_id_report(findings, base, run_meta=run_meta)
+    elif fmt == "pdf":
+        run_meta_path = root.parent / "run.json"
+        meta = (json.loads(run_meta_path.read_text(encoding="utf-8"))
+                if run_meta_path.is_file() else {})
+        root_hash_path = root / "root_hash.txt"
+        if root_hash_path.is_file():
+            meta["root_hash"] = root_hash_path.read_text(encoding="utf-8").strip()
+        path = write_pdf(findings, base, meta=meta)
     else:
         base.parent.mkdir(parents=True, exist_ok=True)
         base.write_text(json.dumps([f.to_dict() for f in findings], indent=2,
@@ -462,6 +473,45 @@ def kb_search(query: str, limit: int) -> None:
         flag = "KEV" if row["kev"] else "   "
         click.echo(f"{row['cve_id']}  {flag}  cvss={row['cvss'] or '-'}  "
                    f"{row['product'] or '-'}  {row['summary'][:80]}")
+
+
+@cli.group("ot")
+def ot_group() -> None:
+    """Recon OT/ICS — hanya baca, tidak pernah menulis ke PLC."""
+
+
+@ot_group.command("plan")
+@click.option("--host", required=True, help="Host PLC/RTU (lab atau berizin).")
+@click.option("--unit", default=1, show_default=True, help="Modbus unit id (1..247).")
+@click.option("--block", "blocks", multiple=True,
+              help="kind:address:count, mis. holding:0:10 (boleh diulang).")
+def ot_plan(host: str, unit: int, blocks: tuple[str, ...]) -> None:
+    """Tampilkan rencana baca Modbus. Tidak membuka koneksi."""
+    from wth_ai.ot.modbus import build_read_request, plan_reads
+
+    parsed: list[tuple[str, int, int]] = []
+    for raw in blocks:
+        parts = raw.split(":")
+        if len(parts) != 3:
+            raise click.ClickException(f"block tidak valid: {raw} (kind:address:count)")
+        kind, address, count = parts
+        try:
+            parsed.append((kind, int(address), int(count)))
+        except ValueError as exc:
+            raise click.ClickException(f"block tidak valid: {raw}") from exc
+
+    try:
+        requests = (plan_reads(host, unit=unit, blocks=parsed) if parsed
+                    else plan_reads(host, unit=unit))
+    except ValueError as exc:
+        raise click.ClickException(str(exc)) from exc
+
+    click.echo(f"ot plan: {host} · unit={unit} · {len(requests)} permintaan baca")
+    for request in requests:
+        click.echo(f"  fc={request.function_code} {request.kind:<16} "
+                   f"addr={request.address:<6} count={request.count:<4} "
+                   f"destructive={request.destructive}")
+    click.echo("ot plan: tidak ada koneksi dibuka; write (FC 5/6/15/16) ditolak")
 
 
 @cli.group("skill")
