@@ -269,6 +269,16 @@ venv_pkg() {
 # yang diuji adalah `-m venv` benar-benar bisa membuat environment.
 PY=""
 PY_VERSION=""
+#: Interpreter host yang lolos pemeriksaan (dipakai untuk membuat ulang venv).
+PY_PROTO=""
+
+# `pip` bisa hilang walau `python` hidup: venv `--without-pip`, atau pip yang
+# terpasang tapi tidak bisa diimpor (cache rusak, update terbunuh). Satu tempat
+# untuk pertanyaan ini, supaya installer dan pesan error tidak berbeda pendapat.
+pip_works() {
+  "$1" -m pip --version >/dev/null 2>&1
+}
+
 find_python() {
   local candidate
   # Interpreter yang disebut eksplisit tidak boleh diam-diam diganti: operator
@@ -387,6 +397,7 @@ if ! find_python; then
   fail "Python >= 3.10 tidak ditemukan (butuh 3.10+)" python_missing
 fi
 ok "python $PY_VERSION ($PY)"
+PY_PROTO="$PY"
 
 if [[ "$USE_VENV" == "1" ]] && ! venv_usable "$PY"; then
   warn "modul 'venv'/'ensurepip' tidak tersedia di $PY"
@@ -465,6 +476,34 @@ if [[ "$USE_VENV" == "1" ]]; then
       fail "venv tidak bisa dibuat di $VENV" venv_missing
     fi
     ok "venv dibuat"
+  fi
+  PY="$VENV/bin/python"
+  PIP=("$PY" -m pip)
+  PIP_USER=()
+
+  # venv yang dibuat `--without-pip`, atau yang cache pip-nya rusak, tetap punya
+  # python yang sehat. Mengganti venv adalah pilihan terakhir di bawah.
+  if [[ "$DRY_RUN" == "1" ]]; then
+    skip "(dry-run) pip di venv akan diverifikasi dan diperbaiki bila perlu"
+  elif pip_works "$PY"; then
+    ok "pip siap ($("$PY" -m pip --version 2>/dev/null | cut -d' ' -f2))"
+  else
+    warn "pip tidak ada di venv ini; memperbaikinya dengan ensurepip"
+    if run "$PY" -m ensurepip --upgrade --default-pip && pip_works "$PY"; then
+      ok "pip dipulihkan (ensurepip)"
+    else
+      # Reparasi gagal: venv-nya memang tidak bisa dipakai. Dibuat ulang, bukan
+      # dipakai setengah — kegagalan lanjutan di dalamnya membingungkan.
+      log "venv tidak dapat diperbaiki; dibuat ulang bersih"
+      run rm -rf "$VENV"
+      run mkdir -p "$WTH_HOME"
+      if ! run "$PY_PROTO" -m venv "$VENV" || ! pip_works "$VENV/bin/python"; then
+        warn "pembuatan ulang venv gagal; pasang $(venv_pkg) lalu jalankan ulang"
+        run_system_deps "$(venv_pkg)" || true
+        fail "venv di $VENV tidak punya pip dan tidak bisa dibuat ulang" venv_missing
+      fi
+      ok "venv dibuat ulang dengan pip"
+    fi
   fi
   PY="$VENV/bin/python"
   PIP=("$PY" -m pip)

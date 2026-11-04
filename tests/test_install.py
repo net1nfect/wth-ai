@@ -416,6 +416,69 @@ def test_install_rejects_unknown_feature():
     assert "fitur tidak dikenal" in (result.stdout + result.stderr)
 
 
+def test_install_repairs_venv_without_pip(tmp_path):
+    """Venv `--without-pip` (atau pip rusak) diperbaiki, bukan menggagalkan install.
+
+    Kasus nyata: run sebelumnya menyisakan ~/.wth-ai/venv tanpa pip, lalu
+    installer berhenti di 'pip tidak berjalan' dan operator tidak punya jalan
+    keluar selain menghapus direktori secara manual.
+    """
+    bash = shutil.which("bash")
+    if bash is None:
+        pytest.skip("bash tidak tersedia")
+
+    home = tmp_path / "home"
+    venv = home / "venv"
+    created = subprocess.run([sys.executable, "-m", "venv", "--without-pip", str(venv)],
+                             capture_output=True, text=True)
+    if created.returncode != 0:
+        pytest.skip("python -m venv tidak tersedia")
+
+    check = subprocess.run([str(venv / "bin" / "python"), "-m", "pip", "--version"],
+                           capture_output=True, text=True)
+    assert check.returncode != 0, "venue harus dimulai tanpa pip"
+
+    result = subprocess.run(
+        [bash, str(INSTALL_SH), "--no-setup", "--no-path",
+         "--home", str(home), "--bin", str(tmp_path / "bin"), "--source", str(REPO)],
+        capture_output=True, text=True,
+        env={**os.environ, "HOME": str(tmp_path), "WTH_HOME": str(home)},
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "pip dipulihkan" in result.stdout or "dibuat ulang" in result.stdout
+
+    after = subprocess.run([str(venv / "bin" / "python"), "-m", "pip", "--version"],
+                           capture_output=True, text=True)
+    assert after.returncode == 0, after.stderr
+
+
+def test_install_rebuilds_broken_venv(tmp_path):
+    """Venv yang python-nya tidak bisa jalan harus dibuat ulang di tempatnya."""
+    bash = shutil.which("bash")
+    if bash is None:
+        pytest.skip("bash tidak tersedia")
+
+    home = tmp_path / "home"
+    fake_python = home / "venv" / "bin" / "python"
+    fake_python.parent.mkdir(parents=True)
+    fake_python.write_text("#!/bin/sh\nexit 1\n", encoding="utf-8")
+    fake_python.chmod(0o755)
+
+    result = subprocess.run(
+        [bash, str(INSTALL_SH), "--no-setup", "--no-path",
+         "--home", str(home), "--bin", str(tmp_path / "bin"), "--source", str(REPO)],
+        capture_output=True, text=True,
+        env={**os.environ, "HOME": str(tmp_path), "WTH_HOME": str(home)},
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "dibuat ulang" in result.stdout
+    rebuilt = subprocess.run([str(home / "venv" / "bin" / "python"), "-m", "pip", "--version"],
+                             capture_output=True, text=True)
+    assert rebuilt.returncode == 0
+
+
 def test_install_fails_clearly_when_python_is_too_old(tmp_path):
     """Interpreter eksplisit < 3.10 harus gagal dengan kelas + saran paket."""
     bash = shutil.which("bash")
