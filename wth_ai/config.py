@@ -10,9 +10,31 @@ from typing import Any
 import yaml
 from dotenv import load_dotenv
 
-WTH_HOME = Path(os.environ.get("WTH_HOME", Path.home() / ".wth-ai"))
-USER_CONFIG_PATH = WTH_HOME / "config" / "user.yaml"
-USER_ENV_PATH = WTH_HOME / ".env"
+
+def _wth_home() -> Path:
+    """Return WTH_HOME, reading env at call time (supports runtime override)."""
+    return Path(os.environ.get("WTH_HOME", Path.home() / ".wth-ai"))
+
+
+# Default paths computed once at import; module-level constants can be monkeypatched by tests
+_DEFAULT_USER_CONFIG_PATH = _wth_home() / "config" / "user.yaml"
+_DEFAULT_USER_ENV_PATH = _wth_home() / ".env"
+
+# Module-level constants — tests monkeypatch these to redirect config I/O
+USER_CONFIG_PATH = _DEFAULT_USER_CONFIG_PATH
+USER_ENV_PATH = _DEFAULT_USER_ENV_PATH
+WTH_HOME = _wth_home()  # computed once at import; runtime override via os.environ["WTH_HOME"]
+
+
+def _user_config_path() -> Path:
+    """Return user config path, respecting monkeypatched USER_CONFIG_PATH."""
+    return USER_CONFIG_PATH
+
+
+def _user_env_path() -> Path:
+    """Return user env path, respecting monkeypatched USER_ENV_PATH."""
+    return USER_ENV_PATH
+
 
 # Canonical agent role names (Fase 2).
 ROLE_NAMES: tuple[str, ...] = (
@@ -37,7 +59,7 @@ PROVIDER_NAMES: tuple[str, ...] = (
     "custom",
 )
 
-load_dotenv(USER_ENV_PATH)
+load_dotenv(_user_env_path())
 load_dotenv()
 
 
@@ -299,7 +321,10 @@ class WTHConfig:
     require_llm: bool = False
     setup_complete: bool = False
     default_permission: str = "read_only"
-    user_config_path: Path = field(default_factory=lambda: USER_CONFIG_PATH)
+    user_config_path: Path = field(default_factory=lambda: (
+        USER_CONFIG_PATH if USER_CONFIG_PATH != _user_config_path() else _user_config_path()
+    ))
+    user_env_path: Path = field(default_factory=_user_env_path)
 
     @classmethod
     def load(cls, path: str | Path = "config/wth_config.yaml") -> WTHConfig:
@@ -309,8 +334,8 @@ class WTHConfig:
             raw = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
 
         user_raw: dict[str, Any] = {}
-        if USER_CONFIG_PATH.exists():
-            user_raw = yaml.safe_load(USER_CONFIG_PATH.read_text(encoding="utf-8")) or {}
+        if _user_config_path().exists():
+            user_raw = yaml.safe_load(_user_config_path().read_text(encoding="utf-8")) or {}
             raw = _deep_merge(raw, user_raw)
 
         models_raw = raw.get("models", {})
@@ -429,7 +454,7 @@ class WTHConfig:
         """
         from wth_ai.vault import SecretVault, vault_ref
 
-        USER_CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
+        self.user_config_path.parent.mkdir(parents=True, exist_ok=True)
 
         vault = SecretVault()
         present = set(vault.list_keys()) if vault.can_open() else set()
@@ -533,9 +558,9 @@ class WTHConfig:
         # servers). A missing endpoint is not a cosmetic loss -- it silently
         # redirects traffic to a different company.
         existing: dict[str, Any] = {}
-        if USER_CONFIG_PATH.exists():
+        if _user_config_path().exists():
             try:
-                existing = yaml.safe_load(USER_CONFIG_PATH.read_text(encoding="utf-8")) or {}
+                existing = yaml.safe_load(self.user_config_path.read_text(encoding="utf-8")) or {}
             except yaml.YAMLError:
                 existing = {}
         if isinstance(existing, dict):
@@ -548,10 +573,10 @@ class WTHConfig:
                 if value or key not in merged_secrets:
                     merged_secrets[key] = value
             data["secrets"] = merged_secrets
-        USER_CONFIG_PATH.write_text(yaml.safe_dump(data, default_flow_style=False), encoding="utf-8")
+        self.user_config_path.write_text(yaml.safe_dump(data, default_flow_style=False), encoding="utf-8")
         from wth_ai.workspace import secure_file
-        secure_file(USER_CONFIG_PATH)
-        return USER_CONFIG_PATH
+        secure_file(self.user_config_path)
+        return self.user_config_path
 
     def write_env_file(self) -> Path:
         """Write secrets to ~/.wth-ai/.env for subprocess compatibility."""
@@ -568,19 +593,19 @@ class WTHConfig:
             lines.append(f"DISCORD_BOT_TOKEN={self.bots.discord_token}")
         if self.bots.telegram_token:
             lines.append(f"TELEGRAM_BOT_TOKEN={self.bots.telegram_token}")
-        USER_ENV_PATH.parent.mkdir(parents=True, exist_ok=True)
-        USER_ENV_PATH.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        self.user_env_path.parent.mkdir(parents=True, exist_ok=True)
+        self.user_env_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
         # WU-210 (DATA-04): this file holds PLAINTEXT provider/bot secrets --
         # chmod 600 immediately after writing (same treatment as USER_CONFIG_PATH
         # above / vault.key), otherwise it is created world/group-readable per
         # the process umask.
         from wth_ai.workspace import secure_file
-        secure_file(USER_ENV_PATH)
+        secure_file(self.user_env_path)
         for line in lines:
             if "=" in line:
                 k, v = line.split("=", 1)
                 os.environ[k] = v
-        return USER_ENV_PATH
+        return self.user_env_path
 
 
 def _make_secret_resolver() -> Any:
@@ -670,7 +695,7 @@ def _deep_merge(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any
 def is_setup_complete() -> bool:
     if os.environ.get("WTH_SKIP_SETUP") == "1":
         return True
-    if USER_CONFIG_PATH.exists():
-        raw = yaml.safe_load(USER_CONFIG_PATH.read_text(encoding="utf-8")) or {}
+    if _user_config_path().exists():
+        raw = yaml.safe_load(_user_config_path().read_text(encoding="utf-8")) or {}
         return bool(raw.get("setup_complete"))
     return False
