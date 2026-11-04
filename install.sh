@@ -1,7 +1,7 @@
 #!/bin/sh
 # wth-ai one-line bootstrap.
 #
-#   curl -fsSL https://raw.githubusercontent.com/net1nfect/wth-ai/main/install.sh | sh
+#   curl -fsSL https://raw.githubusercontent.com/net1nfect/wth-ai/big-dix/install.sh | bash
 #
 # Why a POSIX sh file this small exists at all: `curl | sh` runs the script
 # stdin, so nothing relative to it can be resolved. It fetches the real installer
@@ -13,7 +13,10 @@
 set -eu
 
 WTH_REPO="${WTH_REPO:-net1nfect/wth-ai}"
-WTH_REF="${WTH_REF:-main}"
+#: Branch tempat file ini dipublikasikan. Branch ini diisi saat rilis: memakai
+#: `main` sebagai default membuat instalasi dari branch lain (atau fork) 404,
+#: atau lebih buruk: memasang kode dari branch yang salah tanpa terlihat.
+WTH_REF="${WTH_REF:-big-dix}"
 WTH_SRC_URL="${WTH_SRC_URL:-https://raw.githubusercontent.com/${WTH_REPO}/${WTH_REF}/scripts/install.sh}"
 
 fail() {

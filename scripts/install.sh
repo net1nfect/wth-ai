@@ -66,7 +66,7 @@ Opsi:
   --bin DIR         direktori symlink 'wth'     (default: ~/.local/bin)
   --source DIR      sumber repo/paket           (default: induk skrip ini)
   --repo OWNER/NAME sumber GitHub bila tidak ada checkout lokal
-  --ref BRANCH      branch/tag untuk --repo     (default: main)
+  --ref BRANCH      branch/tag untuk --repo     (default: big-dix)
   --python BIN      interpreter Py >= 3.10  (default: python3)
   --venv / --no-venv  venv terisolasi (default: venv) atau pasang ke interpreter
   --with LIST       fitur opsional: tui,bot,browser,full (pisahkan koma)
@@ -172,7 +172,7 @@ else
   # diberikan tidak valid. Selama ini skrip berhenti di sini; daripada menyuruh
   # operator memahami error, ambil repo sekali ke direktori cache lalu pakai.
   SRC_REPO="${SRC_REPO:-net1nfect/wth-ai}"
-  SRC_REF="${SRC_REF:-main}"
+  SRC_REF="${SRC_REF:-big-dix}"
   CACHE_DIR="$WTH_HOME/src/$(printf '%s' "$SRC_REPO" | tr '/' '-')"
   # `--repo` menerima `owner/name` (GitHub) atau URL/path git lengkap, supaya
   # mirror/self-hosted dan pengujian lokal memakai jalur kode yang sama.

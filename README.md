@@ -180,7 +180,7 @@ Konstitusi lengkap: lihat [`AGENTS.md`](AGENTS.md).
 ### Satu baris (disarankan)
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/net1nfect/wth-ai/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/net1nfect/wth-ai/big-dix/install.sh | bash
 ```
 
 Skrip itu mengambil `scripts/install.sh` (lewat `install.sh` di root), membuat
@@ -196,8 +196,11 @@ curl -fsSL https://raw.githubusercontent.com/net1nfect/wth-ai/big-dix/install.sh
 # dengan TUI + bot
 curl -fsSL https://raw.githubusercontent.com/net1nfect/wth-ai/big-dix/install.sh | bash -s -- --with tui,bot
 
-# tag atau fork lain
-curl -fsSL https://raw.githubusercontent.com/FORK/wth-ai/main/install.sh | WTH_REF=v1.0.0 bash
+# branch lain atau tag rilis
+curl -fsSL https://raw.githubusercontent.com/net1nfect/wth-ai/main/install.sh | WTH_REF=v1.0.0 bash
+
+# fork lain
+curl -fsSL https://raw.githubusercontent.com/FORK/wth-ai/main/install.sh | WTH_REPO=FORK/wth-ai WTH_REF=main bash
 
 # lihat perintah yang akan dijalankan, tanpa mengubah apa pun
 curl -fsSL https://raw.githubusercontent.com/net1nfect/wth-ai/big-dix/install.sh | bash -s -- --dry-run

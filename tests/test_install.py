@@ -215,6 +215,20 @@ def test_bootstrap_parses_as_posix_sh():
     assert result.returncode == 0, result.stderr
 
 
+def test_bootstrap_defaults_to_the_branch_it_ships_from():
+    """Default branch harus branch tempat berkas ini dipublikasikan, bukan `main`."""
+    text = BOOTSTRAP.read_text(encoding="utf-8")
+    readme = (REPO / "README.md").read_text(encoding="utf-8")
+
+    assert 'WTH_REF="${WTH_REF:-big-dix}"' in text
+    assert "net1nfect/wth-ai/big-dix/install.sh | bash" in readme
+
+
+def test_installer_source_default_matches_bootstrap():
+    installer = INSTALL_SH.read_text(encoding="utf-8")
+    assert 'SRC_REF="${SRC_REF:-big-dix}"' in installer
+
+
 def test_readme_documents_one_liner():
     readme = (REPO / "README.md").read_text(encoding="utf-8")
     assert "net1nfect/wth-ai" in readme
