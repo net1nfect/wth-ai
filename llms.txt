@@ -72,12 +72,25 @@ gate yang mengharuskan exit 2 pada fixture bertemuan high.
 
 ## Sandbox dan recon visual
 
-- `wth sandbox plan --workspace-file F --mount SRC:DST:ro -- CMD` mencetak argv
-  `docker run` (cap-drop ALL, no-new-privileges, read-only, network lab) tanpa
-  menjalankan docker. Ini pengganti `--workspace-file` yang ditunda.
+- `wth sandbox plan ...` mencetak argv; `wth sandbox run --yes ...` menjalankannya
+  (argumen sama: cap-drop ALL, no-new-privileges, read-only, network lab).
 - `wth visual cluster DIR --out out/clusters.json` mengelompokkan PNG memakai
   difference hash 64-bit + toleransi kecerahan. PNG dibaca sendiri (zlib), jadi
   tidak butuh Pillow; PNG 16-bit/interlaced dilewati dengan alasan.
+- `wth browser capture URL --out DIR` memanggil binary `playwright` (bukan
+  library). Tidak terpasang => exit 1 dengan hint, bukan traceback.
+
+## OT/ICS baca nyata
+
+`wth ot read --host H --cidr C --kind holding --address 0 --count 4 --confirm`
+membuka koneksi Modbus TCP (stdlib, tanpa pymodbus) hanya untuk FC 1–4. Wajib
+`--confirm` dan wajib `--cidr` (EgressGuard). Tidak ada jalur tulis di klien.
+
+## Proxy
+
+Set `WTH_PROXY=http://127.0.0.1:8080` untuk mengarahkan semua `recon.http.fetch`
+ke Caido/Burp/ZAP. EgressGuard tetap berjalan lebih dulu; proxy tidak
+memperluas scope.
 
 ## MCP
 

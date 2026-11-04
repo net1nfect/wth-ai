@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import sys
 from pathlib import Path
 
@@ -475,9 +476,125 @@ def kb_search(query: str, limit: int) -> None:
                    f"{row['product'] or '-'}  {row['summary'][:80]}")
 
 
+@cli.group("ot")
+def ot_group() -> None:
+    """Recon OT/ICS — hanya baca, tidak pernah menulis ke PLC."""
+
+
+@ot_group.command("read")
+@click.option("--host", required=True)
+@click.option("--cidr", "cidrs", multiple=True, required=True,
+              help="Allowlist egress (wajib; minimal satu CIDR).")
+@click.option("--kind", default="holding", show_default=True,
+              type=click.Choice(["holding", "input", "coils", "discrete_inputs"]))
+@click.option("--address", default=0, show_default=True)
+@click.option("--count", default=4, show_default=True)
+@click.option("--unit", default=1, show_default=True)
+@click.option("--port", default=502, show_default=True)
+@click.option("--confirm", is_flag=True, help="Konfirmasi koneksi ke perangkat.")
+@click.option("--out", default="", help="Tulis hasil JSON ke path ini.")
+def ot_read(host: str, cidrs: tuple[str, ...], kind: str, address: int, count: int,
+            unit: int, port: int, confirm: bool, out: str) -> None:
+    """Baca blok Modbus (read-only). Tanpa --confirm tidak ada koneksi."""
+    import json as _json
+
+    from wth_ai.netguard import EgressDenied, EgressGuard
+    from wth_ai.ot.client import ModbusError, read_registers
+
+    if not confirm:
+        click.echo("ot read: DITOLAK — butuh --confirm (koneksi ke perangkat)")
+        raise SystemExit(2)
+
+    guard = EgressGuard.from_patterns(list(cidrs))
+    try:
+        result = read_registers(host, kind=kind, address=address, count=count,
+                                unit=unit, port=port, guard=guard)
+    except EgressDenied as exc:
+        click.echo(f"ot read: EGRESS DENIED — {exc}")
+        raise SystemExit(2) from exc
+    except (ModbusError, OSError) as exc:
+        click.echo(f"ot read: GAGAL — {exc}")
+        raise SystemExit(1) from exc
+
+    payload = result.to_dict()
+    click.echo(f"ot read: {host}:{port} unit={unit} {kind}[{address}:{address + count}]"
+               f" · {result.latency_ms} ms · destructive=False")
+    click.echo("  values: " + ", ".join(str(value) for value in result.values))
+    if out:
+        target = _user_path(out)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(_json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+        click.echo(f"ot read: {target}")
+
+
+@cli.group("browser")
+def browser_group() -> None:
+    """Screenshot lewat Playwright CLI (opsional; tidak ada import browser)."""
+
+
+@browser_group.command("capture")
+@click.argument("url")
+@click.option("--out", default="out/screenshots", show_default=True)
+@click.option("--name", default="", help="Nama file tanpa ekstensi.")
+@click.option("--timeout", default=45, show_default=True)
+def browser_capture(url: str, out: str, name: str, timeout: int) -> None:
+    """Ambil satu screenshot. Gagal -> exit 1 dengan alasan, bukan traceback."""
+    from wth_ai.recon.browser import capture
+
+    result = capture(url, _user_path(out), name=name, timeout=timeout)
+    if not result["ok"]:
+        click.echo(f"browser: GAGAL — {result['error']}")
+        raise SystemExit(1)
+    click.echo(f"browser: {result['path']} · {result['bytes']} byte · {result['ms']} ms")
+
+
 @cli.group("sandbox")
 def sandbox_group() -> None:
-    """Pratinjau sandbox container — argv saja, tidak pernah dijalankan di sini."""
+    """Pratinjau dan jalankan sandbox container."""
+
+
+@sandbox_group.command("run")
+@click.option("--workspace-file", "workspace_files", multiple=True,
+              help="File yang di-mount read-only ke /work/<nama>.")
+@click.option("--mount", "mounts", multiple=True, help="Mount tambahan SRC:DST[:ro|rw].")
+@click.option("--image", default="", help="Override image (dukung image@sha256:...).")
+@click.option("--network", default="", help="Override nama network lab.")
+@click.option("--yes", is_flag=True, help="Konfirmasi menjalankan docker.")
+@click.argument("command", nargs=-1)
+def sandbox_run(workspace_files: tuple[str, ...], mounts: tuple[str, ...],
+                image: str, network: str, yes: bool,
+                command: tuple[str, ...]) -> None:
+    """Jalankan container sandbox. Butuh --yes; tanpa itu hanya mencetak argv."""
+    import subprocess
+
+    from wth_ai.containment import SandboxSpec
+
+    extra: list[str] = []
+    for raw in mounts:
+        if len(raw.split(":")) < 2:
+            raise click.ClickException(f"mount tidak valid: {raw} (SRC:DST[:ro|rw])")
+        extra.append(raw if len(raw.split(":")) > 2 else f"{raw}:ro")
+    for path in workspace_files:
+        source = _user_path(path)
+        if not source.exists():
+            raise click.ClickException(f"workspace file tidak ada: {source}")
+        extra.append(f"{source}:/work/{source.name}:ro")
+
+    kwargs: dict = {"extra_mounts": tuple(extra)}
+    if image:
+        kwargs["image"] = image
+    if network:
+        kwargs["network"] = network
+    argv = SandboxSpec(**kwargs).docker_args(list(command) or ["sh", "-lc", "true"])
+
+    if not yes:
+        click.echo("sandbox: DITOLAK — butuh --yes untuk menjalankan container")
+        click.echo("sandbox: argv = " + " ".join(argv))
+        raise SystemExit(2)
+    if not shutil.which(argv[0]):
+        raise click.ClickException(f"{argv[0]} tidak ditemukan di PATH")
+    completed = subprocess.run(argv, check=False)
+    raise SystemExit(completed.returncode)
 
 
 @sandbox_group.command("plan")
@@ -548,11 +665,6 @@ def visual_cluster(directory: str, threshold: int, out: str) -> None:
         target.write_text(json.dumps(result, indent=2, ensure_ascii=False) + "\n",
                           encoding="utf-8")
         click.echo(f"visual: {target}")
-
-
-@cli.group("ot")
-def ot_group() -> None:
-    """Recon OT/ICS — hanya baca, tidak pernah menulis ke PLC."""
 
 
 @ot_group.command("plan")

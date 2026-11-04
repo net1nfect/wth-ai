@@ -423,6 +423,15 @@ class ToolDoctor:
     info["ok"] = all(info[key] for key in
                      ("modes", "evidence", "scope_card", "disclosure",
                       "skill_select", "mcp_gating"))
+    try:
+      from wth_ai.recon.browser import available as browser_available
+      from wth_ai.recon.http import proxy_map
+
+      info["browser"] = browser_available()["available"]
+      info["proxy"] = proxy_map() or {}
+    except Exception:  # noqa: BLE001
+      info["browser"] = False
+      info["proxy"] = {}
     return info
 
   def check_gateway(self) -> dict[str, Any]:
@@ -684,6 +693,8 @@ class ToolDoctor:
       + f"KB: {'present' if redteam['kb'] else 'belum dibangun (warn)'}",
       f"- Skill selector: {'OK' if redteam['skill_select'] else 'FAIL'} · "
       + f"MCP gating: {'OK' if redteam['mcp_gating'] else 'FAIL'}",
+      f"- Playwright: {'tersedia' if redteam.get('browser') else 'tidak (opsional)'} · "
+      + f"proxy: {redteam.get('proxy', {}).get('https') or 'langsung (tanpa proxy)'}",
       "",
       "## Gateway & Platform (Fase 7)",
       f"- Gateway module: {'OK' if gw['importable'] else 'FAIL'} · "

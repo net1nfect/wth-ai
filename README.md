@@ -458,6 +458,9 @@ Untuk agen dan operator baru. Versi mesin-baca: [`llms.txt`](llms.txt).
 | `wth ot plan --host H --block holding:0:10` | rencana baca Modbus (tanpa koneksi) |
 | `wth sandbox plan --workspace-file notes.txt` | argv `docker run` (mount ro, tidak dijalankan) |
 | `wth visual cluster shots/` | klaster screenshot (perceptual hash, tanpa Pillow) |
+| `wth ot read --host H --cidr C --confirm` | baca register Modbus (read-only, guard egress) |
+| `wth browser capture URL` | screenshot via Playwright CLI (opsional) |
+| `wth sandbox run --yes -- CMD` | jalankan container lab (tanpa `--yes` hanya cetak argv) |
 | `wth interactive --redteam --mode plan` | TUI mode agen |
 | `wth kill` | flag `$WTH_HOME/runtime/KILL` (worker berhenti ≤2 detik) |
 

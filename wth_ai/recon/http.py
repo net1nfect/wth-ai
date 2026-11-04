@@ -7,6 +7,7 @@ so tests can monkeypatch a single function to run fully offline.
 from __future__ import annotations
 
 import ipaddress
+import os
 import socket
 from dataclasses import dataclass, field
 from typing import Any
@@ -26,6 +27,18 @@ def set_egress_guard(guard: object | None) -> None:
     """Pasang/lepas gerbang egress untuk semua `fetch()` recon."""
     global _EGRESS_GUARD
     _EGRESS_GUARD = guard
+
+
+def proxy_map() -> dict[str, str] | None:
+    """Proxy operator (Caido/Burp/ZAP) dari WTH_PROXY, bila diset.
+
+    Dipakai supaya semua trafik recon bisa diperiksa di proxy tanpa mengubah
+    kode pemanggil. Tidak ada default tersembunyi: tanpa env, langsung.
+    """
+    url = (os.environ.get("WTH_PROXY") or "").strip()
+    if not url:
+        return None
+    return {"http": url, "https": url}
 
 
 def _ip_is_blocked(ip_str: str) -> bool:
@@ -174,13 +187,14 @@ def fetch(
         import requests
 
         start = time.time()
+        proxies = proxy_map()
         # WU-203: follow redirects MANUALLY so every hop's host is re-checked
         # against the SSRF guard -- a public URL that 30x-redirects to an
         # internal address is a classic SSRF bypass that requests' own
         # allow_redirects=True would follow blindly.
         resp = requests.request(
             method, url, timeout=timeout, headers=req_headers,
-            allow_redirects=False, stream=True,
+            allow_redirects=False, stream=True, proxies=proxies,
         )
         hops = 0
         while allow_redirects and resp.is_redirect and hops < MAX_REDIRECTS:
@@ -195,7 +209,7 @@ def fetch(
             resp.close()
             resp = requests.request(
                 method, nxt, timeout=timeout, headers=req_headers,
-                allow_redirects=False, stream=True,
+                allow_redirects=False, stream=True, proxies=proxies,
             )
             hops += 1
         body = ""
