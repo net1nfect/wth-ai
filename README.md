@@ -175,7 +175,41 @@ Konstitusi lengkap: lihat [`AGENTS.md`](AGENTS.md).
 
 ---
 
-## Instalasi (tanpa source code)
+## Instalasi
+
+### Satu baris (disarankan)
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/net1nfect/wth-ai/main/install.sh | bash
+```
+
+Skrip itu mengambil `scripts/install.sh` (lewat `install.sh` di root), membuat
+venv di `~/.wth-ai/venv`, meng-clone repo ke `~/.wth-ai/src/`, memasang
+paketnya, menaruh `wth`/`wth-ai` di `~/.local/bin`, lalu membuka wizard setup.
+
+Varian yang sering dipakai:
+
+```bash
+# branch ini (big-dix) selama rilis belum masuk main
+curl -fsSL https://raw.githubusercontent.com/net1nfect/wth-ai/big-dix/install.sh | bash
+
+# dengan TUI + bot
+curl -fsSL https://raw.githubusercontent.com/net1nfect/wth-ai/big-dix/install.sh | bash -s -- --with tui,bot
+
+# tag atau fork lain
+curl -fsSL https://raw.githubusercontent.com/FORK/wth-ai/main/install.sh | WTH_REF=v1.0.0 bash
+
+# lihat perintah yang akan dijalankan, tanpa mengubah apa pun
+curl -fsSL https://raw.githubusercontent.com/net1nfect/wth-ai/big-dix/install.sh | bash -s -- --dry-run
+
+# hapus (workspace ~/.wth-ai tetap aman)
+curl -fsSL https://raw.githubusercontent.com/net1nfect/wth-ai/big-dix/install.sh | bash -s -- --uninstall
+```
+
+Catatan: `--uninstall` menghapus venv, symlink, dan (dengan `--purge`) workspace
+`~/.wth-ai`. Config, vault, dan sesi tidak disentuh tanpa `--purge`.
+
+Butuh `git`, `curl`, dan Python ≥ 3.10. Tanpa sudo.
 
 ### Publik — npm + binary
 
@@ -190,22 +224,75 @@ Binary disimpan di `~/.wth-ai/runtime/`. Source code tidak diperlukan.
 ### Developer — dari source
 
 ```bash
-git clone <private-repo> wth-ai && cd wth-ai
-pip install --break-system-packages --user -e .
-./install.sh
-wth-ai setup
+git clone <repo> wth-ai && cd wth-ai
+scripts/install.sh --with tui        # venv + paket + workspace + entry point
+wth setup                            # wizard provider & model
 ```
+
+`scripts/install.sh` tidak memakai sudo. Yang dilakukannya, berurutan: cek Python
+≥ 3.10, buat venv di `$WTH_HOME/venv`, `pip install -e .`, pasang fitur opsional
+(`--with tui,bot,browser,full`), symlink `wth`/`wth-ai` ke `~/.local/bin`,
+buat workspace, lalu verifikasi (`wth --version`, `wth setup --check`).
+
+```bash
+scripts/install.sh --help                  # semua opsi
+scripts/install.sh --dry-run --with tui    # cetak perintah, ubah nol file
+scripts/install.sh --uninstall             # hapus venv + symlink, workspace aman
+scripts/install.sh --uninstall --purge     # + hapus $WTH_HOME (minta konfirmasi)
+WTH_HOME=/opt/wth scripts/install.sh --bin /usr/local/bin
+```
+
+### Setup tanpa wizard
+
+Wizard hanya untuk terminal interaktif. Untuk skrip/CI:
+
+```bash
+wth setup --check                      # preflight saja, tidak menulis apa pun
+wth setup --install --with bot         # pasang dependensi yang kurang
+wth setup --provider 9router \
+          --base-url http://127.0.0.1:20128/v1 \
+          --api-key sk-... --model glm-4.6 --no-smoke
+```
+
+Base URL provider yang butuh endpoint sendiri: `9router` (→ `router9_base_url`),
+`custom`, `openai`, `anthropic`, `google`, `ollama`. Untuk endpoint
+OpenAI-compatible milik sendiri dengan nama sendiri, gunakan `/connect` di dalam
+REPL — ia mendaftarkan provider baru tanpa menyentuh role yang sudah jalan.
+
+### Instruksi sesi opsional (`--bypass`)
+
+`prompts/agent/AGENT.md` memuat instruksi tambahan untuk model — terpisah dari
+`AGENTS.md` yang berisi konvensi kerja repo. Bawaannya mati:
+
+```bash
+wth --bypass                    # profil `wth` (prompts/agent/AGENT.md)
+wth --bypass glm-zcode-5.3-agents
+```
+
+Di dalam REPL: `/bypass`, `/bypass on <profil>`, `/bypass off`, `/bypass list`,
+`/bypass install <file.md>`, `/bypass remove <profil>`. Profil tambahan dibaca
+dari `$WTH_HOME/bypass/` (override: `WTH_BYPASS_DIR`), dan balasan selalu
+membawa label `· bypass: <profil>`.
 
 ### Setup Wizard (first-run)
 
 Wizard meminta:
-1. Provider LLM (OpenRouter / Ollama / OpenAI / Anthropic / Google)
-2. API key (validasi ping live)
+1. Provider LLM (9router / OpenRouter / Ollama / OpenAI / Anthropic / Google / Groq / custom)
+2. API key (disimpan ke vault terenkripsi, bukan `user.yaml`)
 3. Model per role: planner, executor, verifier
 4. Permission default
 5. Opsional: Discord & Telegram bot tokens
 
-Config tersimpan di `~/.wth-ai/config/user.yaml` dan `~/.wth-ai/.env`.
+Config tersimpan di `~/.wth-ai/config/user.yaml` dan secret di
+`~/.wth-ai/vault.enc`; config hanya memegang referensi `vault:<nama>`.
+
+### Exit code `wth setup`
+
+| Code | Arti |
+|---|---|
+| 0 | preflight OK / setup tersimpan |
+| 1 | preflight gagal (Python terlalu lama, dependensi wajib hilang) |
+| lain | exit code pip saat `--install` gagal |
 
 ### Jalankan
 
@@ -375,6 +462,9 @@ Status bar menampilkan: `hyp 12 · chains 3 · cov 15% · verified 1`
 | `wth browser capture URL` | Screenshot via Playwright CLI |
 | `wth visual cluster DIR` | Klaster screenshot (dhash) |
 | `wth interactive --redteam` | TUI mode agen |
+| `wth setup [--check\|--install]` | Preflight, pasang dependensi, wizard provider |
+| `wth setup --provider 9router --base-url ... --api-key ... --model ...` | Setup tanpa wizard (CI/skrip) |
+| `wth --bypass[ -profile NAMA]` | Aktifkan instruksi sesi dari `prompts/agent/AGENT.md` |
 | `wth kill` | Hentikan worker ≤2 detik |
 | `wth doctor` | Health check (runtime, registry, red team layer) |
 
@@ -391,6 +481,8 @@ Status bar menampilkan: `hyp 12 · chains 3 · cov 15% · verified 1`
 | `/report` | Laporan H1 dengan PoC |
 | `/permission` | Set mode testing |
 | `/scope set accounts=...` | Multi-account untuk IDOR |
+| `/connect <base_url> [api_key]` | Daftar provider LLM OpenAI-compatible |
+| `/bypass on\|off [profil]` | Instruksi sesi (terpisah dari AGENTS.md) |
 
 ---
 
@@ -412,7 +504,10 @@ Status bar menampilkan: `hyp 12 · chains 3 · cov 15% · verified 1`
 | IDOR blocked | Tambah `accounts=userA:pass,userB:pass` |
 | Command blocked | `/permission standard` atau lebih tinggi |
 | Tool missing | `/doctor` lalu `/tools install all` |
-| pip PEP 668 | `pip install --break-system-packages --user -e .` |
+| pip PEP 668 | pakai `scripts/install.sh` (venv terisolasi) — jangan `pip install` ke sistem |
+| `No module named 'textual'` | TUI opsional: `scripts/install.sh --with tui` atau `wth setup --install --with tui` |
+| `wth: command not found` | tambahkan `~/.local/bin` ke PATH, atau pakai `--bin /usr/local/bin` |
+| `wth-main.py` tidak ditemukan | pasang dari sumber: `scripts/install.sh` (entry point butuh repo, bukan wheel polos) |
 
 ---
 
@@ -428,15 +523,20 @@ Status bar menampilkan: `hyp 12 · chains 3 · cov 15% · verified 1`
 ## Struktur Proyek
 
 ```
+install.sh          # bootstrap satu baris (curl | bash)
+scripts/install.sh  # installer: venv, pip, symlink, workspace
 wth-main.py         # entry point CLI (semua perintah Click)
 wth_ai/
   modes.py          # 7 mode agen; `auto` = superset
+  install.py        # preflight (deps/python/workspace), dipakai `wth setup`
   scope_manager.py  # matcher CIDR/host untuk scope
   scope_card.py     # rekaman izin (ikut ke bundel bukti)
   netguard.py       # EgressGuard: allowlist keluar + audit
   containment.py    # SandboxSpec -> argv docker (cap-drop, read-only)
   killswitch.py     # kill <= 2 detik + flag runtime/KILL
   redaction.py      # redaksi secret kanonik
+  agents/bypass.py  # profil instruksi sesi (--bypass, /bypass)
+  llm/connect.py    # provider OpenAI-compatible buatan operator (/connect)
   redteam/          # mesin temuan: bundle, classify, gate, novel/, disclosure
   kb/               # KB CVE SQLite+FTS5, validator sitasi, skor prioritas
   ot/               # Modbus read-only (FC 1-4), klien TCP stdlib
@@ -445,6 +545,7 @@ wth_ai/
   recon/            # http (fetch+egress+proxy), visual (dhash PNG), browser
   cli/tui/redteam/  # TUI mode agen
   tools/doctor.py   # health check
+prompts/agent/AGENT.md  # prompt bawaan `--bypass` (bukan konvensi repo)
 core/, executor/, agents/, reporting/ (root)   # legacy, jangan digabung
 AGENTS.md           # konvensi kerja untuk agen
 CLAUDE.md           # pointer ke AGENTS.md

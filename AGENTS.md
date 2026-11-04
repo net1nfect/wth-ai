@@ -9,6 +9,11 @@ Untuk Claude Code, lihat `CLAUDE.md` (pointer ke file ini).
 > Catatan: isi lama file ini adalah tempelan prompt Fase 5 (recon platform) yang
 > sudah selesai dikerjakan. Prompt itu tidak lagi menjadi sumber kebenaran;
 > arsipnya ada di riwayat git, rencana aktif ada di `.hermes/plans/`.
+>
+> **File ini bukan tempat instruksi sesi.** `prompts/agent/AGENT.md` (profil
+> `wth`, dipakai lewat `wth --bypass` atau `/bypass on`) memuat instruksi
+> tambahan untuk model. Yang di sini adalah konvensi kerja repo, dan sengaja
+> dibaca setiap sesi — jangan campurkan keduanya.
 
 ---
 
@@ -191,4 +196,26 @@ Rencana kerja & status per item: `.hermes/plans/` (bukan bagian produk).
 | `docs/MODES.md` | matriks mode × kapabilitas (di-generate dari kode) |
 | `docs/COMPARISON.md` | perbandingan jujur dengan Strix (hanya yang punya bukti) |
 | `docs/AIRGAP.md` | pemasangan tertutup, LLM lokal, KB offline |
+| `prompts/agent/AGENT.md` | profil bypass bawaan (`wth --bypass`), bukan konvensi repo |
 | `docs/archive/` | arsip perencanaan lama (bukan rujukan kerja) |
+
+---
+
+## 9. Bypass LLM (`--bypass` / `/bypass`)
+
+Instruksi sesi untuk model tinggal di `prompts/agent/AGENT.md` dan/atau
+`$WTH_HOME/bypass/<nama>.md` (override direktori: `WTH_BYPASS_DIR`). Semantik
+yang harus dipertahankan:
+
+- **Mati secara default.** `wth --bypass` (tanpa nilai) memakai profil `wth`;
+  `--bypass <nama>` memakai profil bernama; tanpa flag tidak ada blok apa pun.
+- **Label di meta.** Balasan chat/supervisor menambahkan `· bypass: <profil>`.
+  Jangan hapus: transkrip harus jujur soal konteks sesi.
+- **Tidak menimpa invarian.** Prompt bypass boleh mengubah gaya dan kelengkapan,
+  tidak boleh melonggarkan scope, egress allowlist, kill switch, atau gate
+  bukti. Test `tests/test_bypass.py` menjaga empat kata kunci itu tetap ada.
+- **Terpisah dari AGENTS.md.** Jika satu sesi butuh bypass, itu pilihan
+  operator; kalau ia ditempel ke konstitusi repo, semua sesi mendapatkannya
+  tanpa diminta.
+- Status bukan preferensi: `agent.bypass` yang kosong saat disimpan tidak
+  menghidupkan kembali nilai lama di disk (lihat `save_user_config`).

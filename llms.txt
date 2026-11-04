@@ -26,6 +26,13 @@ ini untuk agen/koding asisten: perintah utama, artefak, dan kontrak exit code.
 - `wth kb status` / `wth kb get CVE-YYYY-NNNN`
   CVE yang tidak ada di DB → exit 2.
 - `wth skill list` / `wth skill install <git-url>`
+- `wth setup [--check|--install] [--with tui,bot,browser,full]`
+  Preflight (python >= 3.10, dependensi, workspace) lalu wizard provider.
+  `--provider/--base-url/--api-key/--model` menjalankan setup tanpa wizard.
+- `wth --bypass[--bypass-profile NAMA]`
+  Instruksi sesi tambahan dari `prompts/agent/AGENT.md` atau
+  `$WTH_HOME/bypass/<NAMA>.md`. Bawaan mati; label `· bypass: NAMA` muncul di
+  meta balasan.
 - `wth kill` — flag `$WTH_HOME/runtime/KILL` (worker berhenti ≤2 detik)
 - `wth interactive --redteam [--mode plan|build|auto|scout|strike|chain|scribe]`
   TUI red team. `python -m wth_ai.cli.tui.redteam --demo` untuk demo.
@@ -97,6 +104,13 @@ memperluas scope.
 Server bisa datang dari `mcp.json` (`{"servers": {...}}` atau `mcpServers` gaya
 Claude Desktop) di direktori kerja atau `WTH_MCP_MANIFEST`. Config YAML menang
 bila namanya sama. Setiap `call_tool(mode=...)` digerbangi kapabilitas MCP.
+
+## Provider tambahan
+
+`/connect <base_url> [api_key]` di REPL mendaftarkan endpoint OpenAI-compatible
+(lokal atau gateway) sebagai provider bernama. Base URL dinormalisasi ke satu
+`/v1`; API key masuk vault (`provider_<nama>_api_key`), user.yaml hanya memuat
+`vault:` reference. `--provider` pada `wth setup` tetap untuk tipe bawaan.
 
 ## Batasan
 

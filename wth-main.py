@@ -51,12 +51,35 @@ def _orch(config_path: str, *, fresh: bool = False) -> WTHOrchestrator:
 @click.option("--local", is_flag=True, help="Embedded mode (skip gateway client).")
 @click.option("--plain", is_flag=True, help="Plain unicode terminal REPL (default).")
 @click.option("--tui", is_flag=True, help="Fullscreen Textual TUI (requires wth-ai[tui]).")
+@click.option(
+    "--bypass", "bypass_flag", is_flag=True,
+    help="Aktifkan instruksi sesi bawaan (prompts/agent/AGENT.md).",
+)
+@click.option(
+    "--bypass-profile", "bypass_profile", default="",
+    metavar="NAMA",
+    help="Aktifkan profil bypass bernama dari $WTH_HOME/bypass.",
+)
 @click.pass_context
-def cli(ctx: click.Context, config_path: str, version: bool, skip_setup: bool, local: bool, plain: bool, tui: bool) -> None:
+def cli(
+    ctx: click.Context,
+    config_path: str,
+    version: bool,
+    skip_setup: bool,
+    local: bool,
+    plain: bool,
+    tui: bool,
+    bypass_flag: bool,
+    bypass_profile: str,
+) -> None:
     """WTH-AI v1.0 — realtime bug hunter with dual-agent AI."""
     if version:
         click.echo(f"WTH-AI v{__version__}")
         return
+    if bypass_profile:
+        os.environ["WTH_BYPASS"] = bypass_profile.strip()
+    elif bypass_flag:
+        os.environ["WTH_BYPASS"] = "default"
     if skip_setup:
         os.environ["WTH_SKIP_SETUP"] = "1"
     if local:
@@ -75,10 +98,100 @@ def cli(ctx: click.Context, config_path: str, version: bool, skip_setup: bool, l
 @cli.command()
 @click.option("--reset", is_flag=True, help="Reset existing configuration.")
 @click.option("--reconfigure", is_flag=True, help="Re-run wizard without deleting config/vault.")
+@click.option("--check", is_flag=True, help="Hanya periksa lingkungan (tanpa menulis apa pun).")
+@click.option("--install", "do_install", is_flag=True, help="Pasang dependensi yang belum ada.")
+@click.option("--with", "with_features", default="", help="Fitur opsional: tui,bot,browser,full (koma).")
+@click.option("--dry-run", is_flag=True, help="Tampilkan perintah yang akan dijalankan.")
+@click.option("--no-smoke", is_flag=True, help="Lewati smoke test provider.")
+@click.option("--non-interactive", is_flag=True, help="Jangan buka wizard setelah preflight.")
+@click.option("--provider", default="", help="Provider untuk non-interaktif (mis. 9router, openrouter, custom).")
+@click.option("--base-url", default="", help="Base URL endpoint (dipakai dengan --non-interactive).")
+@click.option("--api-key", default="", help="API key; hanya tersimpan di vault, tidak di user.yaml.")
+@click.option("--model", default="", help="Model default untuk semua role.")
 @click.option("--config", "config_path", default="config/wth_config.yaml", show_default=True)
-def setup(config_path: str, reset: bool, reconfigure: bool) -> None:
-    """Run first-time setup wizard (API keys, models, bots)."""
+def setup(
+    config_path: str,
+    reset: bool,
+    reconfigure: bool,
+    check: bool,
+    do_install: bool,
+    with_features: str,
+    dry_run: bool,
+    no_smoke: bool,
+    non_interactive: bool,
+    provider: str,
+    base_url: str,
+    api_key: str,
+    model: str,
+) -> None:
+    """Preflight + konfigurasi awal WTH-AI.
+
+    Tanpa flag, perintah ini menjalankan preflight, membuat workspace
+    `~/.wth-ai`, lalu wizard provider. `--check` hanya melaporkan.
+    """
+    from wth_ai.install import build_report, format_report, install_missing
+    from wth_ai.vault import SecretVault
+
+    features = [f.strip().lower() for f in with_features.replace(",", " ").split() if f.strip()]
+    report = build_report()
+
+    if check or dry_run:
+        click.echo(format_report(report))
+        if do_install or dry_run:
+            code, commands = install_missing(report, features=features, dry_run=True)
+            for command in commands:
+                click.echo(f"\n  perintah: {command}")
+            if not commands:
+                click.echo("\n  tidak ada yang perlu dipasang.")
+        if not report.ok and not do_install:
+            raise SystemExit(1)
+        return
+
+    if not report.ok:
+        click.echo(format_report(report))
+        raise SystemExit(1)
+
+    if do_install or features:
+        code, commands = install_missing(report, features=features)
+        for command in commands:
+            click.echo(f"  $ {command}")
+        if code != 0:
+            raise SystemExit(code)
+
+    from wth_ai.install import apply_setup
+
+    report, smoke = apply_setup(smoke=not no_smoke)
+    click.echo(f"✓ workspace: {report.home}")
+    if smoke:
+        click.echo(smoke)
+
+    from wth_ai.cli.setup_wizard import build_setup_payload
+
+    wants_scripted = bool(provider or base_url or api_key or model)
+    if non_interactive or wants_scripted:
+        try:
+            payload = build_setup_payload(
+                provider=provider, base_url=base_url, api_key=api_key, model=model,
+            )
+        except ValueError as exc:
+            raise SystemExit(f"[x] {exc}")
+        if not payload.get("provider_type"):
+            click.echo("  (tanpa --provider: konfigurasi provider tidak diubah)")
+            return
+        if reset and not reconfigure:
+            payload["require_llm"] = True
+
+        from wth_ai.cli.setup_wizard import run_setup_wizard
+
+        run_setup_wizard(reset=reset and not reconfigure, non_interactive=payload)
+        click.echo(f"✓ setup tersimpan (provider {payload['provider_type']})")
+        from wth_ai.config import USER_CONFIG_PATH
+
+        click.echo(f"  config: {USER_CONFIG_PATH}\n  vault : {SecretVault().path}")
+        return
+
     from wth_ai.cli.setup_wizard import run_setup_wizard
+
     run_setup_wizard(reset=reset and not reconfigure)
 
 

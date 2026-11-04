@@ -3,11 +3,13 @@
 *.pyc
 __pycache__/
 .pytest_cache/
+.mypy_cache/
+.ruff_cache/
 *.egg-info/
 dist/
 build/
 .venv/
-venv/
+venv*/
 data/sessions/*.json
 !data/sessions/.gitkeep
 node_modules/
@@ -20,3 +22,34 @@ node_modules/
 
 # Artefak index codebase-memory (4.7 MB, dibangun ulang lokal)
 .codebase-memory/
+
+# Artefak lokal installer/setup — dibuat ulang di mesin operator
+.wth-ai/
+/src/
+/bin/
+/runtime/
+/tools/bin/
+
+# Vault & secret lokal (kalau WTH_HOME diarahkan ke dalam repo)
+vault.enc
+vault.key
+config/user.yaml
+config/user.yaml.bak-*
+config/.env.bak-*
+
+# Hasil pemindaian & rekaman engagement
+# CATATAN: `wth-results/` dan `data/engagements/` saat ini DILACAK git (lihat
+# AGENTS.md §5). Pola di bawah hanya menangkap file baru; yang sudah tercatat
+# tidak terpengaruh sampai pemilik repo memutuskan menghapusnya dari indeks.
+wth-results/
+/out/
+reports/*.html
+reports/*.pdf
+reports/*.sarif
+/logs/*.log
+data/kb/*.sqlite
+data/kb/*.db
+
+# Prompt bypass milik operator: prompt pribadi tidak ikut ter-publish.
+# Profil bawaan tetap dilacak di prompts/agent/AGENT.md.
+bypass/

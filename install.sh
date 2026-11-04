@@ -1,84 +1,51 @@
-#!/usr/bin/env bash
-# WTH-AI v1.0 installer — Kali PEP668 safe, no venv required
-set -euo pipefail
+#!/bin/sh
+# wth-ai one-line bootstrap.
+#
+#   curl -fsSL https://raw.githubusercontent.com/net1nfect/wth-ai/main/install.sh | sh
+#
+# Why a POSIX sh file this small exists at all: `curl | sh` runs the script
+# stdin, so nothing relative to it can be resolved. It fetches the real installer
+# into a temp dir, runs it there, then cleans up. The bucket name and branch can
+# be overridden, which is what makes the same line usable for a fork or a tag.
+#
+# No sudo, no eval of remote content beyond the pinned repo path, and the
+# installer keeps its own --dry-run/--uninstall contract.
+set -eu
 
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-cd "$ROOT"
+WTH_REPO="${WTH_REPO:-net1nfect/wth-ai}"
+WTH_REF="${WTH_REF:-main}"
+WTH_SRC_URL="${WTH_SRC_URL:-https://raw.githubusercontent.com/${WTH_REPO}/${WTH_REF}/scripts/install.sh}"
 
-WTH_HOME="${WTH_HOME:-$HOME/.wth-ai}"
-mkdir -p "$WTH_HOME"/{runtime,tools/bin,data/sessions,data/engagements,logs,config}
+fail() {
+    printf 'wth-ai bootstrap: %s\n' "$*" >&2
+    exit 1
+}
 
-echo "[*] WTH-AI v1.0 installer"
-echo "[*] Root: $ROOT"
-echo "[*] WTH_HOME: $WTH_HOME"
+command -v curl >/dev/null 2>&1 || fail "curl tidak ditemukan; pasang curl atau unduh scripts/install.sh manual"
+command -v sh >/dev/null 2>&1 || fail "sh tidak ditemukan"
+# `curl | sh` sudah memakai sh; repo ini butuh bash (array, [[ ), jadi jangan
+# bergantung pada /bin/sh yang mungkin dash.
+BASH_BIN="$(command -v bash || true)"
+[ -n "$BASH_BIN" ] || fail "bash tidak ditemukan (installer butuh bash, bukan sh murni)"
 
-PIP_FLAGS=(--user)
-if python3 -m pip install --help 2>/dev/null | grep -q break-system-packages; then
-  PIP_FLAGS+=(--break-system-packages)
-  echo "[*] PEP 668 detected — using --break-system-packages --user"
-fi
+TMP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/wth-install.XXXXXX" 2>/dev/null)" || fail "tidak bisa membuat direktori sementara"
+# shellcheck disable=SC2064  # TMP_DIR harus di-expand sekarang, bukan saat trap jalan
+trap 'rm -rf "$TMP_DIR"' EXIT INT TERM
 
-if python3 -m pip install "${PIP_FLAGS[@]}" -q -r requirements.txt \
-  && python3 -m pip install "${PIP_FLAGS[@]}" -q -e .; then
-  echo "[+] Installed: pip install ${PIP_FLAGS[*]} -e ."
-else
-  echo "[!] pip install failed — use source path (no install needed):"
-  echo "    python3 wth-main.py run '/doctor'"
-fi
+INSTALLER="$TMP_DIR/install.sh"
+printf 'wth-ai bootstrap: mengambil installer dari %s\n' "$WTH_SRC_URL"
+curl -fsSL --retry 2 --connect-timeout 15 -o "$INSTALLER" "$WTH_SRC_URL" \
+    || fail "gagal mengunduh installer dari $WTH_SRC_URL (repo/ref salah?)"
 
-python3 -m pip install "${PIP_FLAGS[@]}" -q nodriver 2>/dev/null \
-  || echo "[!] nodriver optional — browser/CF bypass disabled until installed"
+# Berkas kosong atau halaman HTML 404 akan membuat `sh` keluar dengan error yang
+# membingungkan, jadi bentuknya diperiksa dulu sebelum dijalankan.
+[ -s "$INSTALLER" ] || fail "installer kosong: $WTH_SRC_URL"
+head -n 1 "$INSTALLER" | grep -q '^#!' || fail "isi $WTH_SRC_URL bukan skrip shell (404/halaman HTML?)"
 
-mkdir -p data/sessions data/cli_history wth-results skills
-
-if [[ -d "$HOME/.openclaw/workspace/skills" ]]; then
-  ln -sfn "$HOME/.openclaw/workspace/skills" "$ROOT/skills/external" 2>/dev/null || true
-  echo "[+] Linked OpenClaw skills"
-fi
-
-if [[ -d "$HOME/.codex/skills" ]]; then
-  ln -sfn "$HOME/.codex/skills" "$ROOT/skills/codex" 2>/dev/null || true
-  echo "[+] Linked Codex skills"
-fi
-
-if [[ ! -f .env ]] && [[ -f .env.example ]]; then
-  cp .env.example .env
-  echo "[!] Created .env — set OPENROUTER_API_KEY"
-fi
-
-if [[ ! -f "$WTH_HOME/.env" ]] && [[ -f .env ]]; then
-  cp .env "$WTH_HOME/.env" 2>/dev/null || true
-fi
-
-# Primary launcher — always uses wth-main.py (avoids broken entry imports)
-LAUNCHER="$HOME/.local/bin/wth-ai"
-mkdir -p "$HOME/.local/bin"
-cat > "$LAUNCHER" << EOF
-#!/usr/bin/env bash
-export WTH_HOME="\${WTH_HOME:-$WTH_HOME}"
-export PATH="\$WTH_HOME/tools/bin:\$HOME/.local/bin:\$PATH"
-exec python3 "$ROOT/wth-main.py" "\$@"
-EOF
-chmod +x "$LAUNCHER"
-echo "[+] Launcher: $LAUNCHER"
-
-# npm local link (registry not published yet)
-if command -v npm >/dev/null 2>&1; then
-  if (cd "$ROOT/packages/wth-cli" && npm link 2>/dev/null); then
-    echo "[+] npm linked: wth → packages/wth-cli (local)"
-  else
-    echo "[*] npm link skipped — run: npm i -g $ROOT/packages/wth-cli"
-  fi
-fi
-
-echo ""
-echo "=== Run paths ==="
-echo "  1) wth-ai run '/doctor'          (launcher → wth-main.py)"
-echo "  2) python3 wth-main.py           (source dev)"
-echo "  3) npm i -g ./packages/wth-cli   (local npm, until registry publish)"
-echo "  4) wth-ai setup                    (first-run wizard)"
-echo ""
-python3 wth-main.py --version 2>/dev/null || true
-if [[ ! -f "$WTH_HOME/config/user.yaml" ]]; then
-  echo "[*] First install — jalankan: wth-ai setup"
-fi
+# `bash "$INSTALLER"` — bukan `sh` — karena installer memakai array dan `[[`.
+# Argumen operator (`--with tui`, `--dry-run`) diteruskan utuh dan `$0` menunjuk
+# file nyata, sehingga `SCRIPT_DIR`/`--source` tetap bisa diresolusi.
+#
+# Sengaja tanpa `|| exit`: exit code installer (1 preflight gagal, kode pip)
+# harus sampai ke pemanggil pipeline.
+exec "$BASH_BIN" "$INSTALLER" "$@"

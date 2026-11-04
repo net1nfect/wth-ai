@@ -7,6 +7,7 @@ install bisa diuji tanpa jaringan lewat `--dry-run`.
 
 from __future__ import annotations
 
+import functools
 import os
 import shutil
 import subprocess
@@ -198,3 +199,168 @@ def test_install_script_parses():
         pytest.skip("bash tidak tersedia")
     result = subprocess.run([bash, "-n", str(INSTALL_SH)], capture_output=True, text=True)
     assert result.returncode == 0, result.stderr
+
+
+# --------------------------------------------------------------------------- #
+# bootstrap satu baris (install.sh di root)
+# --------------------------------------------------------------------------- #
+BOOTSTRAP = REPO / "install.sh"
+
+
+def test_bootstrap_parses_as_posix_sh():
+    sh = shutil.which("sh")
+    if sh is None:
+        pytest.skip("sh tidak tersedia")
+    result = subprocess.run([sh, "-n", str(BOOTSTRAP)], capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+
+
+def test_readme_documents_one_liner():
+    readme = (REPO / "README.md").read_text(encoding="utf-8")
+    assert "net1nfect/wth-ai" in readme
+    assert "install.sh | bash" in readme
+    assert "--dry-run" in readme
+
+
+def test_bootstrap_rejects_html_instead_of_running_it(tmp_path):
+    sh = shutil.which("sh")
+    if sh is None:
+        pytest.skip("sh tidak tersedia")
+
+    page = tmp_path / "page.html"
+    page.write_text("<!doctype html><title>404</title>", encoding="utf-8")
+    server = _serve(tmp_path)
+
+    try:
+        result = subprocess.run(
+            [sh, str(BOOTSTRAP)],
+            capture_output=True, text=True,
+            env={**os.environ, "WTH_SRC_URL": f"http://127.0.0.1:{server.port}/page.html",
+                 "WTH_HOME": str(tmp_path / "home")},
+        )
+    finally:
+        server.stop()
+
+    assert result.returncode != 0
+    assert "bukan skrip shell" in result.stderr
+
+
+def test_bootstrap_runs_piped_installer_and_forwards_args(tmp_path):
+    sh = shutil.which("sh")
+    bash = shutil.which("bash")
+    if sh is None or bash is None:
+        pytest.skip("sh/bash tidak tersedia")
+
+    server = _serve(REPO)
+    try:
+        pipeline = (
+            f"cd {tmp_path} && "
+            f"WTH_SRC_URL=http://127.0.0.1:{server.port}/scripts/install.sh "
+            f"WTH_HOME={tmp_path / 'home'} "
+            f"sh {BOOTSTRAP} --dry-run --no-setup"
+        )
+        result = subprocess.run([bash, "-c", pipeline], capture_output=True, text=True)
+    finally:
+        server.stop()
+
+    assert result.returncode == 0, result.stderr
+    # Argumen harus sampai ke installer, bukan ditelan oleh bootstrap.
+    assert "--dry-run" in result.stdout or "dry-run" in result.stdout
+    assert "Pasang paket" in result.stdout
+
+
+def test_installer_survives_being_piped(tmp_path):
+    """Tidak ada BASH_SOURCE saat dipipa: skrip tidak boleh mati di set -u."""
+    bash = shutil.which("bash")
+    if bash is None:
+        pytest.skip("bash tidak tersedia")
+
+    result = subprocess.run(
+        [bash, "-c", f"cd {tmp_path} && WTH_HOME={tmp_path / 'h'} cat {INSTALL_SH} | bash -s -- --dry-run --no-setup"],
+        capture_output=True, text=True,
+    )
+    assert result.returncode == 0, result.stderr
+    assert "unbound variable" not in result.stderr
+
+
+class _Server:
+    def __init__(self, root: Path):
+        import http.server
+        import threading
+
+        handler = functools.partial(http.server.SimpleHTTPRequestHandler, directory=str(root))
+        self.httpd = http.server.HTTPServer(("127.0.0.1", 0), handler)
+        self.port = self.httpd.server_address[1]
+        self.thread = threading.Thread(target=self.httpd.serve_forever, daemon=True)
+
+    def __enter__(self):
+        self.thread.start()
+        return self.port
+
+    def __exit__(self, *exc):
+        self.stop()
+
+    def stop(self):
+        self.httpd.shutdown()
+        self.httpd.server_close()
+
+
+def _serve(root: Path) -> "_Server":
+    server = _Server(root)
+    server.__enter__()
+    return server
+
+
+def test_install_dry_run_changes_nothing(tmp_path):
+    bash = shutil.which("bash")
+    if bash is None:
+        pytest.skip("bash tidak tersedia")
+
+    home = tmp_path / "home"
+    bin_dir = tmp_path / "bin"
+    result = subprocess.run(
+        [bash, str(INSTALL_SH), "--dry-run", "--no-setup", "--with", "tui",
+         "--home", str(home), "--bin", str(bin_dir), "--source", str(REPO)],
+        capture_output=True, text=True, env={**os.environ, "WTH_HOME": str(home)},
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "pip install --quiet -e" in result.stdout
+    assert "textual" in result.stdout
+    assert not home.exists()
+    assert not bin_dir.exists()
+
+
+def test_install_rejects_unknown_feature():
+    bash = shutil.which("bash")
+    if bash is None:
+        pytest.skip("bash tidak tersedia")
+    result = subprocess.run(
+        [bash, str(INSTALL_SH), "--dry-run", "--no-setup", "--with", "ngawur"],
+        capture_output=True, text=True,
+    )
+    # Ditolak setelah fase paket: pesannya harus menyebut pilihan yang valid.
+    assert result.returncode != 0
+    assert "fitur tidak dikenal" in (result.stdout + result.stderr)
+
+
+def test_uninstall_dry_run_is_safe(tmp_path):
+    bash = shutil.which("bash")
+    if bash is None:
+        pytest.skip("bash tidak tersedia")
+    home = tmp_path / "home"
+    (home / "config").mkdir(parents=True)
+    (home / "config" / "user.yaml").write_text("setup_complete: true\n", encoding="utf-8")
+
+    result = subprocess.run(
+        [bash, str(INSTALL_SH), "--uninstall", "--dry-run", "--home", str(home), "--bin", str(tmp_path / "bin")],
+        capture_output=True, text=True,
+    )
+    assert result.returncode == 0, result.stderr
+    assert (home / "config" / "user.yaml").exists()
+
+
+def test_pyproject_declares_entry_points():
+    text = (REPO / "pyproject.toml").read_text(encoding="utf-8")
+    assert 'wth = "wth_ai.cli.entry:main"' in text
+    assert "requires-python" in text
