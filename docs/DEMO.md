@@ -86,6 +86,22 @@ wth kb status
 wth kb search log4shell               # tidak ada hasil → exit 1, jangan dikutip
 ```
 
+## OT/ICS, browser, sandbox
+
+```bash
+# rencana baca (tanpa koneksi) vs baca nyata (wajib --confirm + --cidr)
+wth ot plan --host 172.28.0.10 --unit 2 --block holding:0:4
+wth ot read --host 172.28.0.10 --cidr 172.28.0.0/16 --confirm --count 4
+
+# screenshot (butuh `playwright install chromium`; tanpa itu exit 1 + hint)
+wth browser capture http://172.28.0.10/ --out shots/
+wth visual cluster shots/ --out out/clusters.json
+
+# sandbox: tanpa --yes hanya mencetak argv, dengan --yes menjalankannya
+wth sandbox plan --workspace-file openapi.json -- sh -lc 'echo hi'
+wth sandbox run --yes --image kalilinux/kali-rolling -- nmap -sT 172.28.0.10
+```
+
 ## Kalau ditanya "ini nyata atau hardcode?"
 
 Jawab dengan tiga hal:

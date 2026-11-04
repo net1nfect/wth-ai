@@ -171,7 +171,7 @@ flowchart TD
 
 **TTST (Terminal Transcript Source of Truth):** Setiap klaim kerentanan harus punya output terminal/HTTP nyata yang tersimpan sebagai `TX-{id}`.
 
-Konstitusi lengkap: lihat [`AGENT.md`](AGENT.md).
+Konstitusi lengkap: lihat [`AGENTS.md`](AGENTS.md).
 
 ---
 
@@ -357,6 +357,29 @@ Status bar menampilkan: `hyp 12 · chains 3 · cov 15% · verified 1`
 
 ## Perintah Utama
 
+### Perintah CLI (`wth ...`)
+
+| Command | Fungsi |
+|---------|--------|
+| `wth scope --target H --cidr C --authorized` | Tulis scope card (izin tertulis) |
+| `wth scan --offline-demo --out out` | Loop red team deterministik + bundel bukti |
+| `wth scan -n --fail-on high` | Mode CI: exit 0/1/2 |
+| `wth verify out/bundle` | Verifikasi hash bundel bukti |
+| `wth report --format html\|sarif\|json\|id\|pdf` | Laporan dari bundel |
+| `wth disclosure F-001 --bundle out/bundle` | Advisory pengungkapan |
+| `wth recon run\|quick\|watch\|diff\|plan` | Recon platform + tool registry |
+| `wth job create/list/...` | Job system (recon, hunt, report) |
+| `wth kb build\|status\|get\|search` | Knowledge base CVE lokal |
+| `wth ot plan\|read` | Modbus read-only (FC 1–4) |
+| `wth sandbox plan\|run` | Container lab (cap-drop, read-only) |
+| `wth browser capture URL` | Screenshot via Playwright CLI |
+| `wth visual cluster DIR` | Klaster screenshot (dhash) |
+| `wth interactive --redteam` | TUI mode agen |
+| `wth kill` | Hentikan worker ≤2 detik |
+| `wth doctor` | Health check (runtime, registry, red team layer) |
+
+### Slash command (di dalam REPL)
+
 | Command | Fungsi |
 |---------|--------|
 | `/recon` | Wizard domain atau recon langsung |
@@ -373,7 +396,7 @@ Status bar menampilkan: `hyp 12 · chains 3 · cov 15% · verified 1`
 
 ## Anti-Halusinasi (TTST)
 
-1. **AGENT.md** — konstitusi wajib untuk semua agent
+1. **AGENTS.md** — konstitusi wajib untuk semua agen (`AGENTS.md`, pointer Claude di `CLAUDE.md`)
 2. **GroundingFirewall** — klaim VERIFIED/FOUND tanpa `[TX:...]` diubah jadi `HIPOTESIS (belum dibuktikan)`
 3. **Evidence Vault** — request/response pairs per finding
 4. **Hypothesis Engine** — rules dari graph *sebelum* LLM mikir
@@ -405,17 +428,44 @@ Status bar menampilkan: `hyp 12 · chains 3 · cov 15% · verified 1`
 ## Struktur Proyek
 
 ```
+wth-main.py         # entry point CLI (semua perintah Click)
 wth_ai/
-  terminal/     # AgentTerminalBridge + transcripts (TTST)
-  graph/        # Asset graph
-  brain/        # Hypothesis + chain planner
-  agents/       # Planner, executor, tool loop, grounding
-  executor/vuln/# IDOR, SSRF, XSS, auth, race
-  recon/deep/   # JS, OpenAPI, GraphQL analysis
-  evidence/     # Evidence vault
-AGENT.md        # Konstitusi bug hunter
-config/         # wth_config.yaml
+  modes.py          # 7 mode agen; `auto` = superset
+  scope_manager.py  # matcher CIDR/host untuk scope
+  scope_card.py     # rekaman izin (ikut ke bundel bukti)
+  netguard.py       # EgressGuard: allowlist keluar + audit
+  containment.py    # SandboxSpec -> argv docker (cap-drop, read-only)
+  killswitch.py     # kill <= 2 detik + flag runtime/KILL
+  redaction.py      # redaksi secret kanonik
+  redteam/          # mesin temuan: bundle, classify, gate, novel/, disclosure
+  kb/               # KB CVE SQLite+FTS5, validator sitasi, skor prioritas
+  ot/               # Modbus read-only (FC 1-4), klien TCP stdlib
+  targets/          # OpenAPI/Postman sebagai target
+  reporting/        # html, sarif, laporan ID, pdf (tanpa dependency)
+  recon/            # http (fetch+egress+proxy), visual (dhash PNG), browser
+  cli/tui/redteam/  # TUI mode agen
+  tools/doctor.py   # health check
+core/, executor/, agents/, reporting/ (root)   # legacy, jangan digabung
+AGENTS.md           # konvensi kerja untuk agen
+CLAUDE.md           # pointer ke AGENTS.md
+llms.txt            # ringkasan mesin-baca
+docs/               # EVIDENCE, DEMO, MODES, COMPARISON, AIRGAP, archive/
 ```
+
+---
+
+## Dokumen
+
+| Dokumen | Isi |
+|---|---|
+| `AGENTS.md` | konvensi & invarian untuk agen yang mengubah kode |
+| `llms.txt` | ringkasan mesin-baca: perintah, artefak, exit code |
+| `docs/EVIDENCE.md` | cara membaca & memverifikasi bundel bukti |
+| `docs/DEMO.md` | urutan demo 5 menit (offline, deterministik) |
+| `docs/MODES.md` | matriks mode × kapabilitas (di-generate dari kode) |
+| `docs/COMPARISON.md` | perbandingan dengan Strix (hanya yang punya bukti) |
+| `docs/AIRGAP.md` | pemasangan tertutup, LLM lokal, KB offline |
+| `docs/archive/` | arsip perencanaan lama (bukan rujukan kerja) |
 
 ---
 

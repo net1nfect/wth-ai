@@ -34,11 +34,22 @@ berlaku, jadi biaya LLM tidak bisa "tak terlihat".
 ```bash
 docker network create --internal wth-lab-internal
 docker run --rm --network=wth-lab-internal alpine \
-  sh -c 'wget -q -T 3 -O- https://1.1.1.1 || echo "EGRESS DENIED (benar)"'
+  sh -c 'getent hosts example.com >/dev/null 2>&1 || echo "DNS TIDAK TERSEDIA (benar)"'
 ```
 
-Kalau perintah itu mencetak `EGRESS DENIED`, pagar keluar bekerja: network
-internal tidak punya gateway, dan `containment.py` melarang published port.
+Kalau perintah itu mencetak `DNS TIDAK TERSEDIA`, pagar keluar bekerja: network
+internal tidak punya gateway.
+
+WTH-AI juga bisa menyiapkan dan menjalankan container itu untukmu:
+
+```bash
+wth sandbox plan --mount ~/lab:/work/ro:ro -- sh -lc 'id'   # hanya cetak argv
+wth sandbox run  --yes --image kalilinux/kali-rolling -- nmap -sT 172.28.0.10
+```
+
+Tanpa `--yes` perintah kedua menolak jalan (exit 2) dan hanya mencetak argv.
+Argumen yang selalu ikut: `--cap-drop ALL`, `no-new-privileges`, `--read-only`,
+`--pids-limit`, `--memory`, `--cpus`, `--network wth-lab-internal`.
 
 ## 4. Demo tanpa jaringan
 
@@ -52,15 +63,27 @@ aman direkam di ruang tanpa koneksi.
 
 ## 5. KB CVE offline
 
-Basis data KB adalah satu file SQLite. Salin `kb.sqlite` (dari mesin yang punya
-internet) ke `$WTH_HOME/kb/kb.sqlite`, lalu:
+Basis data KB adalah satu file SQLite. Dua jalur:
 
 ```bash
-wth kb status
+# mesin ber-internet: unduh bundel mentah, lalu bangun di mesin mana pun
+wth kb build --source ~/kb-src      # nvd/*.json, kev.json, epss.csv
+wth kb status                       # jumlah record + tanggal built_at
+
+# atau salin langsung file yang sudah dibangun
+cp kb.sqlite "$WTH_HOME/kb/kb.sqlite"
 wth kb get CVE-2021-44228
 ```
 
-`wth kb install` (unduh bundel + verifikasi sha256) belum diimplementasikan;
-untuk sekarang penyalinan file dilakukan manual, dan laporan mencetak tanggal
-`built_at` serta jumlah record yang benar-benar ada — sehingga cakupan KB tidak
-pernah diklaim lebih besar dari kenyataan.
+`wth kb build` tidak mengunduh apa pun; unduhan tetap langkah operator. Laporan
+selalu mencetak `built_at` dan jumlah record yang benar-benar ada, sehingga
+cakupan KB tidak pernah diklaim lebih besar dari kenyataan.
+
+## 6. Yang opsional (tidak menghalangi demo)
+
+- **Playwright** (`playwright install chromium`) hanya untuk `wth browser capture`.
+  Tanpa itu perintahnya exit 1 dengan hint, demo lain tetap jalan.
+- **Docker** hanya untuk `wth sandbox run`. `wth sandbox plan` tetap berguna
+  tanpa Docker karena ia hanya mencetak argv.
+- **Proxy** (`WTH_PROXY`) hanya bila kamu ingin memeriksa trafik di Caido/Burp.
+  Tanpa env itu, semua request langsung.

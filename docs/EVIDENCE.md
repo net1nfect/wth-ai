@@ -50,3 +50,25 @@ for event in events:
 
 Baris pertama selalu `prev_hash = 64 nol`. Memutus rantai di tengah membuat
 hash berikutnya tidak cocok, dan `wth verify` melaporkannya.
+
+## Laporan dari bundel yang sama
+
+```bash
+wth report --bundle out/bundle --format html   # statis, tanpa server
+wth report --bundle out/bundle --format sarif  # 2.1.0, hanya CONFIRMED
+wth report --bundle out/bundle --format json   # findings mentah
+wth report --bundle out/bundle --format id     # Bahasa Indonesia + rujukan
+wth report --bundle out/bundle --format pdf    # satu file, tanpa dependency
+wth disclosure F-001 --bundle out/bundle       # advisory 90 hari
+```
+
+Semua format dibaca dari `bundle/findings.json` yang sama, jadi angka di PDF,
+ID, dan SARIF tidak bisa berbeda satu sama lain.
+
+## Apa yang tidak ada di bundel
+
+- Request/response mentah berukuran besar: yang disimpan hanya yang dirujuk
+  temuan, dan isinya sudah diredaksi (`wth_ai/redaction.py`).
+- Video/audio, screenshot (disimpan terpisah di `out/screenshots/`).
+- Kunci API atau token: kalau muncul di keluaran tool, nilainya jadi `***`
+  sebelum ditulis.

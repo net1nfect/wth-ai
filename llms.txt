@@ -103,3 +103,11 @@ bila namanya sama. Setiap `call_tool(mode=...)` digerbangi kapabilitas MCP.
 Recon-only by default; tidak ada exploit validation di jalur recon; tidak ada
 brute force login, bypass OTP/captcha, atau eksfiltrasi data. Semua koneksi
 keluar lewat allowlist egress dan tercatat di `$WTH_HOME/logs/audit.log`.
+
+## Dokumen
+
+- `AGENTS.md` — konvensi kerja & invarian (wajib dibaca sebelum mengubah kode)
+- `CLAUDE.md` — pointer ringkas untuk Claude Code
+- `docs/INDEX.md` — indeks seluruh dokumentasi
+- `docs/EVIDENCE.md` — memverifikasi bundel bukti
+- `docs/DEMO.md` — urutan demo offline

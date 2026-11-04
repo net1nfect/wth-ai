@@ -12,12 +12,20 @@ from wth_ai.llm.errors import LLMUnavailableError
 from wth_ai.llm.router import LLMProviderRouter
 
 
+CONSTITUTION_FILES = ("AGENTS.md", "AGENT.md")
+
+
 def load_agent_constitution(root: Path | None = None) -> str:
-    """Load AGENT.md constitution from project root."""
+    """Baca konstitusi agen dari root proyek.
+
+    `AGENTS.md` adalah nama yang dipakai sekarang (konvensi lintas-agen);
+    `AGENT.md` dipertahankan sebagai fallback untuk repo/instalasi lama.
+    """
     base = root or Path(__file__).resolve().parents[2]
-    path = base / "AGENT.md"
-    if path.exists():
-        return path.read_text(encoding="utf-8")
+    for name in CONSTITUTION_FILES:
+        path = base / name
+        if path.is_file():
+            return path.read_text(encoding="utf-8")
     return ""
 
 
