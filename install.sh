@@ -46,9 +46,9 @@ curl -fsSL --retry 2 --connect-timeout 15 -o "$INSTALLER" "$WTH_SRC_URL" \
 head -n 1 "$INSTALLER" | grep -q '^#!' || fail "isi $WTH_SRC_URL bukan skrip shell (404/halaman HTML?)"
 
 # `bash "$INSTALLER"` — bukan `sh` — karena installer memakai array dan `[[`.
-# Argumen operator (`--with tui`, `--dry-run`) diteruskan utuh dan `$0` menunjuk
-# file nyata, sehingga `SCRIPT_DIR`/`--source` tetap bisa diresolusi.
+# Argumen operator (`--with tui`, `--dry-run`) diteruskan utuh; `$0` menunjuk
+# file nyata sehingga pesan error menunjuk skrip yang benar.
 #
-# Sengaja tanpa `|| exit`: exit code installer (1 preflight gagal, kode pip)
-# harus sampai ke pemanggil pipeline.
+# `exec` membuat exit code installer (0 ok, 1 gagal, 2 argumen salah) menjadi
+# exit code pipeline ini juga.
 exec "$BASH_BIN" "$INSTALLER" "$@"

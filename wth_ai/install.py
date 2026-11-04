@@ -41,6 +41,8 @@ CORE_DEPS: tuple[tuple[str, str], ...] = (
     ("dotenv", "python-dotenv>=1.0"),
     ("prompt_toolkit", "prompt-toolkit>=3.0"),
     ("pydantic", "pydantic>=2.4"),
+    # `wth setup` sendiri memakai pydantic lewat wth_ai.models; tanpa ini
+    # preflight ramah tapi CLI tetap crash saat pertama kali menyentuhnya.
 )
 
 #: Fitur opsional — dilaporkan, tidak pernah memblokir instalasi.
@@ -85,7 +87,19 @@ class PreflightReport:
     has_pip: bool = False
     has_git: bool = False
     has_go: bool = False
+    has_curl: bool = False
+    #: True bila `python3 -m venv` tidak bisa membuat environment (Debian
+    #: memisahkan ensurepip ke paket python3-venv).
+    venv_broken: bool = False
+    #: Interpreter sistem yang menolak `pip install` (PEP 668). Venv tidak
+    #: terpengaruh; hanya `--no-venv`/pip sistem yang gagal.
+    pep668: bool = False
+    disk_free_mb: int | None = None
     issues: list[str] = field(default_factory=list)
+
+    @property
+    def in_venv(self) -> bool:
+        return in_virtualenv()
 
     @property
     def ok(self) -> bool:
@@ -102,6 +116,11 @@ class PreflightReport:
             "has_pip": self.has_pip,
             "has_git": self.has_git,
             "has_go": self.has_go,
+            "has_curl": self.has_curl,
+            "venv_broken": self.venv_broken,
+            "pep668": self.pep668,
+            "in_venv": self.in_venv,
+            "disk_free_mb": self.disk_free_mb,
             "issues": list(self.issues),
         }
 
@@ -123,6 +142,83 @@ def _check(module: str, requirement: str, feature: str = "") -> DepStatus:
     return DepStatus(module, requirement, module_present(module), feature)
 
 
+def venv_usable(python: str | None = None) -> bool:
+    """Apakah `-m venv` benar-benar bisa dipakai (ensurepip tersedia).
+
+    Debian/Ubuntu memisahkan ensurepip ke `python3-venv`: `python3` ada, tapi
+    membuat venv gagal dengan pesan panjang. Itu penyebab paling sering
+    "installer berhenti tanpa alasan" di distro tersebut.
+    """
+    argv = [python or sys.executable, "-c", "import ensurepip, venv"]
+    try:
+        return subprocess.run(argv, capture_output=True, timeout=20).returncode == 0
+    except (OSError, subprocess.SubprocessError):
+        return False
+
+
+def is_pep668(python: str | None = None) -> bool:
+    """True bila interpreter ini ditandai externally-managed (PEP 668)."""
+    code = (
+        "import pathlib, sysconfig, sys;"
+        "sys.exit(0 if (pathlib.Path(sysconfig.get_path('stdlib')) / 'EXTERNALLY-MANAGED').exists() else 1)"
+    )
+    try:
+        return subprocess.run(
+            [python or sys.executable, "-c", code], capture_output=True, timeout=20
+        ).returncode == 0
+    except (OSError, subprocess.SubprocessError):
+        return False
+
+
+def disk_free_mb(path: Path | None = None) -> int | None:
+    try:
+        usage = shutil.disk_usage(str(path or Path.home()))
+    except OSError:
+        return None
+    return int(usage.free // (1024 * 1024))
+
+
+def package_hint(package: str) -> str:
+    """Perintah paket-manager untuk host ini. DICETAK, tidak pernah dijalankan.
+
+    Installer tidak memakai sudo: keputusan memasang paket sistem ada di tangan
+    operator, jadi yang diberikan hanya perintahnya.
+    """
+    system = platform.system()
+    if system == "Darwin":
+        return f"brew install {package}"
+    if system != "Linux":
+        return f"# pasang paket {package} dengan package manager Anda"
+    ident = ""
+    try:
+        text = Path("/etc/os-release").read_text(encoding="utf-8")
+        for line in text.splitlines():
+            if line.startswith("ID="):
+                ident = line.split("=", 1)[1].strip().strip('"')
+                break
+    except OSError:
+        pass
+    if ident in {"debian", "ubuntu", "linuxmint", "pop", "raspbian"}:
+        return f"sudo apt-get install -y {package}"
+    if ident in {"fedora", "rhel", "centos", "rocky", "almalinux"}:
+        return f"sudo dnf install -y {package}"
+    if ident in {"arch", "manjaro", "endeavouros"}:
+        return f"sudo pacman -S --needed {package}"
+    if ident == "alpine":
+        return f"sudo apk add {package}"
+    if ident in {"opensuse", "suse", "opensuse-leap", "opensuse-tumbleweed"}:
+        return f"sudo zypper install -y {package}"
+    return f"# pasang paket {package} dengan package manager Anda"
+
+
+def venv_package() -> str:
+    """Nama paket yang menyediakan modul venv, per distro."""
+    hint = package_hint("python3-venv")
+    if "dnf" in hint or "pacman" in hint or "apk" in hint or "zypper" in hint:
+        return "python3"
+    return "python3-venv"
+
+
 def build_report(*, home: Path | None = None) -> PreflightReport:
     """Baca lingkungan. Tidak menulis apa pun."""
     version = ".".join(str(p) for p in sys.version_info[:3])
@@ -134,6 +230,10 @@ def build_report(*, home: Path | None = None) -> PreflightReport:
         has_pip=module_present("pip"),
         has_git=shutil.which("git") is not None,
         has_go=shutil.which("go") is not None,
+        has_curl=shutil.which("curl") is not None,
+        venv_broken=not venv_usable(),
+        pep668=is_pep668(),
+        disk_free_mb=disk_free_mb(home or wth_home()),
     )
     for module, requirement, features in OPTIONAL_DEPS:
         status = _check(module, requirement, features[0] if features else "")
@@ -142,6 +242,11 @@ def build_report(*, home: Path | None = None) -> PreflightReport:
     if not report.python_ok:
         report.issues.append(
             f"Python {version} terlalu lama — butuh >= {'.'.join(map(str, MIN_PYTHON))}"
+        )
+    if report.venv_broken:
+        report.issues.append(
+            f"`python -m venv` tidak bisa membuat environment di {sys.executable} "
+            f"— pasang {venv_package()} ({package_hint(venv_package())})"
         )
     if sys.platform.startswith("win") and not os.environ.get("WTH_HOME"):
         report.issues.append("Windows: set WTH_HOME eksplisit (mis. %USERPROFILE%\\.wth-ai)")
@@ -154,15 +259,23 @@ def format_report(report: PreflightReport) -> str:
         f"  python      {report.python_version}{'  ✓' if report.python_ok else '  ✗ butuh >=3.10'}",
         f"  platform    {platform.system()} {platform.machine()}",
         f"  WTH_HOME    {report.home}",
-        f"  pip         {'ada' if report.has_pip else 'tidak ada (pip tidak bisa dipakai untuk --install)'}",
-        f"  git         {'ada' if report.has_git else 'tidak ada'}",
+        f"  venv        {'ada (ensurepip ok)' if not report.venv_broken else 'tidak bisa dibuat'}",
+        f"  pip         {'ada' if report.has_pip else 'tidak ada'}",
+        f"  git         {'ada' if report.has_git else 'tidak ada (hanya perlu bila sumber di-clone)'}",
+        f"  curl        {'ada' if report.has_curl else 'tidak ada (hanya perlu untuk bootstrap satu baris)'}",
         f"  go          {'ada' if report.has_go else 'tidak ada (tool Go di ~/.wth-ai/tools/bin tetap bisa dipakai)'}",
-        "",
     ]
+    if report.disk_free_mb is not None:
+        lines.append(f"  disk        {report.disk_free_mb} MB bebas di {report.home}")
+    if report.pep668 and not report.in_venv:
+        lines.append("  pep668      interpreter sistem externally-managed (pakai venv)")
+    lines.append("")
+
     if report.missing_core:
         lines.append("Dependensi WAJIB belum terpasang:")
         for dep in report.missing_core:
             lines.append(f"  ✗ {dep.requirement}")
+        lines.append("  pasang: wth setup --install")
         lines.append("")
     else:
         lines.append("Dependensi wajib: semua terpasang ✓")
@@ -177,6 +290,24 @@ def format_report(report: PreflightReport) -> str:
         lines.append("")
         for issue in report.issues:
             lines.append(f"  ! {issue}")
+
+    if report.disk_free_mb is not None and report.disk_free_mb < 500:
+        lines.append("")
+        lines.append(f"  ! ruang disk {report.disk_free_mb} MB; venv + cache pip butuh ~500 MB")
+
+    missing_system: list[str] = []
+    if not report.has_git:
+        missing_system.append("git")
+    if not report.has_curl:
+        missing_system.append("curl")
+    if report.venv_broken:
+        missing_system.append(venv_package())
+
+    if missing_system:
+        lines.append("")
+        lines.append("Installer tidak memakai sudo. Paket sistem yang kurang, pasang manual:")
+        for package in dict.fromkeys(missing_system):
+            lines.append(f"  {package_hint(package)}")
     return "\n".join(lines)
 
 

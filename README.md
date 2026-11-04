@@ -212,7 +212,23 @@ curl -fsSL https://raw.githubusercontent.com/net1nfect/wth-ai/big-dix/install.sh
 Catatan: `--uninstall` menghapus venv, symlink, dan (dengan `--purge`) workspace
 `~/.wth-ai`. Config, vault, dan sesi tidak disentuh tanpa `--purge`.
 
-Butuh `git`, `curl`, dan Python ≥ 3.10. Tanpa sudo.
+**Tanpa sudo.** Dependensi Python masuk venv `~/.wth-ai/venv`; Python sistem
+tidak disentuh. Butuh Python ≥ 3.10, dan `git` hanya bila sumber di-clone.
+Kalau sebuah paket sistem memang hilang (mis. `python3-venv` di Debian),
+installer mencetak perintah paket-manager yang tepat lalu berhenti — memasangnya
+tetap keputusan Anda:
+
+```bash
+scripts/install.sh --system-deps cetak      # default: hanya mencetak
+scripts/install.sh --system-deps jalankan   # eksplisit: pakai sudo untuk itu
+```
+
+Yang diperiksa sebelum menyentuh apa pun: versi Python, `python -m venv`
+benar-benar bisa membuat environment (bukan sekadar python3 ada), disk ≥ 500 MB,
+`git`/`curl`, dan `PATH` shell (`~/.bashrc`, `~/.zshrc`, fish) — ditulis sekali
+dengan marker, dihapus lagi oleh `--uninstall`. Semua detail teknis masuk
+`~/.wth-ai/logs/install.log`; layar hanya menampilkan ringkasan dan, saat gagal,
+kelas kegagalannya (`python_missing`, `venv_missing`, `pep668`, …).
 
 ### Publik — npm + binary
 
@@ -232,18 +248,23 @@ scripts/install.sh --with tui        # venv + paket + workspace + entry point
 wth setup                            # wizard provider & model
 ```
 
-`scripts/install.sh` tidak memakai sudo. Yang dilakukannya, berurutan: cek Python
-≥ 3.10, buat venv di `$WTH_HOME/venv`, `pip install -e .`, pasang fitur opsional
+`scripts/install.sh` tidak memakai sudo. Yang dilakukannya, berurutan: cek
+Python ≥ 3.10 dan `python -m venv` benar-benar bisa dipakai, buat venv di
+`$WTH_HOME/venv`, `pip install -e .`, pasang fitur opsional
 (`--with tui,bot,browser,full`), symlink `wth`/`wth-ai` ke `~/.local/bin`,
-buat workspace, lalu verifikasi (`wth --version`, `wth setup --check`).
+sambungkan `PATH` ke rc shell (idempotent), buat workspace, lalu verifikasi
+(`wth --version`, `wth setup --check`).
 
 ```bash
 scripts/install.sh --help                  # semua opsi
 scripts/install.sh --dry-run --with tui    # cetak perintah, ubah nol file
-scripts/install.sh --uninstall             # hapus venv + symlink, workspace aman
+scripts/install.sh --no-path               # jangan sentuh rc shell
+scripts/install.sh --uninstall             # hapus venv + command + baris PATH
 scripts/install.sh --uninstall --purge     # + hapus $WTH_HOME (minta konfirmasi)
 WTH_HOME=/opt/wth scripts/install.sh --bin /usr/local/bin
 ```
+
+Exit code: `0` terpasang, `1` gagal (kelas kegagalan dicetak), `2` argumen salah.
 
 ### Setup tanpa wizard
 

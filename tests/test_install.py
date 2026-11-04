@@ -11,6 +11,7 @@ import functools
 import os
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -47,6 +48,57 @@ def test_report_lists_missing_core_dependency(tmp_path):
     text = inst.format_report(report)
     assert "x>=1" in text
     assert "WAJIB" in text
+
+
+# --------------------------------------------------------------------------- #
+# deteksi dependensi sistem (tanpa sudo)
+# --------------------------------------------------------------------------- #
+def test_package_hint_is_printed_not_run(monkeypatch):
+    monkeypatch.setattr(inst.platform, "system", lambda: "Linux")
+    hint = inst.package_hint("python3-venv")
+
+    assert hint.startswith("sudo ") or hint.startswith("#")
+    # Bentuk yang dieksekusi bukan string: install_missing memakai argv.
+    assert "apt-get install" in hint or "dnf install" in hint or hint.startswith("#")
+
+
+def test_package_hint_on_macos(monkeypatch):
+    monkeypatch.setattr(inst.platform, "system", lambda: "Darwin")
+    assert inst.package_hint("git") == "brew install git"
+
+
+def test_venv_usable_detects_broken_interpreter(tmp_path):
+    fake = tmp_path / "python3"
+    fake.write_text("#!/bin/sh\nexit 1\n", encoding="utf-8")
+    fake.chmod(0o755)
+    assert inst.venv_usable(str(fake)) is False
+
+
+def test_disk_free_mb_returns_int(tmp_path):
+    value = inst.disk_free_mb(tmp_path)
+    assert value is None or isinstance(value, int)
+
+
+def test_report_marks_venv_broken_and_hints_package(monkeypatch, tmp_path):
+    report = inst.build_report(home=tmp_path)
+    report.venv_broken = True
+    report.issues.append("`python -m venv` tidak bisa membuat environment")
+
+    text = inst.format_report(report)
+    assert "tidak bisa dibuat" in text
+    assert inst.venv_package() in text
+
+
+def test_report_hides_system_hints_when_everything_present(monkeypatch, tmp_path):
+    report = inst.build_report(home=tmp_path)
+    report.has_git = True
+    report.has_curl = True
+    report.venv_broken = False
+    report.missing_core = []
+
+    text = inst.format_report(report)
+    assert "Installer tidak memakai sudo" not in text
+    assert "apt-get install" not in text and "brew install" not in text
 
 
 def test_requirements_for_includes_features_and_missing(monkeypatch, tmp_path):
@@ -339,9 +391,15 @@ def test_install_dry_run_changes_nothing(tmp_path):
     )
 
     assert result.returncode == 0, result.stderr
-    assert "pip install --quiet -e" in result.stdout
+    # Warnanya kosong saat stdout bukan tty, tetapi `$C_NC` tetap di
+    # antara pemisah perintah — jadi periksa potongan yang stabil.
+    assert "pip install" in result.stdout
+    assert f"-e {REPO}" in result.stdout
     assert "textual" in result.stdout
-    assert not home.exists()
+    # Dry-run boleh membuat direktori log (bukti perintah), tetapi tidak boleh
+    # membuat venv, workspace, atau command.
+    assert not (home / "venv").exists()
+    assert not (home / "config").exists()
     assert not bin_dir.exists()
 
 
@@ -356,6 +414,100 @@ def test_install_rejects_unknown_feature():
     # Ditolak setelah fase paket: pesannya harus menyebut pilihan yang valid.
     assert result.returncode != 0
     assert "fitur tidak dikenal" in (result.stdout + result.stderr)
+
+
+def test_install_fails_clearly_when_python_is_too_old(tmp_path):
+    """Interpreter eksplisit < 3.10 harus gagal dengan kelas + saran paket."""
+    bash = shutil.which("bash")
+    if bash is None:
+        pytest.skip("bash tidak tersedia")
+
+    fake = tmp_path / "python3.8"
+    fake.write_text("#!/bin/sh\nexit 1\n", encoding="utf-8")
+    fake.chmod(0o755)
+
+    result = subprocess.run(
+        [bash, str(INSTALL_SH), "--no-setup", "--python", str(fake)],
+        capture_output=True, text=True,
+        env={**os.environ, "WTH_HOME": str(tmp_path / "home"), "HOME": str(tmp_path)},
+    )
+
+    assert result.returncode == 1
+    combined = result.stdout + result.stderr
+    assert "kelas: python_missing" in combined
+    assert ">= 3.10" in combined
+    # Tanpa sudo otomatis: perintah paket hanya DICETAK.
+    assert "apt-get install" in combined or "brew install" in combined
+    assert not (tmp_path / "home" / "venv").exists()
+
+
+def test_install_does_not_run_sudo_by_default(tmp_path):
+    """Tidak ada pemanggilan sudo pada jalur normal --dry-run sekalipun."""
+    bash = shutil.which("bash")
+    if bash is None:
+        pytest.skip("bash tidak tersedia")
+
+    fake_bin = tmp_path / "fakebin"
+    fake_bin.mkdir()
+    marker = tmp_path / "sudo-called"
+    sudo = fake_bin / "sudo"
+    sudo.write_text(f"#!/bin/sh\ntouch {marker}\nexit 0\n", encoding="utf-8")
+    sudo.chmod(0o755)
+
+    result = subprocess.run(
+        [bash, str(INSTALL_SH), "--dry-run", "--no-setup", "--source", str(REPO)],
+        capture_output=True, text=True,
+        env={
+            **os.environ,
+            "PATH": f"{fake_bin}:{os.environ.get('PATH', '')}",
+            "WTH_HOME": str(tmp_path / "home"),
+            "HOME": str(tmp_path),
+        },
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert not marker.exists(), "installer memanggil sudo tanpa diminta"
+
+
+def test_shell_path_block_is_idempotent_and_removed(tmp_path):
+    """PATH ditulis sekali (marker) dan dihapus lagi oleh --uninstall."""
+    bash = shutil.which("bash")
+    if bash is None:
+        pytest.skip("bash tidak tersedia")
+
+    home = tmp_path / "home"
+    home.mkdir()
+    rc = home / ".bashrc"
+    rc.write_text("export EDITOR=vim\n", encoding="utf-8")
+    bin_dir = tmp_path / "bin"
+
+    env = {
+        **os.environ,
+        "HOME": str(home),
+        "SHELL": "/bin/bash",
+        "WTH_HOME": str(home / "wth"),
+        "WTH_PYTHON": sys.executable,
+    }
+    args = [bash, str(INSTALL_SH), "--no-setup", "--bin", str(bin_dir)]
+
+    first = subprocess.run(args, capture_output=True, text=True, env=env)
+    assert first.returncode == 0, first.stderr
+    text = rc.read_text(encoding="utf-8")
+    assert text.count("# WTH-AI command") == 1
+    assert str(bin_dir) in text
+    assert "EDITOR=vim" in text
+
+    second = subprocess.run(args, capture_output=True, text=True, env=env)
+    assert second.returncode == 0, second.stderr
+    assert rc.read_text(encoding="utf-8").count("# WTH-AI command") == 1
+
+    remove = subprocess.run(
+        [bash, str(INSTALL_SH), "--uninstall", "--bin", str(bin_dir)],
+        capture_output=True, text=True, env=env,
+    )
+    assert remove.returncode == 0, remove.stderr
+    assert "# WTH-AI command" not in rc.read_text(encoding="utf-8")
+    assert "EDITOR=vim" in rc.read_text(encoding="utf-8")
 
 
 def test_uninstall_dry_run_is_safe(tmp_path):

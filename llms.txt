@@ -27,8 +27,12 @@ ini untuk agen/koding asisten: perintah utama, artefak, dan kontrak exit code.
   CVE yang tidak ada di DB → exit 2.
 - `wth skill list` / `wth skill install <git-url>`
 - `wth setup [--check|--install] [--with tui,bot,browser,full]`
-  Preflight (python >= 3.10, dependensi, workspace) lalu wizard provider.
-  `--provider/--base-url/--api-key/--model` menjalankan setup tanpa wizard.
+  Preflight (python >= 3.10, venv usable, dependensi, workspace, disk) lalu
+  wizard provider. `--provider/--base-url/--api-key/--model` menjalankan setup
+  tanpa wizard.
+- `scripts/install.sh [--dry-run|--no-path|--system-deps cetak|jalankan]`
+  Installer tanpa sudo: venv di $WTH_HOME/venv, PATH rc idempotent, log di
+  $WTH_HOME/logs/install.log. Exit 0 ok, 1 gagal (kelas dicetak), 2 argumen.
 - `wth --bypass[--bypass-profile NAMA]`
   Instruksi sesi tambahan dari `prompts/agent/AGENT.md` atau
   `$WTH_HOME/bypass/<NAMA>.md`. Bawaan mati; label `· bypass: NAMA` muncul di
