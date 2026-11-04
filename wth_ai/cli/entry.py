@@ -38,6 +38,16 @@ def _bootstrap() -> tuple[Path, Path]:
 
 def main() -> None:
     root, home = _bootstrap()
+    entry = root / "wth-main.py"
+    if not entry.is_file():
+        # Instalasi non-editable / wheel tanpa data repo. Pesannya harus
+        # menunjuk ke perbaikannya, bukan traceback runpy yang tidak informatif.
+        raise SystemExit(
+            f"WTH-AI tidak menemukan wth-main.py di {root}.\n"
+            "Pasang dari sumber dengan installer resmi:\n"
+            "  scripts/install.sh\n"
+            "atau: pip install -e <repo>"
+        )
     try:
         from dotenv import load_dotenv
         load_dotenv(home / ".env")
@@ -45,7 +55,7 @@ def main() -> None:
     except ImportError:
         pass
     import runpy
-    runpy.run_path(str(root / "wth-main.py"), run_name="__main__")
+    runpy.run_path(str(entry), run_name="__main__")
 
 
 if __name__ == "__main__":

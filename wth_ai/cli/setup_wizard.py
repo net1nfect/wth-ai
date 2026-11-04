@@ -283,6 +283,10 @@ def _apply_non_interactive(config: WTHConfig, data: dict[str, Any]) -> WTHConfig
         if key:
             setattr(config.secrets, f"{name}_api_key", key)
             _store_secret(f"{name}_api_key", key)
+    # Base URL 9router dibawa flag `--base-url` saat provider-nya 9router; tanpa
+    # baris ini nilainya tetap default dan endpoint operator diabaikan.
+    if data.get("router9_base_url"):
+        config.secrets.router9_base_url = data["router9_base_url"]
     for name in ("openai", "anthropic", "google", "custom"):
         url = data.get(f"{name}_base_url")
         if url:
@@ -293,6 +297,51 @@ def _apply_non_interactive(config: WTHConfig, data: dict[str, Any]) -> WTHConfig
     config.require_llm = data.get("require_llm", False)
     config.save_user_config()
     return config
+
+
+def build_setup_payload(
+    *,
+    provider: str = "",
+    base_url: str = "",
+    api_key: str = "",
+    model: str = "",
+    agent_mode: str = "",
+    require_llm: bool | None = None,
+) -> dict[str, Any]:
+    """Ubah flag `wth setup` menjadi bentuk yang dipahami `_apply_non_interactive`.
+
+    Nama secret mengikuti konvensi `SecretsConfig`: 9router memakai awalan
+    `router9`, provider lain memakai namanya sendiri. Tanpa pemetaan ini,
+    `--provider 9router --base-url ...` akan tersimpan sebagai field yang tidak
+    pernah dibaca router.
+    """
+    from wth_ai.config import PROVIDER_NAMES
+
+    payload: dict[str, Any] = {}
+    ptype = (provider or "").strip().lower()
+
+    if ptype:
+        if ptype not in PROVIDER_NAMES:
+            raise ValueError(
+                f"provider tidak dikenal: {ptype} (pilih: {', '.join(PROVIDER_NAMES)})"
+            )
+        payload["provider_type"] = ptype
+
+    prefix = "router9" if ptype == "9router" else (ptype or "custom")
+    if base_url:
+        if ptype == "ollama":
+            payload["ollama_base_url"] = base_url.strip()
+        else:
+            payload[f"{prefix}_base_url"] = base_url.strip()
+    if api_key:
+        payload[f"{prefix}_api_key"] = api_key.strip()
+    if model:
+        payload["model"] = model.strip()
+    if agent_mode:
+        payload["agent_mode"] = agent_mode
+    if require_llm is not None:
+        payload["require_llm"] = require_llm
+    return payload
 
 
 def ensure_setup(*, force: bool = False) -> WTHConfig:

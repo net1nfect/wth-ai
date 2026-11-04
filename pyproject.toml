@@ -38,6 +38,9 @@ include = ["wth_ai*"]
 [tool.setuptools.package-data]
 wth_ai = ["tools/manifest.yaml", "recon/recon_rules.yaml"]
 
+[tool.setuptools.data-files]
+"prompts/agent" = ["prompts/agent/AGENT.md"]
+
 [tool.pyright]
 include = ["wth_ai", "tests"]
 extraPaths = ["."]

@@ -77,7 +77,7 @@ def handle_model(orch: Any, args: list[str]) -> str:
         # needle. Without search, 268 ids print as a wall of text and the operator
         # has no way to find theirs.
         first = (args[1] if len(args) > 1 else "").strip()
-        if first and first.lower() in {name.lower() for name in PROVIDER_NAMES}:
+        if first and first.lower() in {name.lower() for name in _known_providers(orch)}:
             provider = first
             needle = " ".join(args[2:]).strip()
         else:
@@ -142,6 +142,11 @@ def handle_model(orch: Any, args: list[str]) -> str:
     )
 
 
+def _known_providers(orch: Any) -> set[str]:
+    """Provider bawaan + yang didaftarkan lewat `/connect`."""
+    return set(PROVIDER_NAMES) | set(getattr(orch.config, "custom_providers", {}))
+
+
 def handle_provider(orch: Any, args: list[str]) -> str:
     """Show or switch LLM provider per role."""
     if not args or args[0] == "show":
@@ -158,16 +163,16 @@ def handle_provider(orch: Any, args: list[str]) -> str:
     if args[0] == "set" and len(args) >= 3:
         role, ptype = args[1], args[2].lower()
         if role == "all":
-            if ptype not in PROVIDER_NAMES:
-                return f"Provider tidak dikenal. Pilih: {', '.join(PROVIDER_NAMES)}"
+            if ptype not in _known_providers(orch):
+                return f"Provider tidak dikenal. Pilih: {', '.join(sorted(_known_providers(orch)))}"
             for r in ROLE_NAMES:
                 spec = orch.config.providers.get(r)
                 model = spec.model if spec else getattr(orch.config.models, r, orch.config.models.planner)
                 orch.config.providers[r] = ProviderRoleConfig(type=ptype, model=model)
             orch.config.save_user_config()
             return f"Semua role → provider `{ptype}`"
-        if ptype not in PROVIDER_NAMES:
-            return f"Provider tidak dikenal. Pilih: {', '.join(PROVIDER_NAMES)}"
+        if ptype not in _known_providers(orch):
+            return f"Provider tidak dikenal. Pilih: {', '.join(sorted(_known_providers(orch)))}"
         spec = orch.config.providers.get(role)
         model = spec.model if spec else getattr(orch.config.models, role, orch.config.models.planner)
         orch.config.providers[role] = ProviderRoleConfig(type=ptype, model=model)
@@ -175,7 +180,7 @@ def handle_provider(orch: Any, args: list[str]) -> str:
         return f"{role} → provider `{ptype}` (model: {model})"
 
     if args[0] == "list":
-        return "Providers: " + ", ".join(PROVIDER_NAMES)
+        return "Providers: " + ", ".join(sorted(_known_providers(orch)))
 
     return "Usage: `/provider show` · `/provider set <role|all> <type>`"
 
