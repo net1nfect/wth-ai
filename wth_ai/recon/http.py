@@ -17,6 +17,16 @@ DEFAULT_UA = "wth-ai-recon/1.0 (+non-destructive recon)"
 MAX_BODY_BYTES = 512_000  # cap captured body to keep things light
 MAX_REDIRECTS = 5
 
+#: Gerbang egress opsional. Dipasang pemanggil yang punya scope (ReconEngine);
+#: None berarti tidak ada allowlist tambahan — guard SSRF tetap berlaku.
+_EGRESS_GUARD: object | None = None
+
+
+def set_egress_guard(guard: object | None) -> None:
+    """Pasang/lepas gerbang egress untuk semua `fetch()` recon."""
+    global _EGRESS_GUARD
+    _EGRESS_GUARD = guard
+
 
 def _ip_is_blocked(ip_str: str) -> bool:
     """True if `ip_str` is a non-public address recon must never reach
@@ -142,6 +152,14 @@ def fetch(
     blocked = host_is_blocked(host_of(url), resolve=not test_mode, allow_private=allow_private)
     if blocked:
         return HttpResponse(url=url, error=blocked)
+
+    if _EGRESS_GUARD is not None:
+        from wth_ai.netguard import EgressDenied
+
+        try:
+            _EGRESS_GUARD.check(host_of(url))  # type: ignore[attr-defined]
+        except EgressDenied as exc:
+            return HttpResponse(url=url, error=str(exc))
 
     # Safety: never perform real network I/O under test mode.
     if test_mode:

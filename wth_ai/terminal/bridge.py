@@ -240,6 +240,19 @@ class AgentTerminalBridge:
         if not ok:
             return self._blocked(tid, actor, purpose, f"{method} {url}", msg)
 
+        # Lapis kedua: allowlist egress. ScopeManager menjawab "apakah target ini
+        # dalam izin"; guard ini menjawab "apakah koneksi keluar ini boleh
+        # terjadi sama sekali" — dan mencatat EGRESS_DENIED ke audit log.
+        from urllib.parse import urlparse
+
+        from wth_ai.netguard import EgressDenied, EgressGuard
+
+        guard = EgressGuard.from_patterns(self.scope.scope.in_scope)
+        try:
+            guard.check(urlparse(url).hostname or "")
+        except EgressDenied as exc:
+            return self._blocked(tid, actor, purpose, f"{method} {url}", str(exc))
+
         # WU-007 (PRD-006): http_probe sebelumnya TIDAK PUNYA approval gate
         # sama sekali (beda dari run_shell) -- LLM-driven HTTP request risk
         # tinggi (POST/PUT/DELETE/PATCH, atau konten match denylist/high-risk

@@ -2,10 +2,19 @@
 
 from __future__ import annotations
 
+import ipaddress
 from typing import Any
 from urllib.parse import urlparse
 
 from wth_ai.models import Scope
+
+
+def _cidr_matches(host: str, pattern: str) -> bool:
+    """True bila `host` (IP literal) berada di dalam `pattern` (CIDR)."""
+    try:
+        return ipaddress.ip_address(host) in ipaddress.ip_network(pattern, strict=False)
+    except ValueError:
+        return False
 
 
 class ScopeManager:
@@ -58,6 +67,16 @@ class ScopeManager:
         staging dengan port adalah kasus normal, jadi ini bug, bukan salah operator.
         """
         text = (pattern or "").strip()
+        if "/" in text and not text.startswith("*."):
+            # CIDR harus dikenali SEBELUM `_normalize_host()` yang memotong di
+            # "/": versi lama mengubah `172.28.0.0/16` menjadi `172.28.0.0`,
+            # sehingga tidak pernah cocok dengan host mana pun di subnet itu.
+            # Kalau bukan CIDR (mis. URL dengan path), JANGAN return lebih awal —
+            # pola hostname harus tetap melewati normalisasi biasa.
+            try:
+                return str(ipaddress.ip_network(text, strict=False))
+            except ValueError:
+                pass
         wildcard = text.startswith("*.")
         if wildcard:
             text = text[2:]
@@ -69,6 +88,8 @@ class ScopeManager:
     def _host_matches_pattern(self, host: str, pattern: str) -> bool:
         host = host.lower()
         pattern = pattern.lower().strip()
+        if "/" in pattern and _cidr_matches(host, pattern):
+            return True
         if pattern.startswith("*."):
             suffix = pattern[2:]
             return host == suffix or host.endswith("." + suffix)
