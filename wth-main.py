@@ -13,6 +13,10 @@ from dotenv import load_dotenv
 from rich.console import Console
 
 _ROOT = Path(__file__).resolve().parent
+#: Direktori tempat operator memanggil `wth` — disimpan SEBELUM `os.chdir`, karena
+#: semua path relatif yang operator berikan (`--out out/`, `--bundle out/bundle`)
+#: harus diartikan relatif ke sana, bukan ke root repo.
+_CALLER_CWD = Path(os.getcwd())
 os.chdir(_ROOT)
 sys.path.insert(0, str(_ROOT))
 
@@ -27,6 +31,12 @@ from wth_ai.orchestrator import WTHOrchestrator
 
 def _load_config(config_path: str) -> WTHConfig:
     return WTHConfig.load(config_path)
+
+
+def _user_path(value: str | Path) -> Path:
+    """Path dari operator: relatif ke direktori pemanggil, bukan root repo."""
+    path = Path(value)
+    return path if path.is_absolute() else (_CALLER_CWD / path)
 
 
 def _orch(config_path: str, *, fresh: bool = False) -> WTHOrchestrator:
@@ -113,6 +123,287 @@ def usage_cmd() -> None:
                    for role, slot in sorted(data["by_role"].items(), key=lambda kv: -kv[1]["tokens"])]
         click.echo()
         click.echo(render_table("Per role", ["role", "call", "token"], by_role))
+
+
+@cli.command("kill")
+def kill_cmd() -> None:
+    """Hentikan semua worker sesi ini (<=2 detik), tanpa konfirmasi."""
+    from wth_ai.killswitch import KILL_SWITCH, request_kill
+
+    stopped = KILL_SWITCH.activate()
+    request_kill("cli")
+    if stopped:
+        click.echo(f"kill: {len(stopped)} proses dihentikan ({', '.join(stopped)})")
+    else:
+        click.echo("kill: flag dipasang (worker berhenti di iterasi berikutnya)")
+
+
+@cli.command("scope")
+@click.option("--target", required=True, help="Target utama (host/CIDR/URL).")
+@click.option("--cidr", "cidrs", multiple=True, help="CIDR yang diizinkan (boleh diulang).")
+@click.option("--domain", "domains", multiple=True, help="Domain yang diizinkan (boleh diulang).")
+@click.option("--mode", default="plan", show_default=True,
+              help="Mode agen yang dicatat di scope card.")
+@click.option("--authorized", is_flag=True, help="Konfirmasi izin tertulis.")
+@click.option("--destructive", is_flag=True, help="Izinkan aksi mengubah state (lab).")
+def scope_cmd(target: str, cidrs: tuple[str, ...], domains: tuple[str, ...],
+              mode: str, authorized: bool, destructive: bool) -> None:
+    """Tulis scope_card.json — rekaman izin yang ikut ke bundel bukti."""
+    from wth_ai.scope_card import ScopeCard, ScopeCardError
+    from wth_ai.workspace import wth_home
+
+    card = ScopeCard(target=target, cidr=list(cidrs), domains=list(domains),
+                     authorized=authorized, mode=mode, destructive=destructive)
+    try:
+        path = card.write(wth_home() / "scope_card.json")
+    except ScopeCardError as exc:
+        click.echo(f"scope: DITOLAK — {exc}")
+        raise SystemExit(2) from exc
+    click.echo(f"scope: {target} · cidr={','.join(cidrs) or '-'} · "
+               f"authorized=yes · mode={mode} · {path}")
+
+
+@cli.command("scan")
+@click.option("--red-team", is_flag=True, help="Jalankan loop red team.")
+@click.option("--offline-demo", is_flag=True,
+              help="Fixture deterministik tanpa jaringan (untuk demo/slide).")
+@click.option("--scan-mode", "scan_mode", default="deep", show_default=True,
+              type=click.Choice(["quick", "standard", "deep"]))
+@click.option("--max-attempts", default=0, show_default=True,
+              help="0 = ikut scan-mode.")
+@click.option("--max-turns", default=0, show_default=True, help="0 = tanpa batas.")
+@click.option("--target", "targets", multiple=True, help="Target (boleh diulang).")
+@click.option("--target-list", default="", help="File berisi target, satu per baris.")
+@click.option("--instruction", default="", help="Instruksi operator (teks).")
+@click.option("--instruction-file", default="", help="File instruksi operator.")
+@click.option("--non-interactive", "-n", is_flag=True,
+              help="Headless: exit 2 bila ada temuan (kontrak CI).")
+@click.option("--fail-on", default="", help="critical|high|medium|low|info")
+@click.option("--out", default="out", show_default=True)
+def scan_cmd(red_team: bool, offline_demo: bool, scan_mode: str, max_attempts: int,
+             max_turns: int, targets: tuple[str, ...], target_list: str,
+             instruction: str, instruction_file: str, non_interactive: bool,
+             fail_on: str, out: str) -> None:
+    """Jalankan loop red team dan tulis artefak + bundel bukti."""
+    from wth_ai.cli.inputs import read_instruction, read_targets
+    from wth_ai.redteam.artifacts_write import write_findings
+    from wth_ai.redteam.bundle import write_bundle
+    from wth_ai.redteam.gate import exit_code
+    from wth_ai.redteam.runner import run_offline_demo
+    from wth_ai.redteam.run_meta import STATUS_COMPLETED, STATUS_STOPPED, RunMeta
+    from wth_ai.redteam.scan_modes import get_mode
+    from wth_ai.reporting.sarif import build_sarif
+
+    if not (red_team or offline_demo):
+        raise click.UsageError("pilih --red-team atau --offline-demo")
+    if red_team and not offline_demo:
+        raise click.UsageError(
+            "executor jaringan belum tersambung di build ini — pakai "
+            "--offline-demo (deterministik) atau `wth recon quick <target>`"
+        )
+
+    mode = get_mode(scan_mode)
+    resolved_targets = list(targets)
+    if target_list:
+        resolved_targets.extend(read_targets(_user_path(target_list)))
+    text = read_instruction(_user_path(instruction_file) if instruction_file else None,
+                            instruction or None)
+
+    result = run_offline_demo(
+        max_attempts=max_attempts or mode.max_attempts,
+        max_steps=max_turns or mode.max_steps,
+    )
+
+    out_dir = _user_path(out)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    status = STATUS_STOPPED if result.budget_hit else STATUS_COMPLETED
+    meta = RunMeta(
+        run_id="RUN-demo",
+        targets=resolved_targets or ["fixture"],
+        scan_mode=mode.key,
+        status=status,
+        attempted=result.attempted,
+        confirmed=result.confirmed,
+        candidate=result.candidate,
+        unproven=result.unproven,
+        failures=result.failures,
+        coverage={"surfaces_total": result.attempted,
+                  "surfaces_attempted": result.attempted,
+                  "findings_confirmed": result.confirmed},
+    )
+    meta.write(out_dir / "run.json")
+    write_findings(out_dir, result.findings)
+    (out_dir / "findings.sarif").write_text(
+        json.dumps(build_sarif(result.findings, tool_version=__version__),
+                   indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    manifest = write_bundle(
+        out_dir / "bundle",
+        findings=result.findings,
+        scope_card={"target": resolved_targets[0] if resolved_targets else "fixture",
+                    "authorized": True, "mode": mode.key,
+                    "scan_mode": mode.key, "instruction": text[:500]},
+        audit_events=[{"event": "scan.started", "scan_mode": mode.key},
+                      {"event": "scan.finished", "attempted": result.attempted,
+                       "confirmed": result.confirmed, "status": status}],
+    )
+
+    click.echo(f"scan: {result.attempted} dicoba · {result.confirmed} confirmed · "
+               f"{result.candidate} candidate · {result.unproven} unproven · "
+               f"mode={mode.key}")
+    click.echo(f"bundle: {out_dir / 'bundle'} · root "
+               f"{manifest['root_hash'][:12]}")
+
+    if non_interactive:
+        raise SystemExit(exit_code(result.findings, fail_on or None))
+
+
+@cli.command("disclosure")
+@click.argument("finding_id")
+@click.option("--bundle", default="out/bundle", show_default=True)
+@click.option("--contact", default="", help="Kontak peneliti untuk advisory.")
+@click.option("--out", default="", help="Path keluaran (default: out/disclosure/).")
+def disclosure_cmd(finding_id: str, bundle: str, contact: str, out: str) -> None:
+    """Tulis advisory pengungkapan untuk satu temuan (markdown)."""
+    from wth_ai.redteam.disclosure import build_advisory
+    from wth_ai.redteam.models import Finding
+
+    root = _user_path(bundle)
+    findings_path = root / "findings.json"
+    if not findings_path.is_file():
+        raise click.ClickException(f"tidak ada {findings_path}")
+    rows = json.loads(findings_path.read_text(encoding="utf-8"))
+    match = next((row for row in rows
+                  if str(row.get("id", "")).upper() == finding_id.upper()), None)
+    if match is None:
+        raise click.ClickException(f"temuan {finding_id} tidak ada di bundel")
+    text = build_advisory(Finding.from_dict(match), contact=contact)
+    target = _user_path(out) if out else root.parent / "disclosure" / f"{finding_id}.md"
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(text, encoding="utf-8")
+    click.echo(f"disclosure: {target}")
+
+
+@cli.command("verify")
+@click.argument("bundle")
+def verify_cmd(bundle: str) -> None:
+    """Verifikasi bundel bukti (hash manifest + root hash)."""
+    from wth_ai.redteam.bundle import verify_bundle
+
+    root = _user_path(bundle)
+    if not root.is_dir():
+        raise click.ClickException(f"bundel tidak ditemukan: {root}")
+    ok, problems = verify_bundle(root)
+    if ok:
+        click.echo(f"verify: OK — {bundle}")
+        return
+    click.echo(f"verify: GAGAL — {bundle}")
+    for problem in problems:
+        click.echo(f"  - {problem}")
+    raise SystemExit(1)
+
+
+@cli.command("report")
+@click.option("--bundle", default="out/bundle", show_default=True)
+@click.option("--format", "fmt", default="html", show_default=True,
+              type=click.Choice(["html", "sarif", "json"]))
+@click.option("--out", default="", help="Path keluaran (default: di dalam out/).")
+def report_cmd(bundle: str, fmt: str, out: str) -> None:
+    """Tulis laporan dari bundel (html statis / sarif / json)."""
+    from wth_ai.redteam.models import Finding
+    from wth_ai.reporting import html as html_report
+    from wth_ai.reporting.sarif import build_sarif
+
+    root = _user_path(bundle)
+    findings_path = root / "findings.json"
+    if not findings_path.is_file():
+        raise click.ClickException(f"tidak ada {findings_path}")
+    findings = [Finding.from_dict(row) for row in
+                json.loads(findings_path.read_text(encoding="utf-8"))]
+    base = _user_path(out) if out else root.parent / f"report.{fmt if fmt != 'html' else 'html'}"
+    if fmt == "html":
+        path = html_report.write_html(root, base)
+    elif fmt == "sarif":
+        base.parent.mkdir(parents=True, exist_ok=True)
+        base.write_text(json.dumps(build_sarif(findings, tool_version=__version__),
+                                   indent=2, ensure_ascii=False) + "\n",
+                        encoding="utf-8")
+        path = base
+    else:
+        base.parent.mkdir(parents=True, exist_ok=True)
+        base.write_text(json.dumps([f.to_dict() for f in findings], indent=2,
+                                   ensure_ascii=False) + "\n", encoding="utf-8")
+        path = base
+    click.echo(f"report: {path}")
+
+
+@cli.group("kb")
+def kb_group() -> None:
+    """Knowledge base CVE lokal."""
+
+
+@kb_group.command("status")
+def kb_status() -> None:
+    """Jumlah record + berapa yang siap assessment + kapan dibangun."""
+    from wth_ai.kb.db import connect, count, get_meta
+    from wth_ai.workspace import wth_home
+
+    conn = connect(wth_home() / "kb" / "kb.sqlite")
+    total, ready = count(conn)
+    click.echo(f"kb: {total} record · {ready} siap-assessment · "
+               f"dibangun {get_meta(conn, 'built_at', 'belum pernah')}")
+
+
+@kb_group.command("get")
+@click.argument("cve_id")
+def kb_get(cve_id: str) -> None:
+    """Tampilkan satu CVE; yang tidak ada di DB ditolak (exit 2)."""
+    from wth_ai.kb.db import connect
+    from wth_ai.workspace import wth_home
+
+    conn = connect(wth_home() / "kb" / "kb.sqlite")
+    row = conn.execute("SELECT * FROM cve WHERE cve_id=?",
+                       (cve_id.upper(),)).fetchone()
+    if row is None:
+        click.echo(f"kb: {cve_id} TIDAK ADA di basis data — sitasi ditolak")
+        raise SystemExit(2)
+    for key in row.keys():
+        click.echo(f"{key}: {row[key]}")
+
+
+@cli.group("skill")
+def skill_group() -> None:
+    """Kelola skill (SKILL.md). Skill tidak pernah dieksekusi."""
+
+
+@skill_group.command("list")
+def skill_list() -> None:
+    from wth_ai.skills.registry import SkillRegistry
+
+    registry = SkillRegistry()
+    registry.discover()
+    click.echo(registry.format_catalog())
+
+
+@skill_group.command("install")
+@click.argument("url")
+def skill_install(url: str) -> None:
+    """Clone skill ke $WTH_HOME/skills/<nama> lalu tampilkan SKILL.md."""
+    import subprocess
+
+    from wth_ai.workspace import wth_home
+
+    dest = wth_home() / "skills"
+    dest.mkdir(parents=True, exist_ok=True)
+    name = url.rstrip("/").rsplit("/", 1)[-1].removesuffix(".git")
+    target = dest / name
+    if target.exists():
+        raise click.ClickException(f"{target} sudah ada — hapus dulu")
+    subprocess.run(["git", "clone", "--depth", "1", url, str(target)], check=True)
+    skill_md = target / "SKILL.md"
+    if not skill_md.is_file():
+        click.echo(f"peringatan: {target} tidak punya SKILL.md")
+        return
+    click.echo(skill_md.read_text(encoding="utf-8")[:2000])
 
 
 @cli.group("autopilot", invoke_without_command=True)
@@ -1550,9 +1841,20 @@ def bot_status(config_path: str) -> None:
 @cli.command()
 @click.option("--config", "config_path", default="config/wth_config.yaml", show_default=True)
 @click.option("--local", is_flag=True, help="Embedded mode (skip gateway client).")
-def interactive(config_path: str, local: bool) -> None:
+@click.option("--redteam", is_flag=True, help="TUI red team (tata letak coding agent).")
+@click.option("--mode", "agent_mode", default="plan", show_default=True,
+              type=click.Choice(["plan", "build", "auto", "scout", "strike",
+                                 "chain", "scribe"]))
+def interactive(config_path: str, local: bool, redteam: bool,
+                agent_mode: str) -> None:
     """Start interactive REPL."""
     from wth_ai.cli.setup_wizard import ensure_setup
+
+    if redteam:
+        from wth_ai.cli.tui.redteam.app import run as run_redteam
+
+        run_redteam(mode=agent_mode)
+        return
     ensure_setup()
     if local:
         os.environ["WTH_LOCAL"] = "1"

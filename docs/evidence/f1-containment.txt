@@ -1,0 +1,6 @@
+# containment evidence — 2026-11-03T19:28:46Z
+# network: wth-lab-internal (internal: true, tanpa published port)
+## 1) egress keluar harus GAGAL
+EGRESS DENIED (benar)
+## 2) DNS harus GAGAL
+DNS TIDAK TERSEDIA (benar)

@@ -1,0 +1,56 @@
+# WTH-AI — ringkasan mesin-baca
+
+WTH-AI adalah CLI red team (Python) untuk authorized security testing. Dokumen
+ini untuk agen/koding asisten: perintah utama, artefak, dan kontrak exit code.
+
+## Perintah utama
+
+- `wth scope --target HOST --cidr CIDR --authorized [--mode MODE]`
+  Menulis `$WTH_HOME/scope_card.json`. Tanpa `--authorized` ditolak (exit 2).
+- `wth scan --offline-demo --out DIR [--scan-mode quick|standard|deep]`
+  Demo deterministik tanpa jaringan; menulis artefak + bundel bukti.
+- `wth scan -n --fail-on high --out DIR`
+  Headless untuk CI: exit 0 bersih, 2 ada temuan pada/atas ambang.
+- `wth verify DIR/bundle`
+  Menghitung ulang sha256 manifest; satu byte berubah → exit 1.
+- `wth report --bundle DIR/bundle --format html|sarif|json`
+- `wth kb status` / `wth kb get CVE-YYYY-NNNN`
+  CVE yang tidak ada di DB → exit 2.
+- `wth skill list` / `wth skill install <git-url>`
+- `wth kill` — flag `$WTH_HOME/runtime/KILL` (worker berhenti ≤2 detik)
+- `wth interactive --redteam [--mode plan|build|auto|scout|strike|chain|scribe]`
+  TUI red team. `python -m wth_ai.cli.tui.redteam --demo` untuk demo.
+
+## Mode
+
+`auto` = himpunan penuh kapabilitas (RECON PROBE EXPLOIT CHAIN NOVEL WRITE SKILL
+MCP MUTATE). Mode lain adalah pecahan dengan otonomi lebih rendah. Dua invarian
+berlaku di semua mode: scope ditegakkan `ScopeManager` + `netguard` (tidak bisa
+dimatikan), dan kill switch ≤2 detik. `MUTATE` butuh `--destructive`.
+
+## Artefak hasil scan
+
+```
+out/
+  run.json                    status/targets/scan_mode/usage/coverage
+  findings.sarif              SARIF 2.1.0 (hanya CONFIRMED)
+  vulnerabilities/<id>.md     satu file per temuan
+  vulnerabilities.json/.csv   indeks mesin-baca
+  bundle/                     manifest.json + audit.jsonl + findings.json
+                              + scope_card.json + root_hash.txt
+  report.html                 statis, tanpa server
+```
+
+## Exit code
+
+| Code | Arti |
+|---|---|
+| 0 | selesai, tidak ada temuan yang lolos ambang |
+| 1 | error fatal / verifikasi bundel gagal |
+| 2 | ada temuan (hanya dengan `-n`, dan `--fail-on` bila diberikan) |
+
+## Batasan
+
+Recon-only by default; tidak ada exploit validation di jalur recon; tidak ada
+brute force login, bypass OTP/captcha, atau eksfiltrasi data. Semua koneksi
+keluar lewat allowlist egress dan tercatat di `$WTH_HOME/logs/audit.log`.

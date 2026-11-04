@@ -147,20 +147,36 @@ class MCPClientManager:
                 out[name] = conn.tools
         return out
 
-    def call_tool(self, server: str, tool: str, arguments: dict[str, Any] | None = None) -> MCPToolResult:
+    def call_tool(self, server: str, tool: str, arguments: dict[str, Any] | None = None,
+                  *, mode=None) -> MCPToolResult:
+        # Gating SEBELUM request dikirim: mode tanpa kapabilitas MCP tidak boleh
+        # menyentuh server sama sekali.
+        if mode is not None:
+            from wth_ai.modes import Cap, check
+
+            if not check(mode, Cap.MCP):
+                return MCPToolResult(tool=tool, success=False, output="",
+                                     error=f"mode '{mode.key}' tidak punya kapabilitas 'mcp'")
         arguments = arguments or {}
         self._audit(server, tool, arguments)
         conn = self._connections.get(server)
         if not conn:
             return MCPToolResult(tool=tool, success=False, output="", error=f"server not connected: {server}")
-        return conn.call_tool(tool, arguments)
+        result = conn.call_tool(tool, arguments)
+        from wth_ai.redaction import redact_secrets
+
+        result.output = redact_secrets(result.output)
+        return result
 
     def _audit(self, server: str, tool: str, arguments: dict[str, Any]) -> None:
         if not self.config.mcp.policy.get("audit_log", True):
             return
         try:
+            from wth_ai.redaction import redact_secrets
+
             self._audit_path.parent.mkdir(parents=True, exist_ok=True)
-            entry = {"ts": _now(), "server": server, "tool": tool, "args": mask_secret(json.dumps(arguments))}
+            entry = {"ts": _now(), "server": server, "tool": tool,
+                     "args": redact_secrets(json.dumps(arguments))}
             with self._audit_path.open("a", encoding="utf-8") as fh:
                 fh.write(json.dumps(entry) + "\n")
         except OSError:

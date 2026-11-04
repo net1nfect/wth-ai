@@ -45,8 +45,17 @@ class SubagentRunner:
             bus.emit("subagent_start", agent_id=agent_id, prompt=prompt[:120])
 
         target = self.orch.state.scope.target or "target"
+        skill_ids = list(spec.skill_ids)
+        if not skill_ids:
+            # T9.9: tanpa skill eksplisit, pilih ≤5 yang relevan dengan prompt.
+            from wth_ai.skills.select import select_skills
+
+            try:
+                skill_ids = select_skills(prompt, self.orch.skills.list_skills())
+            except Exception:  # noqa: BLE001 - auto-select tidak boleh mematikan run
+                skill_ids = []
         skill_ctx = ""
-        for sid in spec.skill_ids:
+        for sid in skill_ids[:5]:
             sk = self.orch.skills.get(sid)
             if sk:
                 skill_ctx += sk.load_content(4000) + "\n"

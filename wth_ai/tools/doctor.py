@@ -362,6 +362,69 @@ class ToolDoctor:
       "error": ui.get("error"),
     }
 
+  def check_redteam(self) -> dict[str, Any]:
+    """Fase 2–7: mode, rantai bukti, scope card, advisory, KB, skill, MCP."""
+    info: dict[str, Any] = {"modes": False, "evidence": False, "evidence_error": "",
+                            "scope_card": False, "disclosure": False, "kb": False,
+                            "skill_select": False, "mcp_gating": False}
+    try:
+      from wth_ai.modes import BY_KEY, Cap
+
+      info["modes"] = len(BY_KEY) >= 7 and BY_KEY["auto"].caps == frozenset(Cap)
+    except Exception as exc:  # noqa: BLE001
+      info["evidence_error"] = f"modes: {exc}"
+    try:
+      import tempfile
+
+      from wth_ai.redteam.bundle import verify_bundle, write_bundle
+      from wth_ai.redteam.models import Finding
+
+      with tempfile.TemporaryDirectory() as tmp:
+        out = Path(tmp) / "bundle"
+        write_bundle(out, findings=[Finding(id="F-doc", hypothesis="x")],
+                     scope_card={"target": "127.0.0.1", "authorized": True},
+                     audit_events=[{"event": "scope"}])
+        ok, _ = verify_bundle(out)
+        info["evidence"] = ok
+    except Exception as exc:  # noqa: BLE001
+      info["evidence_error"] = f"evidence: {exc}"
+    try:
+      from wth_ai.scope_card import ScopeCard
+
+      ScopeCard(target="127.0.0.1", cidr=["127.0.0.0/8"],
+                authorized=True).validate()
+      info["scope_card"] = True
+    except Exception:  # noqa: BLE001
+      info["scope_card"] = False
+    try:
+      from wth_ai.redteam.disclosure import build_advisory  # noqa: F401
+      from wth_ai.redteam.novel.impact import impact_score  # noqa: F401
+      from wth_ai.redteam.novel.labels import Provenance  # noqa: F401
+
+      info["disclosure"] = True
+    except Exception:  # noqa: BLE001
+      pass
+    try:
+      info["kb"] = (wth_home() / "kb" / "kb.sqlite").is_file()
+    except Exception:  # noqa: BLE001
+      info["kb"] = False
+    try:
+      from wth_ai.skills.select import select_skills  # noqa: F401
+
+      info["skill_select"] = True
+    except Exception:  # noqa: BLE001
+      pass
+    try:
+      from wth_ai.mcp.manager import MCPClientManager  # noqa: F401
+
+      info["mcp_gating"] = True
+    except Exception:  # noqa: BLE001
+      pass
+    info["ok"] = all(info[key] for key in
+                     ("modes", "evidence", "scope_card", "disclosure",
+                      "skill_select", "mcp_gating"))
+    return info
+
   def check_gateway(self) -> dict[str, Any]:
     info: dict[str, Any] = {"importable": False, "reachable": False, "ok": False}
     try:
@@ -596,6 +659,7 @@ class ToolDoctor:
     cron = self.check_cron()
     plugins = self.check_plugins()
     platform = self.check_platform()
+    redteam = self.check_redteam()
     lines += [
       "## Agentic Supervisor",
       f"- Supervisor importable: {'yes' if sup['importable'] else 'NO'}",
@@ -610,6 +674,15 @@ class ToolDoctor:
       f"- Plain UI status: {'OK' if ui['ok'] else 'ISSUES'}"
       + (f" — {ui['error']}" if ui.get('error') else ""),
       f"- Textual TUI (optional): {'installed' if tui['importable'] else 'not installed (pip install wth-ai[tui])'}",
+      "",
+      "## Red Team Engine (Fase 2–7)",
+      f"- Modes: {'OK' if redteam['modes'] else 'FAIL'} · "
+      + f"evidence roundtrip: {'OK' if redteam['evidence'] else redteam['evidence_error'] or 'FAIL'}",
+      f"- Scope card: {'OK' if redteam['scope_card'] else 'FAIL'} · "
+      + f"disclosure: {'OK' if redteam['disclosure'] else 'FAIL'} · "
+      + f"KB: {'present' if redteam['kb'] else 'belum dibangun (warn)'}",
+      f"- Skill selector: {'OK' if redteam['skill_select'] else 'FAIL'} · "
+      + f"MCP gating: {'OK' if redteam['mcp_gating'] else 'FAIL'}",
       "",
       "## Gateway & Platform (Fase 7)",
       f"- Gateway module: {'OK' if gw['importable'] else 'FAIL'} · "
