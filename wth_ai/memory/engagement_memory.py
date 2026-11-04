@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 from typing import Any
 
@@ -14,7 +15,9 @@ class EngagementMemory:
 
     def __init__(self, session_id: str, base_dir: Path | None = None) -> None:
         self.session_id = session_id
-        home = base_dir or Path("data/engagements")
+        # WTH_ENGAGEMENT_DIR ada supaya test/CI tidak menulis ke dalam repo.
+        home = base_dir or Path(os.environ.get("WTH_ENGAGEMENT_DIR",
+                                               "data/engagements"))
         self.path = home / session_id / "memory.json"
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self.assets: list[str] = []

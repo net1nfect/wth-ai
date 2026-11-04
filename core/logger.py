@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import re
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
@@ -47,14 +48,14 @@ class JsonFormatter(logging.Formatter):
 def get_logger(
     name: str,
     engagement_id: str | None = None,
-    log_dir: str | Path = "logs/engagement_logs",
+    log_dir: str | Path | None = None,
 ) -> logging.Logger:
     """Create or return a configured logger."""
     logger = logging.getLogger(name)
     if logger.handlers:
         return logger
     logger.setLevel(logging.DEBUG)
-    directory = Path(log_dir)
+    directory = Path(log_dir or os.environ.get("WTH_LOG_DIR", "logs/engagement_logs"))
     directory.mkdir(parents=True, exist_ok=True)
     suffix = engagement_id or "system"
     file_handler = RotatingFileHandler(

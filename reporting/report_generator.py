@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import html
 import json
+import os
 from pathlib import Path
 from typing import Any
 
@@ -16,8 +17,8 @@ from .visualization import Visualization
 class ReportGenerator:
     """Generate evidence-focused reports with remediation guidance."""
 
-    def __init__(self, output_dir: str | Path = "reports") -> None:
-        self.output_dir = Path(output_dir)
+    def __init__(self, output_dir: str | Path | None = None) -> None:
+        self.output_dir = Path(output_dir or os.environ.get("WTH_REPORT_DIR", "reports"))
         self.output_dir.mkdir(parents=True, exist_ok=True)
         self.mapper = ComplianceMapper()
         self.visualization = Visualization()
