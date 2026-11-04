@@ -17,3 +17,6 @@ node_modules/
 
 # Hermes agent workspace (plan, cache) — bukan bagian produk
 .hermes/
+
+# Artefak index codebase-memory (4.7 MB, dibangun ulang lokal)
+.codebase-memory/
