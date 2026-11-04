@@ -593,6 +593,7 @@ class ToolDoctor:
       f"- Tools bin: {rt['tools_bin']}",
       f"- Runtime binary: {rt['runtime_binary']}",
       f"- OpenRouter: {'ONLINE' if rt['openrouter'] else 'OFFLINE — set OPENROUTER_API_KEY'}",
+      f"- offline: {'ya (WTH_OFFLINE=1)' if os.environ.get('WTH_OFFLINE') == '1' else 'tidak'}",
       f"- Go: {rt['go']}",
       f"- Pip: {rt['pip']}",
       "",

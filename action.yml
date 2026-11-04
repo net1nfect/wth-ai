@@ -1,0 +1,34 @@
+name: WTH-AI scan
+description: Jalankan WTH-AI headless dan gagalkan job bila ada temuan pada ambang.
+author: WTH-AI contributors
+
+inputs:
+  target:
+    description: Target yang diizinkan (kosong = fixture offline).
+    required: false
+    default: ""
+  fail-on:
+    description: Ambang kegagalan (critical|high|medium|low|info).
+    required: false
+    default: high
+
+outputs:
+  bundle:
+    description: Direktori bundel bukti.
+    value: ${{ steps.scan.outputs.bundle }}
+
+runs:
+  using: composite
+  steps:
+    - id: scan
+      shell: bash
+      run: |
+        set -euo pipefail
+        python -m pip install --quiet -e . || python -m pip install --quiet -r requirements.txt
+        if [ -n "${{ inputs.target }}" ]; then
+          python wth-main.py scan --red-team --target "${{ inputs.target }}" \
+            --fail-on "${{ inputs.fail-on }}" --out out
+        else
+          python wth-main.py scan --offline-demo --out out
+        fi
+        echo "bundle=out/bundle" >> "$GITHUB_OUTPUT"

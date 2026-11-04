@@ -1,0 +1,21 @@
+# Demo tertutup: satu container, tanpa jaringan keluar.
+#
+# `internal: true` membuat network tanpa gateway. Uji pagar:
+#   docker compose -f docker-compose.offline.yaml run --rm wth \
+#     sh -c 'wget -q -T 3 -O- https://1.1.1.1 || echo "EGRESS DENIED (benar)"'
+services:
+  wth:
+    image: python:3.12-slim
+    working_dir: /work
+    volumes:
+      - ./:/work
+    environment:
+      WTH_OFFLINE: "1"
+      WTH_SKIP_SETUP: "1"
+      WTH_PLAIN: "1"
+    networks:
+      - lab
+
+networks:
+  lab:
+    internal: true

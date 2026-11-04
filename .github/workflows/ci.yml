@@ -13,6 +13,18 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - run: pip install -r requirements.txt && pip install -e .
+      - run: pip install -r requirements.txt && pip install -e . && pip install pytest-timeout
       - run: python3 wth_ai/tools/generate_manifest.py
-      - run: pytest tests/ -v --tb=short
+      - name: Test
+        run: pytest tests/ -q -p no:cacheprovider --timeout=120
+      - name: Offline demo + verifikasi bundel
+        run: |
+          python wth-main.py scan --offline-demo --out out
+          python wth-main.py verify out/bundle
+      - name: Gate (harus exit 2 pada fixture bertemuan high)
+        run: |
+          set +e
+          python wth-main.py scan -n --offline-demo --fail-on high --out out/ci
+          code=$?
+          set -e
+          test "$code" -eq 2

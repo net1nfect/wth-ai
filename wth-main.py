@@ -146,21 +146,39 @@ def kill_cmd() -> None:
               help="Mode agen yang dicatat di scope card.")
 @click.option("--authorized", is_flag=True, help="Konfirmasi izin tertulis.")
 @click.option("--destructive", is_flag=True, help="Izinkan aksi mengubah state (lab).")
+@click.option("--spec", "specs", multiple=True,
+              help="OpenAPI/Swagger atau Postman collection; host-nya masuk scope.")
 def scope_cmd(target: str, cidrs: tuple[str, ...], domains: tuple[str, ...],
-              mode: str, authorized: bool, destructive: bool) -> None:
+              mode: str, authorized: bool, destructive: bool,
+              specs: tuple[str, ...]) -> None:
     """Tulis scope_card.json — rekaman izin yang ikut ke bundel bukti."""
     from wth_ai.scope_card import ScopeCard, ScopeCardError
+    from wth_ai.targets.spec import load_spec
     from wth_ai.workspace import wth_home
 
-    card = ScopeCard(target=target, cidr=list(cidrs), domains=list(domains),
-                     authorized=authorized, mode=mode, destructive=destructive)
+    resolved_domains = list(domains)
+    endpoints: list[str] = []
+    for spec_path in specs:
+        try:
+            spec = load_spec(_user_path(spec_path))
+        except ValueError as exc:
+            click.echo(f"scope: spec DITOLAK — {exc}")
+            raise SystemExit(2) from exc
+        resolved_domains.extend(host for host in spec.hosts()
+                                if host not in resolved_domains)
+        endpoints.extend(f"{spec.kind}:{endpoint}" for endpoint in spec.endpoints)
+
+    card = ScopeCard(target=target, cidr=list(cidrs), domains=resolved_domains,
+                     authorized=authorized, mode=mode, destructive=destructive,
+                     endpoints=endpoints)
     try:
         path = card.write(wth_home() / "scope_card.json")
     except ScopeCardError as exc:
         click.echo(f"scope: DITOLAK — {exc}")
         raise SystemExit(2) from exc
+    extra = f" · spec={len(specs)} ({len(endpoints)} endpoint)" if specs else ""
     click.echo(f"scope: {target} · cidr={','.join(cidrs) or '-'} · "
-               f"authorized=yes · mode={mode} · {path}")
+               f"authorized=yes · mode={mode} · {path}{extra}")
 
 
 @cli.command("scan")
@@ -179,11 +197,16 @@ def scope_cmd(target: str, cidrs: tuple[str, ...], domains: tuple[str, ...],
 @click.option("--non-interactive", "-n", is_flag=True,
               help="Headless: exit 2 bila ada temuan (kontrak CI).")
 @click.option("--fail-on", default="", help="critical|high|medium|low|info")
+@click.option("--scope-mode", "scope_mode", default="full", show_default=True,
+              type=click.Choice(["full", "diff"]),
+              help="diff = hanya file yang berubah terhadap --diff-base.")
+@click.option("--diff-base", "diff_base", default="",
+              help="Ref pembanding untuk --scope-mode diff (mis. origin/main).")
 @click.option("--out", default="out", show_default=True)
 def scan_cmd(red_team: bool, offline_demo: bool, scan_mode: str, max_attempts: int,
              max_turns: int, targets: tuple[str, ...], target_list: str,
              instruction: str, instruction_file: str, non_interactive: bool,
-             fail_on: str, out: str) -> None:
+             fail_on: str, scope_mode: str, diff_base: str, out: str) -> None:
     """Jalankan loop red team dan tulis artefak + bundel bukti."""
     from wth_ai.cli.inputs import read_instruction, read_targets
     from wth_ai.redteam.artifacts_write import write_findings
@@ -209,6 +232,20 @@ def scan_cmd(red_team: bool, offline_demo: bool, scan_mode: str, max_attempts: i
     text = read_instruction(_user_path(instruction_file) if instruction_file else None,
                             instruction or None)
 
+    changed: list[str] = []
+    if scope_mode == "diff":
+        from wth_ai.redteam.diffscope import (DiffScopeError, changed_files,
+                                              select)
+
+        try:
+            changed = changed_files(_CALLER_CWD, diff_base)
+        except DiffScopeError as exc:
+            # Gagal membaca diff bukan alasan memindai seluruh repo.
+            raise click.ClickException(str(exc)) from exc
+        resolved_targets = select(changed, resolved_targets) if resolved_targets else []
+        click.echo(f"scope: diff terhadap {diff_base} · {len(changed)} file berubah"
+                   f" · {len(resolved_targets)} target")
+
     result = run_offline_demo(
         max_attempts=max_attempts or mode.max_attempts,
         max_steps=max_turns or mode.max_steps,
@@ -230,6 +267,9 @@ def scan_cmd(red_team: bool, offline_demo: bool, scan_mode: str, max_attempts: i
         coverage={"surfaces_total": result.attempted,
                   "surfaces_attempted": result.attempted,
                   "findings_confirmed": result.confirmed},
+        scope_mode=scope_mode,
+        diff_base=diff_base,
+        changed_files=changed,
     )
     meta.write(out_dir / "run.json")
     write_findings(out_dir, result.findings)
@@ -305,12 +345,13 @@ def verify_cmd(bundle: str) -> None:
 @cli.command("report")
 @click.option("--bundle", default="out/bundle", show_default=True)
 @click.option("--format", "fmt", default="html", show_default=True,
-              type=click.Choice(["html", "sarif", "json"]))
+              type=click.Choice(["html", "sarif", "json", "id"]))
 @click.option("--out", default="", help="Path keluaran (default: di dalam out/).")
 def report_cmd(bundle: str, fmt: str, out: str) -> None:
-    """Tulis laporan dari bundel (html statis / sarif / json)."""
+    """Tulis laporan dari bundel (html statis / sarif / json / id)."""
     from wth_ai.redteam.models import Finding
     from wth_ai.reporting import html as html_report
+    from wth_ai.reporting.id_report import write_id_report
     from wth_ai.reporting.sarif import build_sarif
 
     root = _user_path(bundle)
@@ -319,7 +360,8 @@ def report_cmd(bundle: str, fmt: str, out: str) -> None:
         raise click.ClickException(f"tidak ada {findings_path}")
     findings = [Finding.from_dict(row) for row in
                 json.loads(findings_path.read_text(encoding="utf-8"))]
-    base = _user_path(out) if out else root.parent / f"report.{fmt if fmt != 'html' else 'html'}"
+    default_name = "report-id.md" if fmt == "id" else f"report.{fmt if fmt != 'html' else 'html'}"
+    base = _user_path(out) if out else root.parent / default_name
     if fmt == "html":
         path = html_report.write_html(root, base)
     elif fmt == "sarif":
@@ -328,6 +370,11 @@ def report_cmd(bundle: str, fmt: str, out: str) -> None:
                                    indent=2, ensure_ascii=False) + "\n",
                         encoding="utf-8")
         path = base
+    elif fmt == "id":
+        run_meta_path = root.parent / "run.json"
+        run_meta = (json.loads(run_meta_path.read_text(encoding="utf-8"))
+                    if run_meta_path.is_file() else {})
+        path = write_id_report(findings, base, run_meta=run_meta)
     else:
         base.parent.mkdir(parents=True, exist_ok=True)
         base.write_text(json.dumps([f.to_dict() for f in findings], indent=2,
@@ -368,6 +415,53 @@ def kb_get(cve_id: str) -> None:
         raise SystemExit(2)
     for key in row.keys():
         click.echo(f"{key}: {row[key]}")
+
+
+@kb_group.command("build")
+@click.option("--source", required=True,
+              help="Direktori berisi nvd/*.json, kev.json, epss.csv (sudah diunduh).")
+def kb_build(source: str) -> None:
+    """Isi KB dari file mentah. Tidak mengunduh apa pun."""
+    from wth_ai.kb.build import build
+    from wth_ai.kb.db import connect
+    from wth_ai.workspace import wth_home
+
+    conn = connect(wth_home() / "kb" / "kb.sqlite")
+    try:
+        summary = build(_user_path(source), conn)
+    except FileNotFoundError as exc:
+        raise click.ClickException(str(exc)) from exc
+    click.echo(f"kb: {summary['total']} record · {summary['ready']} siap-assessment"
+               f" · {summary['kev']} KEV · dibangun dari {source}")
+
+
+@kb_group.command("search")
+@click.argument("query")
+@click.option("--limit", default=10, show_default=True)
+def kb_search(query: str, limit: int) -> None:
+    """Cari di KB (FTS5). Hasil kosong berarti tidak ada dasar untuk dikutip."""
+    from wth_ai.kb.db import connect
+    from wth_ai.workspace import wth_home
+
+    tokens = [token for token in "".join(
+        ch if ch.isalnum() else " " for ch in query).split() if len(token) > 2]
+    if not tokens:
+        raise click.ClickException("query terlalu pendek")
+    conn = connect(wth_home() / "kb" / "kb.sqlite")
+    rows = conn.execute(
+        "SELECT c.cve_id AS cve_id, c.cvss AS cvss, c.kev AS kev, "
+        "c.product AS product, c.summary AS summary "
+        "FROM cve_fts JOIN cve c ON c.cve_id = cve_fts.cve_id "
+        "WHERE cve_fts MATCH ? ORDER BY bm25(cve_fts) LIMIT ?",
+        (" OR ".join(tokens[:8]), limit),
+    ).fetchall()
+    if not rows:
+        click.echo(f"kb: tidak ada hasil untuk '{query}' — jangan dikutip")
+        raise SystemExit(1)
+    for row in rows:
+        flag = "KEV" if row["kev"] else "   "
+        click.echo(f"{row['cve_id']}  {flag}  cvss={row['cvss'] or '-'}  "
+                   f"{row['product'] or '-'}  {row['summary'][:80]}")
 
 
 @cli.group("skill")

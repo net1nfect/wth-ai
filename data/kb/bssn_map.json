@@ -1,0 +1,12 @@
+{
+  "access_control": "Peraturan BSSN Nomor 1 Tahun 2024 tentang Pengelolaan Insiden Siber — kategori kontrol akses",
+  "authentication": "Peraturan BSSN Nomor 1 Tahun 2024 tentang Pengelolaan Insiden Siber — kategori autentikasi",
+  "injection": "Peraturan BSSN Nomor 1 Tahun 2024 tentang Pengelolaan Insiden Siber — kategori keamanan aplikasi",
+  "xss": "Peraturan BSSN Nomor 1 Tahun 2024 tentang Pengelolaan Insiden Siber — kategori keamanan aplikasi",
+  "ssrf": "Peraturan BSSN Nomor 1 Tahun 2024 tentang Pengelolaan Insiden Siber — kategori keamanan aplikasi",
+  "misconfiguration": "Peraturan BSSN Nomor 1 Tahun 2024 tentang Pengelolaan Insiden Siber — kategori konfigurasi",
+  "information_disclosure": "Peraturan BSSN Nomor 1 Tahun 2024 tentang Pengelolaan Insiden Siber — kategori kerahasiaan data",
+  "cryptography": "Peraturan BSSN Nomor 1 Tahun 2024 tentang Pengelolaan Insiden Siber — kategori kriptografi",
+  "supply_chain": "Peraturan BSSN Nomor 1 Tahun 2024 tentang Pengelolaan Insiden Siber — kategori rantai pasok",
+  "logging": "Peraturan BSSN Nomor 1 Tahun 2024 tentang Pengelolaan Insiden Siber — kategori pencatatan dan pemantauan"
+}

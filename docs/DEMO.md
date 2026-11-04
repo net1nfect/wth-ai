@@ -48,6 +48,44 @@ Demo TUI otomatis (tanpa terminal interaktif, untuk screenshot):
 python -m wth_ai.cli.tui.redteam --demo
 ```
 
+## Resume dan workspace (sengaja belum dibangun)
+
+Dua fitur Strix ditunda, dan ini penggantinya supaya tidak ada yang mengira
+mesinnya ada:
+
+- **Resume percakapan agen** — pakai job system yang sudah ada:
+  `wth job list`, lalu `wth job retry <id>` untuk mengulang job dengan konteks
+  yang tersimpan. Tidak ada pemulihan riwayat token per token.
+- **Workspace tambahan** — `SandboxSpec.extra_mounts` sudah ada di
+  `wth_ai/containment.py`, tetapi belum ada CLI-nya. Untuk sekarang tambahkan
+  volume di `docker-compose.offline.yaml`.
+
+## Diff-scope (PR) dan spec API
+
+```bash
+# hanya file yang berubah terhadap origin/main yang jadi target
+wth scan --offline-demo --out out --scope-mode diff --diff-base origin/main
+
+# host dari OpenAPI/Postman masuk scope, endpoint-nya dicatat di scope card
+wth scope --target 172.28.0.10 --cidr 172.28.0.0/16 --authorized \
+  --spec openapi.json --spec postman.json
+```
+
+## Laporan Bahasa Indonesia
+
+```bash
+wth report --bundle out/bundle --format id
+# out/report-id.md → "Ringkasan Pimpinan" + "Rujukan Regulasi" + disclaimer
+```
+
+## KB CVE dari file mentah (tanpa unduh)
+
+```bash
+wth kb build --source ~/kb-src        # nvd/*.json, kev.json, epss.csv
+wth kb status
+wth kb search log4shell               # tidak ada hasil → exit 1, jangan dikutip
+```
+
 ## Kalau ditanya "ini nyata atau hardcode?"
 
 Jawab dengan tiga hal:

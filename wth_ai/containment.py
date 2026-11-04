@@ -7,12 +7,17 @@ tidak boleh bergantung pada daemon docker.
 
 from __future__ import annotations
 
+import os
 import shutil
 import subprocess
 from dataclasses import dataclass, field
 
 LAB_NETWORK = "wth-lab-internal"
-DEFAULT_IMAGE = "python:3.12-slim"
+#: Tag biasa sebagai default supaya `docker run` jalan tanpa registry internal.
+#: Untuk engagement nyata, pin digest lewat WTH_LAB_IMAGE (mis.
+#: "python@sha256:<64 hex>") — digest tidak di-hardcode di sini karena nilainya
+#: harus diverifikasi terhadap registry, bukan dikarang.
+DEFAULT_IMAGE = os.environ.get("WTH_LAB_IMAGE", "python:3.12-slim")
 
 
 @dataclass(frozen=True)

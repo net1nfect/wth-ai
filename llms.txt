@@ -11,6 +11,14 @@ ini untuk agen/koding asisten: perintah utama, artefak, dan kontrak exit code.
   Demo deterministik tanpa jaringan; menulis artefak + bundel bukti.
 - `wth scan -n --fail-on high --out DIR`
   Headless untuk CI: exit 0 bersih, 2 ada temuan pada/atas ambang.
+- `wth scan --scope-mode diff --diff-base origin/main --target f.py`
+  Hanya target yang filenya berubah; `git diff` gagal => exit 1, bukan scan penuh.
+- `wth scope --spec openapi.json` (atau Postman) — host dari kontrak masuk scope,
+  endpoint dicatat di `scope_card.json`.
+- `wth report --format id` — laporan Bahasa Indonesia (Ringkasan Pimpinan +
+  rujukan regulasi + disclaimer, bukan pendapat hukum).
+- `wth kb build --source DIR` — isi KB dari `nvd/*.json`, `kev.json`, `epss.csv`
+  (tidak mengunduh). `wth kb search Q` tanpa hasil => exit 1.
 - `wth verify DIR/bundle`
   Menghitung ulang sha256 manifest; satu byte berubah → exit 1.
 - `wth report --bundle DIR/bundle --format html|sarif|json`
@@ -46,8 +54,19 @@ out/
 | Code | Arti |
 |---|---|
 | 0 | selesai, tidak ada temuan yang lolos ambang |
-| 1 | error fatal / verifikasi bundel gagal |
+| 1 | error fatal / verifikasi bundel gagal / `kb search` tanpa hasil |
 | 2 | ada temuan (hanya dengan `-n`, dan `--fail-on` bila diberikan) |
+
+## Integrasi CI
+
+`action.yml` (composite) menjalankan scan dan mengeluarkan `bundle`;
+`.github/workflows/ci.yml` menjalankan pytest, demo offline, `wth verify`, dan
+gate yang mengharuskan exit 2 pada fixture bertemuan high.
+
+## OT/ICS
+
+`wth_ai/ot/modbus.py` hanya menyusun permintaan baca (FC 1–4); FC 5/6/15/16
+ditolak (`DestructiveBlocked`). Tidak ada koneksi yang dibuka modul ini.
 
 ## Batasan
 

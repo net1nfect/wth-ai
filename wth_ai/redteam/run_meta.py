@@ -28,6 +28,9 @@ class RunMeta:
     tokens: int = 0
     cost_usd: float = 0.0
     coverage: dict = field(default_factory=dict)
+    scope_mode: str = "full"
+    diff_base: str = ""
+    changed_files: list[str] = field(default_factory=list)
 
     def write(self, path: Path) -> Path:
         path = Path(path)

@@ -27,6 +27,7 @@ class ScopeCard:
     mode: str = "plan"
     destructive: bool = False
     notes: str = ""
+    endpoints: list[str] = field(default_factory=list)
     created_at: str = ""
 
     def validate(self) -> None:

@@ -1,0 +1,467 @@
+[
+  {
+    "id": "A.5.1",
+    "title": "Kebijakan keamanan informasi",
+    "rationale": "kebijakan tertulis, ditinjau berkala"
+  },
+  {
+    "id": "A.5.2",
+    "title": "Peran dan tanggung jawab keamanan",
+    "rationale": "setiap aset punya pemilik yang jelas"
+  },
+  {
+    "id": "A.5.3",
+    "title": "Pemisahan tugas",
+    "rationale": "satu orang tidak memegang seluruh kendali"
+  },
+  {
+    "id": "A.5.4",
+    "title": "Tanggung jawab manajemen",
+    "rationale": "manajemen menuntut kepatuhan, bukan hanya imbauan"
+  },
+  {
+    "id": "A.5.5",
+    "title": "Kontak dengan pihak berwenang",
+    "rationale": "kanal kontak ditetapkan sebelum insiden"
+  },
+  {
+    "id": "A.5.6",
+    "title": "Kontak dengan komunitas khusus",
+    "rationale": "forum industri untuk peringatan dini"
+  },
+  {
+    "id": "A.5.7",
+    "title": "Intelijen ancaman",
+    "rationale": "informasi ancaman dikumpulkan dan dinilai"
+  },
+  {
+    "id": "A.5.8",
+    "title": "Keamanan dalam manajemen proyek",
+    "rationale": "risiko dinilai sejak tahap desain"
+  },
+  {
+    "id": "A.5.9",
+    "title": "Inventaris aset informasi",
+    "rationale": "tanpa inventaris, tidak ada yang bisa dilindungi"
+  },
+  {
+    "id": "A.5.10",
+    "title": "Penggunaan aset yang dapat diterima",
+    "rationale": "batas pemakaian aset ditulis, bukan diasumsikan"
+  },
+  {
+    "id": "A.5.11",
+    "title": "Pengembalian aset",
+    "rationale": "aset dikembalikan saat peran berakhir"
+  },
+  {
+    "id": "A.5.12",
+    "title": "Klasifikasi informasi",
+    "rationale": "tingkat kerahasiaan menentukan perlakukan"
+  },
+  {
+    "id": "A.5.13",
+    "title": "Pelabelan informasi",
+    "rationale": "label mengikuti klasifikasi, konsisten"
+  },
+  {
+    "id": "A.5.14",
+    "title": "Transfer informasi",
+    "rationale": "pengiriman data lewat kanal yang disetujui"
+  },
+  {
+    "id": "A.5.15",
+    "title": "Kendali akses",
+    "rationale": "akses diberikan berdasarkan kebutuhan peran"
+  },
+  {
+    "id": "A.5.16",
+    "title": "Manajemen identitas",
+    "rationale": "satu identitas per orang, dapat diaudit"
+  },
+  {
+    "id": "A.5.17",
+    "title": "Informasi autentikasi",
+    "rationale": "kredensial dikelola, tidak dibagikan"
+  },
+  {
+    "id": "A.5.18",
+    "title": "Hak akses",
+    "rationale": "hak ditinjau berkala dan dicabut saat tidak perlu"
+  },
+  {
+    "id": "A.5.19",
+    "title": "Keamanan hubungan pemasok",
+    "rationale": "risiko pemasok dinilai sebelum kontrak"
+  },
+  {
+    "id": "A.5.20",
+    "title": "Keamanan dalam perjanjian pemasok",
+    "rationale": "klausul keamanan masuk kontrak"
+  },
+  {
+    "id": "A.5.21",
+    "title": "Rantai pasok TIK",
+    "rationale": "ketergantungan pihak ketiga dipetakan"
+  },
+  {
+    "id": "A.5.22",
+    "title": "Pemantauan layanan pemasok",
+    "rationale": "perubahan layanan pemasok dipantau"
+  },
+  {
+    "id": "A.5.23",
+    "title": "Keamanan layanan cloud",
+    "rationale": "tanggung jawab bersama ditulis eksplisit"
+  },
+  {
+    "id": "A.5.24",
+    "title": "Perencanaan insiden",
+    "rationale": "peran dan prosedur disiapkan sebelum insiden"
+  },
+  {
+    "id": "A.5.25",
+    "title": "Penilaian peristiwa keamanan",
+    "rationale": "peristiwa dipilah dari insiden"
+  },
+  {
+    "id": "A.5.26",
+    "title": "Respons insiden",
+    "rationale": "eskalasi dan komunikasi punya urutan jelas"
+  },
+  {
+    "id": "A.5.27",
+    "title": "Pembelajaran dari insiden",
+    "rationale": "akar masalah dicatat, bukan hanya gejala"
+  },
+  {
+    "id": "A.5.28",
+    "title": "Pengumpulan bukti",
+    "rationale": "bukti dijaga integritasnya sejak awal"
+  },
+  {
+    "id": "A.5.29",
+    "title": "Keamanan saat gangguan",
+    "rationale": "kendali tetap berlaku saat layanan terganggu"
+  },
+  {
+    "id": "A.5.30",
+    "title": "Kesiapan TIK untuk keberlangsungan",
+    "rationale": "uji pemulihan, bukan hanya rencana"
+  },
+  {
+    "id": "A.5.31",
+    "title": "Persyaratan hukum dan kontraktual",
+    "rationale": "kewajiban hukum dipetakan ke kendali"
+  },
+  {
+    "id": "A.5.32",
+    "title": "Hak kekayaan intelektual",
+    "rationale": "lisensi perangkat lunak tercatat"
+  },
+  {
+    "id": "A.5.33",
+    "title": "Perlindungan rekaman",
+    "rationale": "rekaman dilindungi dari perubahan dan hilang"
+  },
+  {
+    "id": "A.5.34",
+    "title": "Privasi dan data pribadi",
+    "rationale": "data pribadi diproses sesuai dasar hukum"
+  },
+  {
+    "id": "A.5.35",
+    "title": "Tinjauan independen",
+    "rationale": "pihak lain memeriksa, bukan pemilik sistem"
+  },
+  {
+    "id": "A.5.36",
+    "title": "Kepatuhan pada kebijakan",
+    "rationale": "kepatuhan diperiksa berkala dan dicatat"
+  },
+  {
+    "id": "A.5.37",
+    "title": "Prosedur operasional tertulis",
+    "rationale": "operasi rutin punya prosedur yang dapat diulang"
+  },
+  {
+    "id": "A.6.1",
+    "title": "Penyaringan personel",
+    "rationale": "pemeriksaan latar sebelum akses diberikan"
+  },
+  {
+    "id": "A.6.2",
+    "title": "Ketentuan kerja",
+    "rationale": "tanggung jawab keamanan masuk perjanjian kerja"
+  },
+  {
+    "id": "A.6.3",
+    "title": "Kesadaran dan pelatihan",
+    "rationale": "pelatihan berkala, diuji, bukan sekali saja"
+  },
+  {
+    "id": "A.6.4",
+    "title": "Proses disipliner",
+    "rationale": "pelanggaran ditangani konsisten"
+  },
+  {
+    "id": "A.6.5",
+    "title": "Tanggung jawab pasca-kerja",
+    "rationale": "kewajiban berlanjut setelah kontrak berakhir"
+  },
+  {
+    "id": "A.6.6",
+    "title": "Perjanjian kerahasiaan",
+    "rationale": "NDA ditandatangani sebelum akses data"
+  },
+  {
+    "id": "A.6.7",
+    "title": "Kerja jarak jauh",
+    "rationale": "kendali tetap berlaku di luar kantor"
+  },
+  {
+    "id": "A.6.8",
+    "title": "Pelaporan peristiwa keamanan",
+    "rationale": "pelaporan dibuat mudah dan tanpa sanksi"
+  },
+  {
+    "id": "A.7.1",
+    "title": "Perimeter keamanan fisik",
+    "rationale": "batas fisik ditetapkan dan ditandai"
+  },
+  {
+    "id": "A.7.2",
+    "title": "Masuk ke area fisik",
+    "rationale": "akses fisik dicatat dan dibatasi"
+  },
+  {
+    "id": "A.7.3",
+    "title": "Pengamanan ruang dan fasilitas",
+    "rationale": "ruang penyimpanan dikunci"
+  },
+  {
+    "id": "A.7.4",
+    "title": "Pemantauan fisik",
+    "rationale": "area kritis dipantau berkelanjutan"
+  },
+  {
+    "id": "A.7.5",
+    "title": "Ancaman fisik dan lingkungan",
+    "rationale": "risiko kebakaran, air, dan suhu dikendalikan"
+  },
+  {
+    "id": "A.7.6",
+    "title": "Bekerja di area aman",
+    "rationale": "aturan area aman ditegakkan"
+  },
+  {
+    "id": "A.7.7",
+    "title": "Meja dan layar bersih",
+    "rationale": "informasi tidak tertinggal di meja"
+  },
+  {
+    "id": "A.7.8",
+    "title": "Penempatan dan perlindungan perangkat",
+    "rationale": "perangkat tidak diletakkan di area berisiko"
+  },
+  {
+    "id": "A.7.9",
+    "title": "Aset di luar lokasi",
+    "rationale": "perangkat mobile dilindungi saat dibawa"
+  },
+  {
+    "id": "A.7.10",
+    "title": "Media penyimpanan",
+    "rationale": "media dikelola, dilacak, dan dihapus aman"
+  },
+  {
+    "id": "A.7.11",
+    "title": "Utilitas pendukung",
+    "rationale": "daya dan pendingin punya cadangan"
+  },
+  {
+    "id": "A.7.12",
+    "title": "Keamanan kabel",
+    "rationale": "kabel daya dan data dilindungi dari gangguan"
+  },
+  {
+    "id": "A.7.13",
+    "title": "Pemeliharaan perangkat",
+    "rationale": "perawatan terjadwal dan tercatat"
+  },
+  {
+    "id": "A.7.14",
+    "title": "Pembuangan perangkat aman",
+    "rationale": "data dihapus sebelum perangkat dilepas"
+  },
+  {
+    "id": "A.8.1",
+    "title": "Perangkat pengguna akhir",
+    "rationale": "perangkat akhir dikonfigurasi dan dipantau"
+  },
+  {
+    "id": "A.8.2",
+    "title": "Hak akses istimewa",
+    "rationale": "akses istimewa dibatasi dan dicatat"
+  },
+  {
+    "id": "A.8.3",
+    "title": "Pembatasan akses informasi",
+    "rationale": "akses dibatasi pada yang berhak"
+  },
+  {
+    "id": "A.8.4",
+    "title": "Akses kode sumber",
+    "rationale": "repositori kode dikendalikan"
+  },
+  {
+    "id": "A.8.5",
+    "title": "Autentikasi aman",
+    "rationale": "MFA untuk akses berisiko tinggi"
+  },
+  {
+    "id": "A.8.6",
+    "title": "Manajemen kapasitas",
+    "rationale": "kapasitas dipantau agar tidak jenuh"
+  },
+  {
+    "id": "A.8.7",
+    "title": "Perlindungan dari malware",
+    "rationale": "lapisan deteksi diperbarui"
+  },
+  {
+    "id": "A.8.8",
+    "title": "Manajemen kerentanan teknis",
+    "rationale": "kerentanan dipindai dan ditindak"
+  },
+  {
+    "id": "A.8.9",
+    "title": "Manajemen konfigurasi",
+    "rationale": "konfigurasi dasar ditetapkan dan diperiksa"
+  },
+  {
+    "id": "A.8.10",
+    "title": "Penghapusan informasi",
+    "rationale": "data dihapus saat tidak lagi diperlukan"
+  },
+  {
+    "id": "A.8.11",
+    "title": "Penyamaran data",
+    "rationale": "data sensitif disamarkan saat dipakai uji"
+  },
+  {
+    "id": "A.8.12",
+    "title": "Pencegahan kebocoran data",
+    "rationale": "kanal keluar dipantau"
+  },
+  {
+    "id": "A.8.13",
+    "title": "Cadangan informasi",
+    "rationale": "cadangan diuji pemulihannya"
+  },
+  {
+    "id": "A.8.14",
+    "title": "Redundansi fasilitas",
+    "rationale": "tidak ada satu titik kegagalan"
+  },
+  {
+    "id": "A.8.15",
+    "title": "Pencatatan log",
+    "rationale": "peristiwa dicatat lengkap dan terlindungi"
+  },
+  {
+    "id": "A.8.16",
+    "title": "Pemantauan aktivitas",
+    "rationale": "anomali dideteksi, bukan hanya disimpan"
+  },
+  {
+    "id": "A.8.17",
+    "title": "Sinkronisasi waktu",
+    "rationale": "jam sistem tersinkron untuk korelasi log"
+  },
+  {
+    "id": "A.8.18",
+    "title": "Utilitas istimewa",
+    "rationale": "alat administratif dibatasi dan diaudit"
+  },
+  {
+    "id": "A.8.19",
+    "title": "Pemasangan perangkat lunak",
+    "rationale": "hanya perangkat lunak disetujui terpasang"
+  },
+  {
+    "id": "A.8.20",
+    "title": "Keamanan jaringan",
+    "rationale": "jaringan dikelola dan dipisahkan sesuai fungsi"
+  },
+  {
+    "id": "A.8.21",
+    "title": "Keamanan layanan jaringan",
+    "rationale": "layanan jaringan punya tingkat keamanan jelas"
+  },
+  {
+    "id": "A.8.22",
+    "title": "Segmentasi jaringan",
+    "rationale": "jaringan dipisah berdasarkan risiko"
+  },
+  {
+    "id": "A.8.23",
+    "title": "Penyaringan web",
+    "rationale": "akses web berisiko difilter"
+  },
+  {
+    "id": "A.8.24",
+    "title": "Penggunaan kriptografi",
+    "rationale": "kunci dikelola dan algoritma ditinjau"
+  },
+  {
+    "id": "A.8.25",
+    "title": "Siklus hidup pengembangan aman",
+    "rationale": "keamanan masuk sejak desain"
+  },
+  {
+    "id": "A.8.26",
+    "title": "Persyaratan keamanan aplikasi",
+    "rationale": "syarat keamanan ditulis sebelum membangun"
+  },
+  {
+    "id": "A.8.27",
+    "title": "Arsitektur sistem aman",
+    "rationale": "prinsip desain aman diterapkan"
+  },
+  {
+    "id": "A.8.28",
+    "title": "Pengodean aman",
+    "rationale": "standar pengodean aman dipakai"
+  },
+  {
+    "id": "A.8.29",
+    "title": "Pengujian keamanan",
+    "rationale": "uji keamanan sebelum rilis"
+  },
+  {
+    "id": "A.8.30",
+    "title": "Pengembangan dialihdayakan",
+    "rationale": "pihak ketiga mematuhi standar yang sama"
+  },
+  {
+    "id": "A.8.31",
+    "title": "Pemisahan lingkungan",
+    "rationale": "dev, test, dan produksi tidak dicampur"
+  },
+  {
+    "id": "A.8.32",
+    "title": "Manajemen perubahan",
+    "rationale": "perubahan dicatat, diuji, dan disetujui"
+  },
+  {
+    "id": "A.8.33",
+    "title": "Informasi pengujian",
+    "rationale": "data uji tidak memakai data pribadi nyata"
+  },
+  {
+    "id": "A.8.34",
+    "title": "Perlindungan saat audit",
+    "rationale": "uji audit tidak mengganggu layanan"
+  }
+]
