@@ -34,8 +34,36 @@ def load_prompt(config: WTHConfig, name: str) -> str:
     body = path.read_text(encoding="utf-8") if path.exists() else ""
     constitution = load_agent_constitution(Path(config.prompts_dir).parent if config.prompts_dir else None)
     if constitution and body:
-        return f"{constitution}\n\n---\n\n{body}"
-    return constitution or body
+        parts = [constitution, body]
+    else:
+        parts = [constitution or body]
+    bypass = load_bypass_block(config)
+    if bypass:
+        parts.append(bypass)
+    return "\n\n---\n\n".join(part for part in parts if part)
+
+
+def load_bypass_block(config: WTHConfig) -> str:
+    """Blok instruksi bypass dari config, atau "" bila mati/tak terbaca.
+
+    Bypass adalah pilihan sesi (ARAHAN operator), jadi kegagalan membacanya
+    dilaporkan sebagai label di prompt, bukan dibiarkan senyap: model yang
+    mengira dirinya dalam mode bypass padahal tidak akan menulis dengan cara
+    yang salah tanpa ada yang tahu.
+    """
+    profile = getattr(getattr(config, "agent", None), "bypass", "") or ""
+    if not profile:
+        return ""
+    from wth_ai.agents import bypass as bypass_mod
+
+    try:
+        return bypass_mod.system_block(profile)
+    except bypass_mod.BypassError as exc:
+        return (
+            f"---\n# SESSION INSTRUCTIONS (bypass: gagal dimuat)\n"
+            f"{exc}\nSesi ini berjalan TANPA bypass.\n"
+            "--- SESSION INSTRUCTIONS END ---"
+        )
 
 
 def parse_blocks(text: str, block_name: str) -> list[dict[str, str]]:

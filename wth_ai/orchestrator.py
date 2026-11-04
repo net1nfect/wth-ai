@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 from typing import Any, Callable
 
 from wth_ai.agents.chat import ChatAgent
@@ -637,6 +638,36 @@ class WTHOrchestrator:
         self._index_fts(text, resp)
         return resp
 
+    def _bypass_label(self) -> str:
+        """Penanda sesi bypass di meta balasan.
+
+        Sesi yang memakai instruksi tambahan harus terlihat berbeda di
+        transkrip; pembaca yang menyimpan output ini berhak tahu konteksnya.
+        """
+        profile = self._active_bypass()
+        return f" · bypass: {profile}" if profile else ""
+
+    def _active_bypass(self) -> str:
+        return self._resolve_bypass(self.config)
+
+    @staticmethod
+    def _resolve_bypass(config: Any) -> str:
+        """Nama profil bypass yang benar-benar berlaku untuk `config` ini.
+
+        `config.agent.bypass` adalah satu-satunya sumber: `WTH_BYPASS` sudah
+        dipindahkan ke situ saat config dimuat. Membaca env lagi di sini adalah
+        bug yang pernah terjadi — label mengaku `bypass: X` sementara
+        `load_bypass_block()` (yang hanya melihat config) tidak menambahkan blok
+        apa pun, jadi transkrip berbohong tentang konteks sesi.
+
+        Sengaja `staticmethod`: pemanggilnya bisa `WTHOrchestrator` maupun config
+        saja, jadi `self` akan mengikat argumen pertama di dua jalur itu.
+        """
+        from wth_ai.agents.bypass import resolve_name
+
+        profile = getattr(getattr(config, "agent", None), "bypass", "") or ""
+        return resolve_name(profile) if profile else ""
+
     def _index_fts(self, user_text: str, response: str) -> None:
         try:
             from wth_ai.memory.fts import SessionFtsIndex
@@ -647,12 +678,16 @@ class WTHOrchestrator:
     def _chat_turn(self, text: str) -> str:
         from wth_ai.llm.errors import LLMError, LLMUnavailableError
         try:
-            self.state.conversation.append({"role": "user", "content": text})
+            # Urutan append penting: `ChatAgent.respond()` mengirim
+            # `state.conversation` sebagai history DAN merakit "User: <text>"
+            # sendiri. Menambahkan pesan user sebelum panggilan membuat setiap
+            # turn terkirim dua kali; jadi history ditulis setelah balasan ada.
             result = self.chat.respond(text, self.state)
             reply = (result or {}).get("raw") or ""
+            self.state.conversation.append({"role": "user", "content": text})
             self.state.conversation.append({"role": "assistant", "content": reply[:8000]})
             self._persist()
-            return reply + f"\n\n*mode: chat · model: {(result or {}).get('model','')}*"
+            return reply + f"\n\n*mode: chat · model: {(result or {}).get('model','')}{self._bypass_label()}*"
         except LLMUnavailableError as exc:
             return str(exc)
         except LLMError as exc:
@@ -668,7 +703,8 @@ class WTHOrchestrator:
             )
             self._sync_state_from_db()
             self._persist()
-            return result
+            label = self._bypass_label()
+            return result + label if label else result
         except LLMUnavailableError as exc:
             return str(exc)
         except LLMError as exc:

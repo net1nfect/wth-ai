@@ -61,7 +61,9 @@ class SlashRouter:
 
 def build_slash_router(orch: Any) -> SlashRouter:
     """Wire orchestrator methods into slash handlers."""
+    from wth_ai.cli.handlers.bypass_handler import handle_bypass
     from wth_ai.cli.handlers.config_handler import handle_config
+    from wth_ai.cli.handlers.connect_handler import handle_connect
     from wth_ai.cli.handlers.platform_handler import handle_cron, handle_gateway, handle_memory, handle_mode
     from wth_ai.cli.handlers.recon_handler import handle_recon
     from wth_ai.cli.handlers.setup_handler import (
@@ -90,6 +92,12 @@ def build_slash_router(orch: Any) -> SlashRouter:
 
     def _tools(args: list[str]) -> str:
         return handle_tools(orch, args)
+
+    def _connect(args: list[str]) -> str:
+        return handle_connect(orch, args)
+
+    def _bypass(args: list[str]) -> str:
+        return handle_bypass(orch, args)
 
     def _graph(args: list[str]) -> str:
         if not orch.asset_graph.nodes:
@@ -190,6 +198,8 @@ def build_slash_router(orch: Any) -> SlashRouter:
         "/yolo": lambda args: orch._handle_permission(["yolo"]),
         "/model": lambda a: handle_model(orch, a),
         "/provider": lambda a: handle_provider(orch, a),
+        "/connect": _connect,
+        "/bypass": _bypass,
         "/profile": lambda a: handle_profile(orch, a),
         "/ui": lambda a: handle_ui(orch, a),
         "/recon": _recon,

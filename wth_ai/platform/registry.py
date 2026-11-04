@@ -87,7 +87,7 @@ class PlatformRegistry:
         return "\n".join([
             "WTH-AI — ketik `/help full` untuk detail per command",
             "",
-            "Setup     /target · /scope · /permission · /model · /provider · /ui · /config · /status",
+            "Setup     /target · /scope · /permission · /model · /provider · /connect · /bypass · /ui · /config · /status",
             "Recon     /recon · /recon plan · /recon quick · /recon watch · /graph",
             "Hunt      /plan · /hunt · /execute · /verify · /report · /findings",
             "Tools     /tools · /doctor · /browser · /tools install",
@@ -139,7 +139,19 @@ def _default_commands() -> list[PlatformCommand]:
         PlatformCommand("/permission", "/permission [read_only|standard|elevated|full_lab|unrestricted]", "Permission mode", "setup"),
         PlatformCommand("/model", "/model [list|use N|set role id|fix|show]", "Switch LLM models", "setup"),
         PlatformCommand("/provider", "/provider [show|set role type|list]", "Switch LLM provider", "setup"),
+        PlatformCommand(
+            "/connect",
+            "/connect [base_url [api_key] | list | test N | use N | remove N]",
+            "Tambah provider LLM (base URL + API key)",
+            "setup",
+        ),
         PlatformCommand("/profile", "/profile [list|use name]", "Engagement profile preset", "setup"),
+        PlatformCommand(
+            "/bypass",
+            "/bypass [on [profil]|off|list|show|install <file>|remove N]",
+            "Instruksi sesi LLM (opsional, terpisah dari AGENTS.md)",
+            "setup",
+        ),
         PlatformCommand("/ui", "/ui [show|compact on|off|mode plain|tui]", "Terminal UI settings", "setup"),
         PlatformCommand("/config", "/config [show|set key=val]", "Raw config (advanced)", "setup"),
         PlatformCommand("/recon", "/recon [target] [--fast] [--profile NAME]", "Run recon", "recon", ("/scan",)),

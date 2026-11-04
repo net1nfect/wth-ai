@@ -67,6 +67,9 @@ class ProviderRoleConfig:
     model: str = ""
     backup_model: str | None = None
     base_url: str | None = None
+    #: Hanya dipakai entry `custom_providers`: referensi vault ("vault:<name>"),
+    #: tidak pernah plaintext. Role biasa tidak mengisi ini.
+    api_key_ref: str | None = None
 
 
 @dataclass
@@ -249,6 +252,9 @@ class AgentConfig:
     stream_tools: bool = True
     auto_approve_unrestricted: bool = False  # dimensi 3 (human approval) -- WU-003, default AMAN
     mode: str = "hybrid"  # hybrid | chat | security
+    #: Profil bypass LLM (`wth_ai/agents/bypass.py`). Kosong = mati. Nilai
+    #: "default" memakai prompt bawaan; nama lain dibaca dari `$WTH_HOME/bypass`.
+    bypass: str = ""
 
 
 @dataclass
@@ -289,6 +295,9 @@ class WTHConfig:
     mcp: MCPConfig = field(default_factory=MCPConfig)
     nine_router: NineRouterConfig = field(default_factory=NineRouterConfig)
     provider_prefs: ProviderPrefsConfig = field(default_factory=ProviderPrefsConfig)
+    #: Endpoint OpenAI-compatible milik operator, ditambahkan lewat `/connect`.
+    #: Nama key = nama provider; `type` selalu sama dengan nama itu.
+    custom_providers: dict[str, ProviderRoleConfig] = field(default_factory=dict)
     safety: SafetyConfig = field(default_factory=SafetyConfig)
     agent: AgentConfig = field(default_factory=AgentConfig)
     ui: UIConfig = field(default_factory=UIConfig)
@@ -329,12 +338,19 @@ class WTHConfig:
         mcp_cfg["servers"] = mcp_servers if isinstance(mcp_servers, dict) else {}
         safety_raw = raw.get("safety", {})
         agent_raw = raw.get("agent", {})
+        # Bypass adalah pilihan sesi: env `WTH_BYPASS` (dari `--bypass`) menang
+        # atas berkas config, supaya operator tidak perlu mengedit YAML untuk
+        # satu sesi dan lupa mengembalikannya.
+        agent_kwargs = {k: v for k, v in agent_raw.items() if k in AgentConfig.__dataclass_fields__}
+        if os.environ.get("WTH_BYPASS", "").strip():
+            agent_kwargs["bypass"] = os.environ["WTH_BYPASS"].strip()
         ui_raw = raw.get("ui", {})
         prefs_raw = raw.get("provider_prefs", {})
         nr_raw = raw.get("nine_router", {})
         secrets_raw = raw.get("secrets", {})
         bots_raw = raw.get("bots", {})
         providers_raw = raw.get("providers", {})
+        custom_raw = raw.get("custom_providers", {})
 
         skills_cfg = SkillsConfig(**{k: v for k, v in skills_raw.items() if k in SkillsConfig.__dataclass_fields__})
         if "openclaw_path" in skills_raw:
@@ -355,6 +371,24 @@ class WTHConfig:
                 )
 
         resolve = _make_secret_resolver()
+
+        custom_providers: dict[str, ProviderRoleConfig] = {}
+        if isinstance(custom_raw, dict):
+            for pname, pdata in custom_raw.items():
+                if not isinstance(pdata, dict):
+                    continue
+                base_url = str(pdata.get("base_url") or "").strip()
+                if not base_url:
+                    # Entry tanpa endpoint tidak bisa dipakai router; melewatkannya
+                    # lebih jujur daripada membuat provider yang selalu gagal.
+                    continue
+                key = str(pname).strip().lower()
+                custom_providers[key] = ProviderRoleConfig(
+                    type=key,
+                    model=str(pdata.get("model") or ""),
+                    base_url=base_url,
+                    api_key_ref=pdata.get("api_key_ref"),
+                )
 
         def _sec(field: str, env_key: str) -> str | None:
             return resolve(secrets_raw.get(field), env_key)
@@ -392,6 +426,7 @@ class WTHConfig:
         cfg = cls(
             models=ModelConfig(**{k: v for k, v in models_raw.items() if k in ModelConfig.__dataclass_fields__}),
             providers=providers,
+            custom_providers=custom_providers,
             secrets=secrets,
             bots=bots,
             integrations=integrations,
@@ -406,7 +441,7 @@ class WTHConfig:
             nine_router=NineRouterConfig(**{k: v for k, v in nr_raw.items() if k in NineRouterConfig.__dataclass_fields__}),
             provider_prefs=ProviderPrefsConfig(**{k: v for k, v in prefs_raw.items() if k in ProviderPrefsConfig.__dataclass_fields__}),
             safety=SafetyConfig(**{k: v for k, v in safety_raw.items() if k in SafetyConfig.__dataclass_fields__}),
-            agent=AgentConfig(**{k: v for k, v in agent_raw.items() if k in AgentConfig.__dataclass_fields__}),
+            agent=AgentConfig(**agent_kwargs),
             ui=UIConfig(**{k: v for k, v in ui_raw.items() if k in UIConfig.__dataclass_fields__}),
             prompts_dir=raw.get("prompts_dir", "prompts"),
             results_dir=raw.get("results_dir", "wth-results"),
@@ -417,6 +452,10 @@ class WTHConfig:
             default_permission=raw.get("default_permission", safety_raw.get("default_permission", "full_lab")),
         )
         return cfg
+
+    def _agent_out(self) -> dict[str, Any]:
+        """Bagian `agent` yang ditulis ke user.yaml (sumber tunggal untuk merge)."""
+        return {"mode": self.agent.mode, "bypass": self.agent.bypass}
 
     def api_key(self) -> str | None:
         return self.secrets.openrouter_api_key or os.environ.get(self.openrouter.api_key_env)
@@ -510,6 +549,7 @@ class WTHConfig:
                 "failover_order": self.provider_prefs.failover_order,
                 "failover_enabled": self.provider_prefs.failover_enabled,
             },
+            "agent": self._agent_out(),
             "providers": {
                 role: {
                     "type": p.type,
@@ -518,6 +558,15 @@ class WTHConfig:
                     **({"base_url": p.base_url} if p.base_url else {}),
                 }
                 for role, p in self.providers.items()
+            },
+            "custom_providers": {
+                name: {
+                    "base_url": spec.base_url,
+                    "model": spec.model,
+                    **({"api_key_ref": spec.api_key_ref} if spec.api_key_ref else {}),
+                }
+                for name, spec in self.custom_providers.items()
+                if spec.base_url
             },
             "secrets": secrets_out,
             "bots": bots_out,
@@ -540,6 +589,11 @@ class WTHConfig:
                 existing = {}
         if isinstance(existing, dict):
             data = _deep_merge(existing, data)
+            # `agent.bypass` adalah status sesi, bukan preferensi: saat kosong,
+            # nilai di disk tidak boleh menyalakannya kembali di sesi berikutnya.
+            merged_agent = dict(existing.get("agent") or {})
+            merged_agent.update(self._agent_out())
+            data["agent"] = merged_agent
             # An EMPTY value in memory must not erase a value on disk: the wizard
             # leaves a field untouched (rather than cleared) when the operator just
             # presses Enter, and that intent has to survive the save.

@@ -33,7 +33,15 @@ class LLMProviderRouter:
         if ptype in self._providers:
             return self._providers[ptype]
         secrets = self.config.secrets
-        if ptype == "openrouter":
+        custom = self.config.custom_providers.get((ptype or "").lower())
+        if custom is not None:
+            # Endpoint milik operator (`/connect`). Dicek sebelum rantai if/elif
+            # supaya nama yang bertabrakan tetap memakai definisi operator, dan
+            # supaya tipe asing tidak jatuh ke fallback OpenRouter.
+            from wth_ai.llm.connect import provider_for
+
+            p: BaseLLMProvider = provider_for(self.config, custom.type)
+        elif ptype == "openrouter":
             p = OpenRouterProvider(
                 api_key=secrets.openrouter_api_key or os.environ.get("OPENROUTER_API_KEY"),
                 base_url=self.config.openrouter.base_url,
@@ -54,8 +62,7 @@ class LLMProviderRouter:
                 default_timeout=self.config.models.executor_timeout_seconds,
             )
         elif ptype == "ollama":
-            p = OllamaProvider(
-                base_url=secrets.ollama_base_url or "http://127.0.0.1:11434",
+            p = OllamaProvider(                base_url=secrets.ollama_base_url or "http://127.0.0.1:11434",
                 temperature=self.config.models.temperature,
                 max_tokens=self.config.models.max_tokens,
                 default_timeout=self.config.models.executor_timeout_seconds,
@@ -180,6 +187,35 @@ class LLMProviderRouter:
             rc = self._role_config(role)
             self._role_providers[role] = self._get_or_create_provider(rc.type)
         return self._role_providers[role]
+
+    def provider_named(self, name: str) -> BaseLLMProvider:
+        """Provider by explicit name (`/connect` entries included).
+
+        Raises KeyError for a name that is neither built in nor registered, so a
+        caller can distinguish "typo" from "provider that failed to build".
+        """
+        from wth_ai.config import PROVIDER_NAMES
+
+        key = (name or "").strip().lower()
+        if key in self.config.custom_providers:
+            return self._get_or_create_provider(key)
+        if key in PROVIDER_NAMES:
+            return self._get_or_create_provider(key)
+        raise KeyError(name)
+
+    def known_providers(self) -> tuple[str, ...]:
+        """Built-in provider types plus operator-registered ones, sorted."""
+        from wth_ai.config import PROVIDER_NAMES
+
+        return tuple(sorted(set(PROVIDER_NAMES) | set(self.config.custom_providers)))
+
+    def forget(self, name: str) -> None:
+        """Drop cached instances for `name` after its config was changed/removed."""
+        key = (name or "").strip().lower()
+        self._providers.pop(key, None)
+        for role, provider in list(self._role_providers.items()):
+            if provider.name == key:
+                del self._role_providers[role]
 
     def model_for_role(self, role: str) -> tuple[str, str]:
         rc = self._role_config(role)
