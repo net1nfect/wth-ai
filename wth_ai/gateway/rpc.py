@@ -20,6 +20,10 @@ def gateway_pid_path() -> Path:
     return wth_home() / "runtime" / "gateway.pid"
 
 
+# Batas buffer per koneksi: klien yang mengirim JSON tanpa newline tidak boleh
+# menahan memori gateway tanpa batas (P2-12). 4 MiB jauh di atas payload sah.
+MAX_LINE_BYTES = 4 * 1024 * 1024
+
 Handler = Callable[[str, dict[str, Any]], Any]
 
 
@@ -66,7 +70,22 @@ class GatewayRpcServer:
         finally:
             server.close()
 
+    def _peer_pid(self, conn: socket.socket) -> int | None:
+        """Read SO_PEERCRED (Linux) to get the connecting process PID.
+
+        Used for session ownership (P2-2): a same-user process cannot spoof
+        another client's session. Returns None on non-Linux / unsupported.
+        """
+        try:
+            cred = conn.getsockopt(
+                socket.SOL_SOCKET, socket.SO_PEERCRED, 12)  # struct ucred (3 ints)
+            pid = int.from_bytes(cred[0:4], "little")
+            return pid if pid > 0 else None
+        except (OSError, AttributeError):
+            return None
+
     def _handle_conn(self, conn: socket.socket) -> None:
+        peer = {"pid": self._peer_pid(conn)}
         with conn:
             buf = b""
             while not self._stop.is_set():
@@ -77,6 +96,13 @@ class GatewayRpcServer:
                 if not chunk:
                     break
                 buf += chunk
+                if len(buf) > MAX_LINE_BYTES and b"\n" not in buf:
+                    conn.sendall(
+                        (json.dumps({"jsonrpc": "2.0", "id": None,
+                                     "error": {"code": -32001,
+                                               "message": "request terlalu besar"}}) + "\n").encode()
+                    )
+                    break
                 while b"\n" in buf:
                     line, buf = buf.split(b"\n", 1)
                     if not line.strip():
@@ -85,15 +111,15 @@ class GatewayRpcServer:
                         req = json.loads(line.decode("utf-8"))
                     except json.JSONDecodeError:
                         continue
-                    resp = self._process(req)
+                    resp = self._process(req, peer)
                     conn.sendall((json.dumps(resp) + "\n").encode("utf-8"))
 
-    def _process(self, req: dict[str, Any]) -> dict[str, Any]:
+    def _process(self, req: dict[str, Any], peer: dict[str, Any] | None = None) -> dict[str, Any]:
         rid = req.get("id")
         method = req.get("method", "")
         params = req.get("params") or {}
         try:
-            result = self.dispatch(method, params)
+            result = self.dispatch(method, params, peer)
             return {"jsonrpc": "2.0", "id": rid, "result": result}
         except Exception as exc:  # noqa: BLE001
             return {"jsonrpc": "2.0", "id": rid, "error": {"code": -32000, "message": str(exc)}}
