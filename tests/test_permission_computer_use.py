@@ -375,3 +375,21 @@ def test_discover_x11_reads_own_uid(tmp_path, monkeypatch):
     monkeypatch.setattr(cu, "_proc_uid", lambda path: 1000)
     monkeypatch.setattr(cu, "_runtime_dir", lambda: tmp_path)
     assert ComputerUse()._discover_x11()["DISPLAY"] == ":99"
+
+
+def test_screenshot_rejects_path_outside_allowed_dirs(tmp_path, monkeypatch):
+    monkeypatch.setenv("TMPDIR", str(tmp_path / "tmp"))
+    monkeypatch.setenv("WTH_HOME", str(tmp_path / "home"))
+    result = ComputerUse().screenshot("/etc/shadow")
+    assert not result.ok
+    assert "path screenshot" in result.detail
+
+
+def test_screenshot_default_target_stays_in_tmpdir(tmp_path, monkeypatch):
+    monkeypatch.setenv("TMPDIR", str(tmp_path / "tmp"))
+    monkeypatch.setenv("WTH_HOME", str(tmp_path / "home"))
+    cu = ComputerUse()
+    monkeypatch.setattr(cu, "_screenshot_candidates", lambda: [])
+    out = cu.screenshot()
+    assert not out.ok  # tidak ada backend, tapi path default tetap diizinkan
+    assert "path screenshot" not in out.detail

@@ -75,6 +75,11 @@ def _runtime_dir() -> str:
 _PROC = Path("/proc")
 
 
+def _screenshot_dir() -> Path:
+    home = Path(os.environ.get("WTH_HOME", Path.home() / ".wth-ai"))
+    return home / "runtime" / "screenshots"
+
+
 def _proc_uid(pid_dir: Path) -> int | None:
     try:
         return pid_dir.stat().st_uid
@@ -270,6 +275,19 @@ class ComputerUse:
         `spectacle` needs KWin. The attempts are reported verbatim when all of
         them fail, so the operator sees WHY rather than one opaque error.
         """
+        if path:
+            allowed = (_screenshot_dir().resolve(),
+                       Path(os.environ.get("TMPDIR", "/tmp")).resolve())
+            target_explicit = Path(path).resolve()
+            if not any(target_explicit == root or root in target_explicit.parents
+                       for root in allowed):
+                # P2-6: `screenshot` termasuk READ_ONLY_ACTIONS, jadi path bebas
+                # berarti aksi read-only bisa menimpa file mana pun.
+                return ActionResult(
+                    "screenshot", False,
+                    detail=f"path screenshot harus di {allowed[0]} atau {allowed[1]}",
+                )
+
         candidates = self._screenshot_candidates()
         if not candidates:
             return ActionResult("screenshot", False, detail="tidak ada backend screenshot terpasang")
