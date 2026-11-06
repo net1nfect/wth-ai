@@ -30,6 +30,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from wth_ai.workspace import atomic_write_text
+
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
@@ -267,7 +269,7 @@ def save(report: EvalReport, root: Path | None = None) -> Path:
     directory.mkdir(parents=True, exist_ok=True)
     stamp = report.generated_at.replace(":", "").replace("-", "")[:15]
     path = directory / f"eval-{stamp}.json"
-    path.write_text(json.dumps(report.to_dict(), indent=2), encoding="utf-8")
+    atomic_write_text(path, json.dumps(report.to_dict(), indent=2) + "\n")
     return path
 
 

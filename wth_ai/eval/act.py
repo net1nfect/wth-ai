@@ -22,6 +22,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable, Mapping
 
+from wth_ai.workspace import atomic_write_text
+
 #: Bobot dijepit di rentang ini: pengukuran kecil tidak boleh menggeser prioritas
 #: ekstrem, dan bobot bukan klaim kualitas -- ia hanya urutan kerja.
 MIN_WEIGHT = 0.5
@@ -40,6 +42,15 @@ class EvalAction:
 
     def to_dict(self) -> dict[str, Any]:
         return {"kind": self.kind, "detail": self.detail, "applied": self.applied, "path": self.path}
+
+
+def _write_payload(path: Path, payload: dict[str, Any]) -> None:
+    """Tulis state eval secara atomik.
+
+    P2-10: `Path.write_text` memotong file lalu menulis, jadi pembaca paralel
+    (`/eval` di TUI saat backfill berjalan) bisa melihat JSON setengah jadi.
+    """
+    atomic_write_text(Path(path), json.dumps(payload, indent=2) + "\n")
 
 
 def _now() -> str:
@@ -104,7 +115,17 @@ def collect_class_counts(
         if not vuln_class:
             continue
         slot = counts.setdefault(vuln_class, {"verified": 0, "false_positive": 0})
-        if (row or {}).get("failure") or str((row or {}).get("outcome", "")).lower() in {"failure", "false_positive"}:
+        # P1-3: `all_records()` (HuntMemoryLearning) mengembalikan
+        # `{"vuln_class": ..., "success": bool}` — success=False harus dihitung
+        # sebagai false_positive. Kombinasi lama (`failure` true / outcome
+        # failure/false_positive) tetap didukung untuk store lain.
+        outcome = str((row or {}).get("outcome", "")).lower()
+        is_failure = (
+            bool((row or {}).get("failure"))
+            or outcome in {"failure", "false_positive"}
+            or (row or {}).get("success") is False
+        )
+        if is_failure:
             slot["false_positive"] += 1
         else:
             slot["verified"] += 1
@@ -140,7 +161,23 @@ def backfill_failures(learning: Any, findings_db: Any) -> EvalAction:
             if str(state_value).lower() not in {"false_positive", "rejected"}:
                 continue
             try:
-                learning.record_from_finding(finding, verified=False)
+                # P1-4: `record_from_finding` butuh `(tech_stack, vuln_class, *,
+                # verified)`. Sebelum ini dipanggil dengan `Finding` objek sebagai
+                # arg pertama → TypeError ditelan `except`, jadi `written` selalu 0.
+                # Label stabil: CWE dulu, lalu token pertama title (lih.
+                # `_finding_learning_label` di orchestrator.py).
+                cwe = str(getattr(finding, "cwe", "") or "").strip()
+                vuln_class = getattr(finding, "vuln_class", None)
+                if not vuln_class and cwe:
+                    vuln_class = cwe
+                if not vuln_class:
+                    title = str(getattr(finding, "title", "") or "").strip()
+                    vuln_class = (title.split() or ["unnamed"])[0]
+                learning.record_from_finding(
+                    "generic_web",
+                    str(vuln_class).lower(),
+                    verified=False,
+                )
                 written += 1
             except Exception:  # noqa: BLE001
                 continue
@@ -173,11 +210,8 @@ def act_on_report(
     changed = {k: v for k, v in weights.items() if abs(float(previous.get(k, 0.0)) - float(v)) > 1e-9}
     if target is not None and changed:
         try:
-            Path(target).parent.mkdir(parents=True, exist_ok=True)
-            Path(target).write_text(
-                json.dumps({"updated": _now(), "weights": weights, "notes": notes}, indent=2),
-                encoding="utf-8",
-            )
+            _write_payload(Path(target),
+                           {"updated": _now(), "weights": weights, "notes": notes})
             actions.append(EvalAction("weight", "; ".join(notes) or "bobot diperbarui", applied=True,
                                       path=str(target)))
         except OSError as exc:

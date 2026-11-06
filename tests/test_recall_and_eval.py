@@ -481,3 +481,35 @@ def test_browser_fetch_passes_a_content_selector(tmp_path, monkeypatch):
     assert captured.get("wait_for"), "selector konten tidak diteruskan ke navigate()"
     assert note.ok and "Article body" in note.text
 
+
+
+def test_eval_payload_write_is_atomic(tmp_path, monkeypatch):
+    import pathlib
+
+    def boom(self, *a, **k):
+        raise AssertionError("Path.write_text tidak boleh dipakai untuk state eval")
+
+    monkeypatch.setattr(pathlib.Path, "write_text", boom)
+    from wth_ai.eval.act import _write_payload
+
+    target = tmp_path / "weights.json"
+    _write_payload(target, {"weights": {"bola": 1.0}})
+    assert '"bola"' in target.read_text(encoding="utf-8")
+
+
+def test_eval_report_save_is_atomic(tmp_path, monkeypatch):
+    import pathlib
+    from typing import Any, cast
+
+    from wth_ai.eval import harness
+
+    def boom(self, *a, **k):
+        raise AssertionError("Path.write_text tidak boleh dipakai untuk report eval")
+
+    monkeypatch.setattr(pathlib.Path, "write_text", boom)
+    report = cast(Any, type("R", (), {
+        "generated_at": "2026-11-07T00:00:00+00:00",
+        "to_dict": lambda self: {"ok": True},
+    })())
+    path = harness.save(report, tmp_path)
+    assert '"ok": true' in path.read_text(encoding="utf-8")
