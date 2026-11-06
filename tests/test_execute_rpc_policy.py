@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import shutil
+import subprocess
+
 import pytest
 
 from wth_ai.rpc.execute_server import (
@@ -52,3 +55,38 @@ def test_execute_blocked_permission():
     assert ok
     result = srv.execute({"target": "example.com", "code": "print(1)"})
     assert result["status"] == "blocked"
+
+
+def _granted_server() -> ExecuteRpcServer:
+    srv = ExecuteRpcServer()
+    srv.scope.is_in_scope = lambda target: (True, "")
+    srv.perms.check_command = lambda *a, **k: {"allowed": True}
+    return srv
+
+
+def test_execute_blocks_without_docker(monkeypatch):
+    monkeypatch.setattr(shutil, "which", lambda name: None)
+    out = _granted_server().execute({"target": "example.com", "code": "print(1)"})
+    assert out["status"] == "blocked"
+    assert "sandbox" in out["error"]
+
+
+def test_execute_uses_cap_drop_and_internal_network(monkeypatch):
+    monkeypatch.setattr(shutil, "which", lambda name: "/usr/bin/docker")
+    captured = {}
+
+    class Done:
+        returncode = 0
+        stdout = "ok"
+        stderr = ""
+
+    def fake_run(argv, **kwargs):
+        captured["argv"] = argv
+        return Done()
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    out = _granted_server().execute({"target": "example.com", "code": "print(1)"})
+    assert out["status"] == "success"
+    for flag in ("--cap-drop", "ALL", "--read-only", "--network"):
+        assert flag in captured["argv"]
+    assert "/work/run.py" in captured["argv"]

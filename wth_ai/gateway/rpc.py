@@ -24,7 +24,7 @@ def gateway_pid_path() -> Path:
 # menahan memori gateway tanpa batas (P2-12). 4 MiB jauh di atas payload sah.
 MAX_LINE_BYTES = 4 * 1024 * 1024
 
-Handler = Callable[[str, dict[str, Any]], Any]
+Handler = Callable[[str, dict[str, Any], dict[str, Any] | None], Any]
 
 
 class GatewayRpcServer:

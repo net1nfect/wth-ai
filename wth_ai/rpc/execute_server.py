@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import socket
 import subprocess
 import tempfile
@@ -50,6 +51,17 @@ class ExecuteRpcServer:
         self.scope = ScopeManager()
         self.perms = PermissionManager()
         self._stop = threading.Event()
+
+    def _sandbox_argv(self, script_dir: Path) -> list[str]:
+        """Argv docker: mount script read-only, tanpa jaringan keluar.
+
+        P2-14: sebelumnya kode RPC berjalan sebagai proses host dengan akses
+        filesystem dan jaringan penuh, jadi `execute_code` setara shell lokal.
+        """
+        from wth_ai.containment import SandboxSpec
+
+        spec = SandboxSpec(extra_mounts=(f"{script_dir}:/work:ro",))
+        return spec.docker_args(["python3", "/work/run.py"])
 
     def start_background(self) -> None:
         threading.Thread(target=self.serve, daemon=True, name="execute-rpc").start()
@@ -122,14 +134,15 @@ class ExecuteRpcServer:
         with tempfile.TemporaryDirectory(prefix="wth-exec-") as tmp:
             script = Path(tmp) / "run.py"
             script.write_text(code, encoding="utf-8")
+            if shutil.which("docker") is None:
+                return {"status": "blocked",
+                        "error": "sandbox tidak tersedia (docker)"}
             try:
                 proc = subprocess.run(
-                    ["python3", str(script)],
+                    self._sandbox_argv(Path(tmp)),
                     capture_output=True,
                     text=True,
                     timeout=timeout_s,
-                    cwd=tmp,
-                    env={"PATH": os.environ.get("PATH", ""), "HOME": tmp},
                     shell=False,
                 )
             except subprocess.TimeoutExpired:
