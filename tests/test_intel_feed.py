@@ -50,3 +50,43 @@ def test_cve_hint_is_sanitized_and_tagged(tmp_path, monkeypatch):
     hints = IntelFeed().cve_hints_for_tech({"nginx": "1.25"})
     assert hints[0]["provenance"] == "external-nvd"
     assert "ghp_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" not in hints[0]["summary"]
+
+
+CVE_RANGE = {"configurations": [{"nodes": [{"cpeMatch": [{
+    "versionStartIncluding": "1.0", "versionEndExcluding": "1.21.0"}]}]}]}
+
+
+def test_version_in_range_true_inside():
+    from wth_ai.intel.feed import _version_in_range
+
+    assert _version_in_range(CVE_RANGE, "1.20.0") is True
+
+
+def test_version_in_range_false_outside():
+    from wth_ai.intel.feed import _version_in_range
+
+    assert _version_in_range(CVE_RANGE, "1.25.0") is False
+
+
+def test_version_in_range_unknown_when_no_configurations():
+    from wth_ai.intel.feed import _version_in_range
+
+    assert _version_in_range({}, "1.25.0") is True
+
+
+def test_cve_hints_skip_version_outside_range(tmp_path, monkeypatch):
+    monkeypatch.setenv("WTH_HOME", str(tmp_path))
+
+    class Resp:
+        ok = True
+
+        def json(self):
+            return {"vulnerabilities": [{"cve": {
+                "id": "CVE-2020-0002",
+                "descriptions": [{"lang": "en", "value": "lama"}],
+                "configurations": CVE_RANGE["configurations"],
+            }}]}
+
+    monkeypatch.setattr("wth_ai.intel.feed.requests.get", lambda *a, **k: Resp())
+    assert IntelFeed().cve_hints_for_tech({"nginx": "1.25.0"}) == []
+    assert IntelFeed().cve_hints_for_tech({"nginx": "1.20.0"})

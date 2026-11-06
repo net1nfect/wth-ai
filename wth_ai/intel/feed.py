@@ -8,11 +8,50 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+import re
+
 import requests
 
 from wth_ai.config import WTHConfig
 from wth_ai.models import AttackSurface
 from wth_ai.redaction import sanitize_untrusted_text
+
+
+def _vtuple(text: str) -> tuple[int, ...]:
+    parts = re.findall(r"\d+", str(text))
+    return tuple(int(p) for p in parts) or (0,)
+
+
+def _version_in_range(cve: dict[str, Any], version: str) -> bool:
+    """Applicability kasar: bandingkan komponen numerik versi.
+
+    P3-2: sebelumnya `keywordSearch=product` saja, jadi CVE 2019 untuk nginx
+    muncul lagi di nginx 1.25 dan menenggelamkan hint yang relevan. Bila NVD
+    tidak memberi `configurations`, kita tidak bisa menilai -- kembalikan True
+    daripada menyembunyikan kandidat.
+    """
+    matches = [m
+               for cfg in cve.get("configurations") or []
+               for node in cfg.get("nodes") or []
+               for m in node.get("cpeMatch") or []]
+    if not matches:
+        return True
+    have = _vtuple(version)
+    for m in matches:
+        lo_in = m.get("versionStartIncluding")
+        lo_ex = m.get("versionStartExcluding")
+        hi_in = m.get("versionEndIncluding")
+        hi_ex = m.get("versionEndExcluding")
+        if lo_in and have < _vtuple(lo_in):
+            continue
+        if lo_ex and have <= _vtuple(lo_ex):
+            continue
+        if hi_in and have > _vtuple(hi_in):
+            continue
+        if hi_ex and have >= _vtuple(hi_ex):
+            continue
+        return True
+    return False
 
 
 class IntelFeed:
@@ -66,6 +105,8 @@ class IntelFeed:
                 data = r.json()
                 for item in (data.get("vulnerabilities") or [])[:2]:
                     cve = item.get("cve", {})
+                    if not _version_in_range(cve, version):
+                        continue
                     cve_id = cve.get("id", "")
                     desc = ""
                     for d in cve.get("descriptions", []):
