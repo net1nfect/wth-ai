@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 import os
-import re
 import socket
 import subprocess
 import tempfile
@@ -17,13 +16,30 @@ from wth_ai.permission_manager import PermissionManager
 from wth_ai.scope_manager import ScopeManager
 from wth_ai.workspace import wth_home
 
-_SECRET_RE = re.compile(
-    r"(?i)(api[_-]?key|token|password|secret|authorization)\s*[:=]\s*\S+"
-)
+from wth_ai.redaction import redact_secrets as _canonical_redact
 
 
 def redact_secrets(text: str) -> str:
-    return _SECRET_RE.sub(r"\1=***REDACTED***", text)
+    """P1-0: satu redaktor; nama lama dipertahankan untuk pemanggil/test."""
+    return _canonical_redact(text)
+
+
+def _parse_timeout(raw: object, *, default: int = 30, maximum: int = 300) -> int:
+    """Timeout request RPC: angka positif, dipotong ke `maximum`.
+
+    Sebelum ini `int(req.get("timeout", 30))` menerima string arbitrer dan
+    angka negatif; yang pertama melaporkan traceback, yang kedua langsung
+    `TimeoutExpired` sebelum kode sempat berjalan.
+    """
+    if raw is None:
+        return default
+    try:
+        value = int(str(raw))
+    except (TypeError, ValueError):
+        raise ValueError(f"timeout tidak valid: {raw!r}") from None
+    if value <= 0:
+        raise ValueError(f"timeout harus > 0: {value}")
+    return min(value, maximum)
 
 
 class ExecuteRpcServer:
@@ -80,6 +96,29 @@ class ExecuteRpcServer:
             return {"status": "blocked", "error": check.get("reason", "execute not permitted")}
         if lang != "python":
             return {"status": "blocked", "error": f"unsupported lang: {lang}"}
+
+        # P1-2 (audit 2026-11-06): scan payload kode terhadap denylist global /
+        # high-risk, sama seperti surface terminal/bridge. Sebelum ini `execute()`
+        # hanya cek permission (`execute`, tool generik) — kode destruktif
+        # (`rm -rf /`, `mkfs`, `dd`) tereksekusi bila lolos gate permission,
+        # bahkan di UNRESTRICTED yang seharusnya tetap menerapkan deny global.
+        from wth_ai.policy.engine import denylist_match, high_risk_match
+
+        code_lower = code.lower()
+        denied = denylist_match(code_lower)
+        if denied is not None:
+            return {"status": "blocked",
+                    "error": f"Denied by global denylist: {denied}"}
+        risky = high_risk_match(code_lower)
+        if risky is not None:
+            return {"status": "blocked",
+                    "error": f"Denied by high-risk pattern: {risky}"}
+
+        try:
+            timeout_s = _parse_timeout(req.get("timeout"))
+        except ValueError as exc:
+            return {"status": "blocked", "error": str(exc)}
+
         with tempfile.TemporaryDirectory(prefix="wth-exec-") as tmp:
             script = Path(tmp) / "run.py"
             script.write_text(code, encoding="utf-8")
@@ -88,7 +127,7 @@ class ExecuteRpcServer:
                     ["python3", str(script)],
                     capture_output=True,
                     text=True,
-                    timeout=int(req.get("timeout", 30)),
+                    timeout=timeout_s,
                     cwd=tmp,
                     env={"PATH": os.environ.get("PATH", ""), "HOME": tmp},
                     shell=False,
