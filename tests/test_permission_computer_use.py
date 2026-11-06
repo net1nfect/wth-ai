@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Any
 
 os.environ.setdefault("WTH_SKIP_SETUP", "1")
 os.environ.setdefault("WTH_TEST_MODE", "1")
@@ -49,7 +50,8 @@ def test_unknown_mode_lists_the_valid_ones():
 @pytest.mark.parametrize(
     "spelling,expected",
     [
-        ("unrestricted", "yolo"), ("danger", "yolo"), ("full_lab", "yolo"), ("full-lab", "yolo"),
+        ("unrestricted", "yolo"), ("danger", "yolo"), ("full-lab", "full-lab"),
+        ("full_lab", "full-lab"),
         ("standard", "ask"), ("default", "ask"), ("safe", "ask"),
         ("elevated", "auto"), ("auto-accept", "auto"), ("autopilot", "auto"),
         ("read_only", "read-only"), ("ro", "read-only"), ("dry-run", "plan"),
@@ -215,7 +217,7 @@ def test_typed_text_is_not_echoed_in_full(monkeypatch):
     result = ComputerUse().type_text(secret)
     assert result.ok
     assert secret not in result.detail
-    assert "char" in result.detail
+    assert "karakter" in result.detail
 
 
 def test_action_sets_do_not_overlap():
@@ -227,7 +229,7 @@ def test_action_sets_do_not_overlap():
 # --------------------------------------------------------------------------- #
 # dispatch gating
 # --------------------------------------------------------------------------- #
-def _ctx(mode: PermissionMode, *, action_memory=None):
+def _ctx(mode: PermissionMode, *, action_memory=None) -> Any:
     from wth_ai.permission_manager import PermissionManager
 
     return SimpleNamespace(
@@ -327,3 +329,17 @@ def test_permission_set_tool_rejects_junk(monkeypatch):
     ctx.state = SimpleNamespace(permission_mode=PermissionMode.READ_ONLY_RECON)
     out = dispatch_supervisor_tool(ctx, "permission_set", {"mode": "godmode"}, approved=True)
     assert "Invalid mode" in out
+
+
+def test_type_text_never_echoes_prefix():
+    from wth_ai.computer_use.session import ComputerUse as Session
+
+    s = Session()
+    s._session_info = lambda: {"input_backend": "xdotool"}
+    s._run = lambda argv: (True, "ok")
+    secret = "S3cr3t-Passw0rd!"
+    result = s.type_text(secret)
+    assert result.ok
+    assert secret[:12] not in result.detail
+    assert secret[:12] not in str(result.data)
+    assert result.data.get("chars") == len(secret)

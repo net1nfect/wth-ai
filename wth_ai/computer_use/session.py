@@ -349,10 +349,12 @@ class ComputerUse:
             ok, detail = self._run(["ydotool", "type", text])
         else:
             return ActionResult("type", False, detail="tidak ada backend input")
-        # Never echo typed text back in full: it may be a credential the
-        # operator pasted, and this result is shown/logged.
-        preview = text[:12] + ("…" if len(text) > 12 else "")
-        return ActionResult("type", ok, info["input_backend"], detail=detail or f"{len(text)} char ({preview!r})")
+        # P2-11: 12 karakter pertama sudah cukup membocorkan password pendek
+        # (`admin` + `:`) dan hasil ini masuk transkrip serta log. Yang dicatat
+        # hanya panjangnya.
+        return ActionResult("type", ok, info["input_backend"],
+                            detail=detail or f"{len(text)} karakter diketik",
+                            data={"chars": len(text)})
 
     def key(self, combo: str) -> ActionResult:
         info = self._session_info()
