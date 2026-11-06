@@ -72,6 +72,16 @@ def _runtime_dir() -> str:
     return os.environ.get("XDG_RUNTIME_DIR") or f"/run/user/{os.getuid()}"
 
 
+_PROC = Path("/proc")
+
+
+def _proc_uid(pid_dir: Path) -> int | None:
+    try:
+        return pid_dir.stat().st_uid
+    except OSError:
+        return None
+
+
 class ComputerUse:
     """Desktop control with backend detection and honest failure reasons."""
 
@@ -152,8 +162,12 @@ class ComputerUse:
         import re as _re
 
         found: dict[str, str] = {}
-        for pid_dir in Path("/proc").iterdir():
+        for pid_dir in _PROC.iterdir():
             if not pid_dir.name.isdigit():
+                continue
+            # P2-5: proses same-host milik UID lain bisa mengaku `gnome-shell`
+            # dan menyuapkan DISPLAY/XAUTHORITY-nya sendiri ke sesi kita.
+            if _proc_uid(pid_dir) != os.getuid():
                 continue
             try:
                 comm = (pid_dir / "comm").read_text(errors="ignore").strip()

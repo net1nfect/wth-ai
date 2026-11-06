@@ -343,3 +343,35 @@ def test_type_text_never_echoes_prefix():
     assert secret[:12] not in result.detail
     assert secret[:12] not in str(result.data)
     assert result.data.get("chars") == len(secret)
+
+
+def _fake_proc(tmp_path):
+    pid_dir = tmp_path / "1234"
+    pid_dir.mkdir()
+    (pid_dir / "comm").write_text("gnome-shell")
+    (pid_dir / "environ").write_bytes(b"DISPLAY=:99\x00XAUTHORITY=/tmp/xauth")
+    return pid_dir
+
+
+def test_discover_x11_skips_other_uid(tmp_path, monkeypatch):
+    from wth_ai.computer_use import session as cu
+
+    _fake_proc(tmp_path)
+    monkeypatch.setattr(cu, "_PROC", tmp_path)
+    monkeypatch.setattr(cu.os, "getuid", lambda: 1000)
+    monkeypatch.setattr(cu, "_proc_uid", lambda path: 4242)
+    monkeypatch.setattr(cu, "_runtime_dir", lambda: tmp_path / "empty")
+    found = ComputerUse()._discover_x11()
+    assert "DISPLAY" not in found
+    assert ":99" not in str(found)
+
+
+def test_discover_x11_reads_own_uid(tmp_path, monkeypatch):
+    from wth_ai.computer_use import session as cu
+
+    _fake_proc(tmp_path)
+    monkeypatch.setattr(cu, "_PROC", tmp_path)
+    monkeypatch.setattr(cu.os, "getuid", lambda: 1000)
+    monkeypatch.setattr(cu, "_proc_uid", lambda path: 1000)
+    monkeypatch.setattr(cu, "_runtime_dir", lambda: tmp_path)
+    assert ComputerUse()._discover_x11()["DISPLAY"] == ":99"
