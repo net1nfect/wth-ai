@@ -10,6 +10,8 @@ from typing import Any
 import yaml
 from dotenv import load_dotenv
 
+from wth_ai.workspace import RESULTS_DIR_NAME
+
 WTH_HOME = Path(os.environ.get("WTH_HOME", Path.home() / ".wth-ai"))
 USER_CONFIG_PATH = WTH_HOME / "config" / "user.yaml"
 USER_ENV_PATH = WTH_HOME / ".env"
@@ -38,6 +40,37 @@ PROVIDER_NAMES: tuple[str, ...] = (
 )
 
 load_dotenv(USER_ENV_PATH)
+
+
+class ConfigError(Exception):
+    """Config tidak bisa dibaca; pesannya selalu `path:line: ...` (P1-2).
+
+    Dulu `yaml.safe_load` melempar `YAMLError` mentah, jadi `wth-ai doctor` mati
+    dengan traceback dan operator tidak tahu file mana yang rusak.
+    """
+
+    def __init__(self, path: Path, line: int | None, detail: str) -> None:
+        self.path = path
+        self.line = line
+        where = f"{path}:{line}" if line else str(path)
+        super().__init__(f"{where}: config YAML tidak valid — {detail}")
+
+
+def load_user_config(path: str | Path = USER_CONFIG_PATH) -> dict[str, Any]:
+    """Baca satu file YAML config; `ConfigError` bila rusak."""
+    path = Path(path)
+    if not path.exists():
+        return {}
+    try:
+        return yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    except yaml.YAMLError as exc:
+        mark = getattr(exc, "problem_mark", None)
+        return _raise_config_error(path, mark, exc)
+
+
+def _raise_config_error(path: Path, mark: Any, exc: Exception) -> Any:
+    detail = getattr(exc, "problem", None) or str(exc).splitlines()[0]
+    raise ConfigError(path, getattr(mark, "line", None) and mark.line + 1, detail)
 load_dotenv()
 
 
@@ -108,7 +141,7 @@ class ProviderPrefsConfig:
 @dataclass
 class SafetyConfig:
     unrestricted: bool = False  # dimensi 2 (capability ceiling) -- lihat engagement/mode.py
-    default_permission: str = "full_lab"
+    default_permission: str = "read_only"  # P0-3: default aman, bukan full_lab
     require_authorized: bool = True  # dimensi 1 (scope authorization) -- WU-003, default AMAN
 
 
@@ -185,7 +218,9 @@ class ReconConfig:
 @dataclass
 class IntelConfig:
     enabled: bool = True
-    nuclei_templates_check: bool = True
+    # Default mati: update template butuh egress (P2-8). Field dipertahankan
+    # agar config lama tetap bisa dibaca.
+    nuclei_templates_check: bool = False
     wayback_delta: bool = True
 
 
@@ -302,7 +337,7 @@ class WTHConfig:
     agent: AgentConfig = field(default_factory=AgentConfig)
     ui: UIConfig = field(default_factory=UIConfig)
     prompts_dir: str = "prompts"
-    results_dir: str = "wth-results"
+    results_dir: str = RESULTS_DIR_NAME
     require_openrouter: bool = False
     realtime_only: bool = True
     require_llm: bool = False
@@ -311,15 +346,15 @@ class WTHConfig:
     user_config_path: Path = field(default_factory=lambda: USER_CONFIG_PATH)
 
     @classmethod
-    def load(cls, path: str | Path = "config/wth_config.yaml") -> WTHConfig:
+    def load(cls, path: str | Path = "config/wth_ai_config.yaml") -> WTHConfig:
         path = Path(path)
         raw: dict[str, Any] = {}
         if path.exists():
-            raw = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+            raw = load_user_config(path)
 
         user_raw: dict[str, Any] = {}
         if USER_CONFIG_PATH.exists():
-            user_raw = yaml.safe_load(USER_CONFIG_PATH.read_text(encoding="utf-8")) or {}
+            user_raw = load_user_config(USER_CONFIG_PATH)
             raw = _deep_merge(raw, user_raw)
 
         models_raw = raw.get("models", {})
@@ -337,6 +372,12 @@ class WTHConfig:
         mcp_cfg = {k: v for k, v in mcp_raw.items() if k in MCPConfig.__dataclass_fields__ and k != "servers"}
         mcp_cfg["servers"] = mcp_servers if isinstance(mcp_servers, dict) else {}
         safety_raw = raw.get("safety", {})
+        # P0-3: `safety.default_permission` ikut dimigrasikan supaya dua jalur
+        # (top-level dan nested) tidak menyimpan dua jawaban berbeda.
+        if "default_permission" in safety_raw:
+            safety_raw = {**safety_raw,
+                          "default_permission": _normalize_default_permission(
+                              safety_raw["default_permission"])}
         agent_raw = raw.get("agent", {})
         # Bypass adalah pilihan sesi: env `WTH_BYPASS` (dari `--bypass`) menang
         # atas berkas config, supaya operator tidak perlu mengedit YAML untuk
@@ -444,13 +485,18 @@ class WTHConfig:
             agent=AgentConfig(**agent_kwargs),
             ui=UIConfig(**{k: v for k, v in ui_raw.items() if k in UIConfig.__dataclass_fields__}),
             prompts_dir=raw.get("prompts_dir", "prompts"),
-            results_dir=raw.get("results_dir", "wth-results"),
+            results_dir=raw.get("results_dir", RESULTS_DIR_NAME),
             require_openrouter=raw.get("require_openrouter", False),
             realtime_only=raw.get("realtime_only", True),
             require_llm=raw.get("require_llm", user_raw.get("setup_complete", False)),
             setup_complete=raw.get("setup_complete", False),
-            default_permission=raw.get("default_permission", safety_raw.get("default_permission", "full_lab")),
+            default_permission=_normalize_default_permission(
+                raw.get("default_permission",
+                        safety_raw.get("default_permission", "read_only"))),
         )
+        # Top-level `default_permission` is the single answer; the nested
+        # `safety.default_permission` must not keep a different one.
+        cfg.safety.default_permission = cfg.default_permission
         return cfg
 
     def _agent_out(self) -> dict[str, Any]:
@@ -584,8 +630,10 @@ class WTHConfig:
         existing: dict[str, Any] = {}
         if USER_CONFIG_PATH.exists():
             try:
-                existing = yaml.safe_load(USER_CONFIG_PATH.read_text(encoding="utf-8")) or {}
-            except yaml.YAMLError:
+                existing = load_user_config(USER_CONFIG_PATH)
+            except ConfigError:
+                # Menulis ulang config rusak: yang lama tidak bisa dipertahankan,
+                # tapi jangan gagalkan penyimpanan (P1-2 hanya soal melapor).
                 existing = {}
         if isinstance(existing, dict):
             data = _deep_merge(existing, data)
@@ -602,39 +650,32 @@ class WTHConfig:
                 if value or key not in merged_secrets:
                     merged_secrets[key] = value
             data["secrets"] = merged_secrets
-        USER_CONFIG_PATH.write_text(yaml.safe_dump(data, default_flow_style=False), encoding="utf-8")
-        from wth_ai.workspace import secure_file
+        # P1-4: tmp+fsync+rename, supaya config lama tidak setengah hilang.
+        from wth_ai.workspace import atomic_write_text, secure_file
+        atomic_write_text(USER_CONFIG_PATH, yaml.safe_dump(data, default_flow_style=False))
         secure_file(USER_CONFIG_PATH)
         return USER_CONFIG_PATH
 
-    def write_env_file(self) -> Path:
-        """Write secrets to ~/.wth-ai/.env for subprocess compatibility."""
-        lines: list[str] = []
-        if self.secrets.openrouter_api_key:
-            lines.append(f"OPENROUTER_API_KEY={self.secrets.openrouter_api_key}")
-        if self.secrets.openai_api_key:
-            lines.append(f"OPENAI_API_KEY={self.secrets.openai_api_key}")
-        if self.secrets.anthropic_api_key:
-            lines.append(f"ANTHROPIC_API_KEY={self.secrets.anthropic_api_key}")
-        if self.secrets.google_api_key:
-            lines.append(f"GOOGLE_API_KEY={self.secrets.google_api_key}")
-        if self.bots.discord_token:
-            lines.append(f"DISCORD_BOT_TOKEN={self.bots.discord_token}")
-        if self.bots.telegram_token:
-            lines.append(f"TELEGRAM_BOT_TOKEN={self.bots.telegram_token}")
-        USER_ENV_PATH.parent.mkdir(parents=True, exist_ok=True)
-        USER_ENV_PATH.write_text("\n".join(lines) + "\n", encoding="utf-8")
-        # WU-210 (DATA-04): this file holds PLAINTEXT provider/bot secrets --
-        # chmod 600 immediately after writing (same treatment as USER_CONFIG_PATH
-        # above / vault.key), otherwise it is created world/group-readable per
-        # the process umask.
-        from wth_ai.workspace import secure_file
-        secure_file(USER_ENV_PATH)
-        for line in lines:
-            if "=" in line:
-                k, v = line.split("=", 1)
-                os.environ[k] = v
-        return USER_ENV_PATH
+
+def _normalize_default_permission(value: Any) -> str:
+    """P0-3: satu kali migrasi nama preset lama; buang nama tak dikenal.
+
+    Config lama menyimpan `full_lab`, yang dulu berarti `yolo`. Nilai itu kini
+    berarti preset `full-lab` (capability dibatasi). Ejaan lain yang sudah
+    dikenal dipertahankan apa adanya supaya berkas config tidak berubah kosakata,
+    dan nama yang benar-benar tak dikenal jatuh ke `read_only` alih-alih
+    menggagalkan start-up.
+    """
+    from wth_ai.permission_presets import resolve_preset
+
+    name = str(value or "").strip().lower()
+    if name in ("full_lab", "full-lab"):
+        return "full-lab"
+    try:
+        resolve_preset(name)
+    except ValueError:
+        return "read_only"
+    return name
 
 
 def _make_secret_resolver() -> Any:
@@ -725,6 +766,9 @@ def is_setup_complete() -> bool:
     if os.environ.get("WTH_SKIP_SETUP") == "1":
         return True
     if USER_CONFIG_PATH.exists():
-        raw = yaml.safe_load(USER_CONFIG_PATH.read_text(encoding="utf-8")) or {}
+        try:
+            raw = load_user_config(USER_CONFIG_PATH)
+        except ConfigError:
+            return False
         return bool(raw.get("setup_complete"))
     return False

@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 import os
-import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -38,21 +37,17 @@ class IntelFeed:
         self.state_file.write_text(json.dumps(state, indent=2), encoding="utf-8")
 
     def check_nuclei_templates(self) -> dict[str, Any]:
-        if not self.config.intel.nuclei_templates_check:
-            return {"status": "disabled"}
-        try:
-            proc = subprocess.run(
-                ["nuclei", "-update-templates", "-silent"],
-                capture_output=True,
-                text=True,
-                timeout=120,
-            )
-            return {
-                "status": "ok" if proc.returncode == 0 else "failed",
-                "stdout": proc.stdout[-300:] if proc.stdout else "",
-            }
-        except (FileNotFoundError, subprocess.TimeoutExpired) as exc:
-            return {"status": "unavailable", "error": str(exc)}
+        """Update template keluar jaringan, jadi bukan tugas turn otomatis.
+
+        Invarian egress (AGENTS.md §3.5) berlaku untuk semua koneksi keluar;
+        `nuclei -update-templates` mengunduh dari GitHub tanpa lewat
+        EgressGuard dan tanpa tercatat di audit.log. Pemasangan template
+        pindah ke jalur eksplisit `wth tools install nuclei-templates`.
+        """
+        return {
+            "status": "disabled",
+            "reason": "update template keluar jaringan; pakai `wth tools install nuclei-templates`",
+        }
 
     def cve_hints_for_tech(self, tech_stack: dict[str, str]) -> list[dict[str, str]]:
         hints: list[dict[str, str]] = []
