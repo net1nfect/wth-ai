@@ -22,3 +22,31 @@ def test_check_nuclei_templates_never_spawns_subprocess(tmp_path, monkeypatch):
 
 def test_nuclei_templates_check_defaults_off():
     assert IntelConfig().nuclei_templates_check is False
+
+
+def test_sanitize_masks_secret_and_control_chars():
+    from wth_ai.redaction import sanitize_untrusted_text
+
+    out = sanitize_untrusted_text("token ghp_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n\x00<script>")
+    assert "ghp_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" not in out
+    assert "\x00" not in out and "\n" not in out
+
+
+def test_cve_hint_is_sanitized_and_tagged(tmp_path, monkeypatch):
+    monkeypatch.setenv("WTH_HOME", str(tmp_path))
+
+    class Resp:
+        ok = True
+
+        def json(self):
+            return {"vulnerabilities": [{"cve": {
+                "id": "CVE-2020-0001",
+                "descriptions": [{"lang": "en",
+                                  "value": "leak ghp_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n\x00"}],
+                "configurations": [{"nodes": [{"cpeMatch": [{}]}]}],
+            }}]}
+
+    monkeypatch.setattr("wth_ai.intel.feed.requests.get", lambda *a, **k: Resp())
+    hints = IntelFeed().cve_hints_for_tech({"nginx": "1.25"})
+    assert hints[0]["provenance"] == "external-nvd"
+    assert "ghp_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" not in hints[0]["summary"]

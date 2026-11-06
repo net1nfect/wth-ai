@@ -12,6 +12,7 @@ import requests
 
 from wth_ai.config import WTHConfig
 from wth_ai.models import AttackSurface
+from wth_ai.redaction import sanitize_untrusted_text
 
 
 class IntelFeed:
@@ -69,10 +70,11 @@ class IntelFeed:
                     desc = ""
                     for d in cve.get("descriptions", []):
                         if d.get("lang") == "en":
-                            desc = d.get("value", "")[:200]
+                            desc = sanitize_untrusted_text(d.get("value", ""), limit=200)
                             break
                     if cve_id:
-                        hints.append({"cve": cve_id, "product": product, "version": version, "summary": desc})
+                        hints.append({"cve": cve_id, "product": product, "version": version,
+                                      "summary": desc, "provenance": "external-nvd"})
             except requests.RequestException:
                 continue
         return hints[:10]

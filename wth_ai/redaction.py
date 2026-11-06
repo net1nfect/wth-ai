@@ -23,6 +23,7 @@ name is preserved so an operator still reads *which* credential leaked.
 from __future__ import annotations
 
 import re
+from typing import Any
 
 #: The single masking marker used across transcripts, logs, raw tool output
 #: and reports. Tests and operators match on this exact string.
@@ -120,6 +121,36 @@ def redact_secrets(text: str) -> str:
     return redacted
 
 
+_CONTROL_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
+
+
+def sanitize_untrusted_text(text: str, *, limit: int = 200) -> str:
+    """Teks dari sumber luar: redaksi secret, buang kontrol, satu baris.
+
+    Data NVD/wayback/digest job bisa memuat prompt-injection atau nilai yang
+    mirip kredensial; sebelum masuk prompt atau laporan, semuanya lewat sini.
+    """
+    clean = _CONTROL_RE.sub(" ", redact_secrets(str(text or "")))
+    clean = " ".join(clean.split())
+    return clean[:limit]
+
+
 def contains_secret(text: str) -> bool:
     """Whether redaction would change ``text`` (i.e. a credential shows up)."""
     return redact_secrets(text) != text
+
+
+def redact_data(value: Any) -> Any:
+    """Rekursif: setiap string di dalam dict/list diredaksi, bentuk tetap.
+
+    P1-0: artefak dan evidence vault ditulis sebagai struktur bersarang
+    (`{"headers": {"authorization": ...}}`), jadi meredaksi hanya string
+    top-level meninggalkan secret di dalamnya.
+    """
+    if isinstance(value, str):
+        return redact_secrets(value)
+    if isinstance(value, dict):
+        return {k: redact_data(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return type(value)(redact_data(v) for v in value)
+    return value
