@@ -13,7 +13,7 @@ class PluginManager:
         from wth_ai.events import get_event_bus
         self.config = config
         self.bus = bus or get_event_bus()
-        self.ctx = PluginContext(config=config, bus=self.bus)
+        self.ctx = PluginContext.build(config=config, bus=self.bus)
         self.loaded: list[str] = []
         self._subscribed = False
 
