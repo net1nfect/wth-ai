@@ -10,6 +10,7 @@ from wth_ai.agents.supervisor_context import SupervisorContext
 from wth_ai.engagement.mode import auto_approve_enabled
 from wth_ai.models import AssessmentPhase, ExecutorTask, FindingState, PermissionMode, sort_tasks_by_dependencies
 from wth_ai.permission_presets import apply_preset
+from wth_ai.verify_gate import apply_verification
 
 
 def _dispatch_computer_use(ctx: SupervisorContext, args: dict[str, Any], *, approved: bool) -> str:
@@ -370,7 +371,8 @@ def _dispatch(ctx: SupervisorContext, name: str, args: dict[str, Any], *, approv
             # belum masuk completed_tasks didorong ke belakang. Hanya
             # berlaku di jalur auto-select ini (task_id eksplisit di atas
             # TIDAK terpengaruh -- itu pilihan eksplisit pemanggil).
-            completed_ids = {t.get("id") for t in ctx.state.completed_tasks}
+            completed_ids = {str(t.get("id")) for t in ctx.state.completed_tasks
+                             if t.get("id") is not None}
             task_dict = sort_tasks_by_dependencies(ctx.state.task_queue, completed_ids)[0]
         if not task_dict:
             return "No task in queue"
@@ -395,11 +397,10 @@ def _dispatch(ctx: SupervisorContext, name: str, args: dict[str, Any], *, approv
             v = ctx.verifier.verify_offline(finding, ctx.evidence_vault)
         else:
             return "LLM unavailable for verification"
-        verdict = v.get("verdict", "needs_more_evidence")
-        if verdict == "verified":
-            ctx.findings_db.update_finding_state(finding.id, FindingState.VERIFIED)
-        elif verdict == "false_positive":
-            ctx.findings_db.update_finding_state(finding.id, FindingState.FALSE_POSITIVE)
+        # P0-5: satu fungsi bersama dengan `orchestrator._verify` dan
+        # `engagement_loop`; state hanya bergerak lewat gate veracity.
+        apply_verification(ctx.findings_db, finding, v, ctx.evidence_vault,
+                           actor_role="discoverer")
         return json.dumps(v, indent=2)
 
     if name == "list_findings":

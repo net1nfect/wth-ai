@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import os
 import time
-from typing import Any, Callable
+from typing import Callable
 
 from wth_ai.agents import BaseLLMAgent, load_prompt
 from wth_ai.agents.supervisor_context import SupervisorCallbacks, SupervisorContext
@@ -90,7 +90,7 @@ class SupervisorAgent(BaseLLMAgent):
             if os.environ.get("WTH_TEST_MODE") == "1":
                 return self._offline_fallback(user_input, state)
             raise LLMUnavailableError(
-                "LLM required for agentic mode. Run `wth setup` to configure API key and models."
+                "LLM required for agentic mode. Run `wth-ai setup` to configure API key and models."
             )
 
         context = self._build_context_block(state)
@@ -180,10 +180,11 @@ class SupervisorAgent(BaseLLMAgent):
 
         args = parse_scope_intent(text)
         if args:
-            dispatch_supervisor_tool(self._ctx, "scope_set", args, approved=True)
+            if self._ctx is not None:
+                dispatch_supervisor_tool(self._ctx, "scope_set", args, approved=True)
             target = args.get("target", "")
             return f"Scope set to {target} (offline test mode)"
         if self._ctx and self._ctx.recon_bridge:
             tools = self._ctx.recon_bridge.list_tools(available_only=True)[:5]
             return f"LLM offline. Available recon tools: {', '.join(t['name'] for t in tools)}"
-        return "LLM offline (test mode). Configure provider via `wth setup`."
+        return "LLM offline (test mode). Configure provider via `wth-ai setup`."

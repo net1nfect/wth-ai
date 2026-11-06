@@ -37,7 +37,7 @@ from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
-from urllib.parse import quote_plus, urlparse
+from urllib.parse import quote_plus
 
 from wth_ai import veracity
 from wth_ai.recon.http import host_is_blocked
@@ -251,24 +251,67 @@ class Researcher:
     # ------------------------------------------------------------------ #
     # HTTP seam
     # ------------------------------------------------------------------ #
+    def _redirect_safe_get(self, url: str, *, headers: dict[str, str], timeout: int) -> Any:
+        """GET dengan redirect manual yang memeriksa ulang host setiap hop (P1-5).
+
+        Dipakai bersama oleh `_get` dan `_get_json` supaya celah SSRF-redirect-
+        bypass tertutup di KEDUA jalur (F4 review). `resolve` mengikuti
+        WTH_TEST_MODE (F5): di bawah mode tes, hostname tidak di-resolve (hindari
+        DNS nyata) — sama seperti `recon/http.py:158`.
+        """
+        import os
+
+        import requests
+
+        from urllib.parse import urljoin
+
+        from wth_ai.recon.http import MAX_REDIRECTS, host_of, host_is_blocked
+
+        test_mode = bool(os.environ.get("WTH_TEST_MODE"))
+        resp = requests.get(
+            url,
+            timeout=timeout,
+            headers=headers,
+            allow_redirects=False,
+        )
+        hops = 0
+        while resp.is_redirect and hops < MAX_REDIRECTS:
+            loc = resp.headers.get("Location", "")
+            if not loc:
+                break
+            nxt = urljoin(resp.url, loc)
+            hop_block = host_is_blocked(host_of(nxt), resolve=not test_mode)
+            if hop_block:
+                resp.close()
+                raise SSRFRedirectBlocked(f"redirect blocked: {hop_block}")
+            resp.close()
+            resp = requests.get(
+                nxt,
+                timeout=timeout,
+                headers=headers,
+                allow_redirects=False,
+            )
+            hops += 1
+        return resp
+
     def _get(self, url: str, *, timeout: int = 25) -> Any:
         if self._http_get is not None:
             return self._http_get(url, timeout=timeout)
-        import requests
-
-        return requests.get(
+        # P1-5 (audit segar 2026-11-06): SSRF redirect bypass. `requests` dengan
+        # `allow_redirects=True` mengikuti urutan 30x secara buta — URL publik yang
+        # redirect ke alamat internal (mis. `http://127.0.0.1/metadata`) lolos
+        # `host_is_blocked` yang hanya diperiksa untuk host awal. Ikuti redirect
+        # MANUAL dan periksa ulang host setiap hop (lihat `_redirect_safe_get`).
+        return self._redirect_safe_get(
             url,
-            timeout=timeout,
             headers={"User-Agent": USER_AGENT, "Accept-Language": "en-US,en;q=0.9"},
-            allow_redirects=True,
+            timeout=timeout,
         )
 
     def _get_json(self, url: str, *, headers: dict[str, str], timeout: int = 25) -> Any:
         if self._http_get_json is not None:
             return self._http_get_json(url, headers=headers, timeout=timeout)
-        import requests
-
-        return requests.get(url, headers=headers, timeout=timeout)
+        return self._redirect_safe_get(url, headers=headers, timeout=timeout)
 
     def api_search(self, query: str, *, limit: int = 8) -> list[SearchResult] | None:
         """Search via a keyed API. Returns None when no API is configured.
@@ -316,7 +359,12 @@ class Researcher:
 
     def _gate(self, host: str) -> str | None:
         """SSRF guard. Returns a reason when the host must not be fetched."""
-        return host_is_blocked(host)
+        # F5 (review P1-5): resolve mengikuti WTH_TEST_MODE — di bawah mode tes,
+        # hostname tidak di-resolve (hindari DNS nyata), sama seperti recon/http.py.
+        import os
+
+        test_mode = bool(os.environ.get("WTH_TEST_MODE"))
+        return host_is_blocked(host, resolve=not test_mode)
 
     # ------------------------------------------------------------------ #
     # search
@@ -421,7 +469,7 @@ class Researcher:
                     anchor = heading.find("a", href=True) if heading else item.find("a", href=True)
                     if not anchor:
                         continue
-                    url = unwrap_result_url(anchor["href"])
+                    url = unwrap_result_url(str(anchor["href"]))
                     if not url.startswith("http") or "bing.com/ck" in url:
                         continue
                     title = " ".join(anchor.get_text(" ", strip=True).split())
@@ -438,7 +486,7 @@ class Researcher:
                 if results:
                     return results
             for anchor in soup.select("a.result__a")[: limit * 2]:
-                href = anchor.get("href") or ""
+                href = str(anchor.get("href") or "")
                 title = " ".join(anchor.get_text(" ", strip=True).split())
                 if not title or not href:
                     continue
@@ -548,8 +596,6 @@ class Researcher:
         import asyncio
 
         async def _run() -> tuple[str, str, str]:
-            import nodriver as uc
-
             from wth_ai.browser.controller import BrowserController
 
             controller = BrowserController(headless=True)
@@ -664,6 +710,15 @@ def _session_text(session: Any) -> str:
         if isinstance(value, str) and value.strip():
             return value
     return ""
+
+
+class SSRFRedirectBlocked(Exception):
+    """Raised saat hop redirect menuju alamat yang diblokir guard SSRF.
+
+    P1-5 (audit segar 2026-11-06): `fetch()` menangkap `Exception` dan
+    mengisi `note.error` — jadi menaikkan pengecualian eksplisit lebih jelas
+    daripada mengembalikan objek dengan status 0 yang dibaca sebagai sukses.
+    """
 
 
 def _looks_like_navigation_junk(text: str) -> bool:

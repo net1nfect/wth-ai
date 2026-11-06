@@ -13,6 +13,9 @@ from wth_ai.models import AttackSurface, utc_now
 class EngagementMemory:
     """Persistent engagement knowledge beyond flat SessionState."""
 
+    # Diset pasca-konstruksi oleh orchestrator (AssetGraph dibuat setelah memori).
+    asset_graph: Any
+
     def __init__(self, session_id: str, base_dir: Path | None = None) -> None:
         self.session_id = session_id
         # WTH_ENGAGEMENT_DIR ada supaya test/CI tidak menulis ke dalam repo.

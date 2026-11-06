@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import re
-from typing import Any, TYPE_CHECKING
+from typing import TYPE_CHECKING
 
 from wth_ai.agents import BaseLLMAgent, load_prompt
 from wth_ai.agents.tool_loop import AgentToolLoop
@@ -218,6 +218,8 @@ class ExecutorAgent(BaseLLMAgent):
     def _execute_with_tools(
         self, task: ExecutorTask, state: SessionState, *, approved: bool = False,
     ) -> ExecutorResult:
+        if self.terminal is None:
+            raise RuntimeError("terminal belum disiapkan untuk eksekusi tool")
         loop = AgentToolLoop(
             self.client, self.terminal, graph=self.asset_graph, vault=self.evidence_vault,
             max_iters=self.config.agent.max_iters,

@@ -2,9 +2,8 @@
 
 from __future__ import annotations
 
-import subprocess
 import sys
-from typing import Any, Callable
+from typing import Callable
 
 from wth_ai.models import ExecutorResult, ExecutorTask
 from wth_ai.probe.diff_brain import ResponseDiffBrain
@@ -36,7 +35,7 @@ class ExecutorRunnerV2:
         self.registry = registry or ToolRegistry()
         self.chains = ToolChainOrchestrator(self.registry)
         self.diff_brain = ResponseDiffBrain()
-        self.on_line = on_line or self._default_on_line
+        self.on_line: Callable[[str], None] | None = on_line or self._default_on_line
 
     def _default_on_line(self, line: str) -> None:
         if sys.stdout.isatty():
@@ -57,7 +56,8 @@ class ExecutorRunnerV2:
 
         def _on_line(line: str) -> None:
             stdout_lines.append(line)
-            self.on_line(line)
+            if self.on_line:
+                self.on_line(line)
 
         stdout, stderr, code = run_command(cmd, timeout=timeout, on_line=_on_line)
         return stdout or "\n".join(stdout_lines), stderr, code

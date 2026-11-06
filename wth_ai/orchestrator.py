@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
-from typing import Any, Callable
+from typing import Any, Callable, cast
 
 from wth_ai.agents.chat import ChatAgent
 from wth_ai.agents.supervisor import SupervisorAgent
@@ -25,6 +25,7 @@ from wth_ai.evidence.vault import EvidenceVault
 from wth_ai.graph.asset_graph import AssetGraph
 from wth_ai.models import (
     AssessmentPhase,
+    ExecutorResult,
     ExecutorTask,
     FindingState,
     PermissionMode,
@@ -32,6 +33,7 @@ from wth_ai.models import (
 )
 from wth_ai.llm.router import LLMProviderRouter
 from wth_ai.permission_manager import PermissionManager
+from wth_ai.permission_presets import default_mode
 from wth_ai.loop.engagement_loop import EngagementLoop
 from wth_ai.intel.feed import IntelFeed
 from wth_ai.memory.engagement_memory import EngagementMemory
@@ -42,11 +44,11 @@ from wth_ai.recon.agent_bridge import ReconAgentBridge
 from wth_ai.tools.doctor import ToolDoctor
 from wth_ai.tools.registry import ToolRegistry
 from wth_ai.tools.runner import ManifestToolRunner
+from wth_ai.verify_gate import apply_verification
 from wth_ai.scope_manager import ScopeManager
 from wth_ai.session_store import SessionStore
 from wth_ai.skills.registry import SkillRegistry
 from wth_ai.skills.fusion import SkillFusionEngine
-from wth_ai.cli.recon_wizard import ReconWizard
 from wth_ai.terminal.bridge import AgentTerminalBridge
 from wth_ai.tool_runner import ToolRunner
 
@@ -90,6 +92,11 @@ class WTHOrchestrator:
         self.skill_router = SkillFusionEngine(self.skills, self.config)
         self.tool_runner = ToolRunner(self.config, self.permission_mgr, self.scope_mgr)
         self.state = SessionState()
+        # P0-3: satu sumber default -- config menentukan mode awal sesi, dan
+        # PermissionManager mengikuti mode yang sama (sebelumnya keduanya
+        # memakai nilai bawaan masing-masing dan config diabaikan).
+        self.state.permission_mode = default_mode(self.config)
+        self.permission_mgr.set_mode(self.state.permission_mode)
         self._approved_tasks: set[str] = set()
         self.tool_registry = ToolRegistry()
         self.manifest_runner = ManifestToolRunner(self.config, self.permission_mgr, self.scope_mgr, self.tool_registry)
@@ -242,7 +249,8 @@ class WTHOrchestrator:
 
     def new_session(self) -> str:
         self.state = SessionState()
-        self.permission_mgr.set_mode(PermissionMode.READ_ONLY_RECON)
+        self.state.permission_mode = default_mode(self.config)
+        self.permission_mgr.set_mode(self.state.permission_mode)
         self.scope_mgr = ScopeManager()
         self.findings_db = FindingsDB()
         self._approved_tasks.clear()
@@ -400,11 +408,12 @@ class WTHOrchestrator:
                     self.rationale = str(data.get("rationale", ""))
                     self.probe = data.get("probe", {})
 
-            return format_next_tests([_Stored(item) for item in stored])
+            return format_next_tests(cast(Any, [_Stored(item) for item in stored]))
         pairs = self.state.metadata.get("request_pairs", [])
         findings = []
         try:
-            findings = [f.to_dict() if hasattr(f, "to_dict") else dict(f) for f in self.findings_db.list_findings()]
+            findings = [f.to_dict() if hasattr(f, "to_dict") else dict(cast(Any, f))
+                        for f in self.findings_db.list_findings()]
         except Exception:  # noqa: BLE001
             pass
         return format_next_tests(propose_next_tests(findings=findings, request_pairs=pairs))
@@ -475,9 +484,9 @@ class WTHOrchestrator:
         perm = self.state.permission_mode.value
         llm = "online" if self.client.available() else "required"
         return (
-            f"[{THEME['text']}]wth v{__version__}[/] [{THEME['muted']}]realtime · TTST[/] [{THEME['muted']}]authorized only[/]\n"
+            f"[{THEME['text']}]wth-ai v{__version__}[/] [{THEME['muted']}]realtime · TTST[/] [{THEME['muted']}]authorized only[/]\n"
             f"[{THEME['muted']}]target[/] {target} · [{THEME['muted']}]perm[/] {perm} · "
-            f"[{THEME['muted']}]tools[/] {ts['installed']}/{ts['total']} · [{THEME['muted']}]llm[/] {llm}\n"
+            f"[{THEME['muted']}]agent-tools[/] {ts['installed']}/{ts['total']} · [{THEME['muted']}]llm[/] {llm}\n"
             f"[{THEME['muted']}]chat to hunt · e.g. scope example.com then recon/hunt[/]"
         )
 
@@ -710,7 +719,7 @@ class WTHOrchestrator:
         except LLMError as exc:
             return (
                 "LLM tidak tersedia untuk chat agentic.\n"
-                "Jalankan `wth setup` untuk API key dan model, atau set provider Ollama di config.\n\n"
+                "Jalankan `wth-ai setup` untuk API key dan model, atau set provider Ollama di config.\n\n"
                 f"Detail: {exc}"
             )
         except Exception as exc:
@@ -859,7 +868,7 @@ class WTHOrchestrator:
         surface_obj = self.state.metadata.get("attack_surface_obj")
         surface = None
         if surface_obj:
-            from wth_ai.models import AttackSurface, LiveHost, ParamCandidate
+            from wth_ai.models import AttackSurface
             surface = AttackSurface(
                 target=surface_obj.get("target", ""),
                 urls=surface_obj.get("urls", []),
@@ -909,12 +918,12 @@ class WTHOrchestrator:
                 rc = self.client._role_config("planner")
                 return (
                     f"LLM error during hunt ({rc.type}): {exc}\n"
-                    f"Cek provider/model planner: `wth config show planner` atau `wth doctor`"
+                    f"Cek provider/model planner: `wth-ai config show planner` atau `wth-ai doctor`"
                 )
             if isinstance(exc, requests.HTTPError):
                 return (
                     f"LLM HTTP error during hunt: {exc}\n"
-                    f"Cek model 9router (`wth model list`) — reporter/planner harus model yang ada di gateway."
+                    f"Cek model 9router (`wth-ai model list`) — reporter/planner harus model yang ada di gateway."
                 )
             raise
 
@@ -1035,7 +1044,7 @@ class WTHOrchestrator:
         findings = []
         try:
             findings = [
-                f.to_dict() if hasattr(f, "to_dict") else dict(f)
+                f.to_dict() if hasattr(f, "to_dict") else dict(cast(Any, f))
                 for f in self.findings_db.list_findings()
             ]
         except Exception:  # noqa: BLE001
@@ -1215,7 +1224,7 @@ class WTHOrchestrator:
             )
             tasks = [ExecutorTask.from_dict(t) for t in self.state.task_queue[:6]]
 
-            def _run(task: ExecutorTask) -> ExecutorResult:
+            def _run(task: ExecutorTask) -> "ExecutorResult":
                 approved = task.id in self._approved_tasks or self.approval_gate.is_approved_for_task(task.id)
                 r = self.executor.execute(task, self.state, approved=approved)
                 pairs = self.state.metadata.pop("request_pairs", [])
@@ -1280,12 +1289,13 @@ class WTHOrchestrator:
                 v = self.verifier.verify_offline(finding)
             else:
                 return "LLM tidak tersedia untuk verifikasi. Jalankan `wth-ai setup`."
-            verdict = v.get("verdict", "needs_more_evidence")
-            if verdict == "verified":
-                self.findings_db.update_finding_state(finding.id, FindingState.VERIFIED)
+            # P0-5: state tidak lagi ditulis dari `v["verdict"]` mentah; gate
+            # veracity memutuskan, guard lifecycle menolak transisi ilegal.
+            state = apply_verification(self.findings_db, finding, v, self.evidence_vault,
+                                       actor_role="discoverer")
+            if state is FindingState.VERIFIED:
                 self._record_learning_outcome(finding, verified=True)
-            elif verdict == "false_positive":
-                self.findings_db.update_finding_state(finding.id, FindingState.FALSE_POSITIVE)
+            elif state is FindingState.FALSE_POSITIVE:
                 self._record_learning_outcome(finding, verified=False)
             outputs.append(self.verifier.format_verification(v))
 

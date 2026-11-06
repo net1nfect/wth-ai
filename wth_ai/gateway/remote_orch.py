@@ -31,7 +31,7 @@ class RemoteOrchestrator:
     def _refresh_state(self) -> None:
         st = self.gateway.get_status()
         self.state.session_id = st.get("session_id", self.state.session_id)
-        self.state.scope.target = st.get("target") or None
+        setattr(self.state.scope, "target", st.get("target") or None)
         try:
             self.state.permission_mode = PermissionMode(st.get("permission", "read_only"))
         except ValueError:

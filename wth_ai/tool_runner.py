@@ -2,19 +2,20 @@
 
 from __future__ import annotations
 
-import re
-import subprocess
 import time
 from typing import Any
 
 from wth_ai.config import WTHConfig
-from wth_ai.models import ExecutorResult, ExecutorTask, PermissionMode
+from wth_ai.models import ExecutorResult, ExecutorTask
 from wth_ai.permission_manager import PermissionManager
 from wth_ai.scope_manager import ScopeManager
 
 
 class ToolRunner:
     """Execute approved commands in subprocess with safety controls."""
+
+    # Diset pasca-konstruksi oleh orchestrator (vault dibuat setelah runner).
+    evidence_vault: Any
 
     def __init__(
         self,
