@@ -114,11 +114,19 @@ def _top_targets(results_dir: Path, job_id: str, *, limit: int = MAX_TOP_TARGETS
         asset = str(row.get("asset") or "")
         score = row.get("score")
         if asset:
-            out.append(f"{sanitize_untrusted_text(asset, limit=200)} (score {score})")
+            out.append(f"{sanitize_untrusted_text(asset, limit=200)} "
+                       f"(score {sanitize_untrusted_text(str(score), limit=20)})")
         if len(out) >= limit:
             break
     return out
 
+
+def _safe_int(value: Any, default: int = 0) -> int:
+    """Angka dari job record bisa berupa str/list/None; jangan sampai meledak."""
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
 
 def _count_changes(value: Any) -> int:
     """Count detected changes whatever shape the summary carries.
@@ -155,10 +163,10 @@ def digest_for(job: Any, results_dir: Path) -> JobDigest:
         profile=getattr(job, "profile", "") or str(summary.get("profile") or ""),
         created_at=getattr(job, "created_at", "") or "",
         finished_at=getattr(job, "finished_at", None),
-        progress_pct=int(progress.get("current") or 0),
+        progress_pct=_safe_int(progress.get("current")),
         error=getattr(job, "error", None),
         assets=assets or {},
-        priority_count=int(summary.get("priority_targets") or 0),
+        priority_count=_safe_int(summary.get("priority_targets")),
         top_targets=_top_targets(results_dir, job_id),
         changes=_count_changes(summary.get("changes")),
         output_dir=str(results_dir / job_id),

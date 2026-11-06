@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import threading
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -12,7 +13,8 @@ from typing import Any
 from contextlib import contextmanager
 from typing import Iterator
 
-from wth_ai.workspace import wth_home
+from wth_ai.audit import audit_log
+from wth_ai.workspace import atomic_write_text, wth_home
 
 
 @dataclass
@@ -59,6 +61,9 @@ class CronStore:
     def __init__(self, path: Path | None = None) -> None:
         self.path = path or (wth_home() / "runtime" / "cron.json")
         self.path.parent.mkdir(parents=True, exist_ok=True)
+        # flock pada dua fd berbeda di proses yang sama akan saling menunggu,
+        # jadi kedalaman kunci dilacak per-thread (reentrant).
+        self._local = threading.local()
 
     @contextmanager
     def locked(self) -> Iterator[None]:
@@ -67,6 +72,14 @@ class CronStore:
         P3-3: tanpa kunci, dua ticker (TUI + gateway) sama-sama membaca
         `last_run_at` lama lalu sama-sama meng-enqueue job yang sama.
         """
+        depth = getattr(self._local, "depth", 0)
+        if depth:
+            self._local.depth = depth + 1
+            try:
+                yield
+            finally:
+                self._local.depth -= 1
+            return
         lock_path = self.path.with_name(self.path.name + ".lock")
         lock_path.parent.mkdir(parents=True, exist_ok=True)
         with open(lock_path, "a+", encoding="utf-8") as fh:
@@ -75,11 +88,14 @@ class CronStore:
 
                 fcntl.flock(fh.fileno(), fcntl.LOCK_EX)
                 locked = True
-            except (ImportError, OSError):
+            except (ImportError, OSError) as exc:  # platform tanpa fcntl
+                audit_log("cron_lock_unavailable", error=type(exc).__name__)
                 locked = False
+            self._local.depth = 1
             try:
                 yield
             finally:
+                self._local.depth = 0
                 if locked:
                     fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
 
@@ -93,15 +109,21 @@ class CronStore:
         return [CronEntry.from_dict(x) for x in raw.get("entries", [])]
 
     def _save(self, entries: list[CronEntry]) -> None:
-        self.path.write_text(
-            json.dumps({"entries": [e.to_dict() for e in entries]}, indent=2),
-            encoding="utf-8",
+        # Tulis atomik: `write_text` yang terpotong membuat `_load` melihat file
+        # rusak lalu memperlakukannya sebagai "tidak ada jadwal".
+        atomic_write_text(
+            self.path,
+            json.dumps({"entries": [e.to_dict() for e in entries]}, indent=2) + "\n",
         )
 
     def list(self) -> list[CronEntry]:
         return self._load()
 
     def add(self, job_type: str, target: str, schedule: str, *, profile: str = "recon-only") -> CronEntry:
+        with self.locked():
+            return self._add(job_type, target, schedule, profile=profile)
+
+    def _add(self, job_type: str, target: str, schedule: str, *, profile: str = "recon-only") -> CronEntry:
         entries = self._load()
         # Idempotent per (job_type, target). `wth-ai recon watch example.com`
         # previously appended a SECOND entry whenever it was re-run (e.g. to
@@ -127,6 +149,10 @@ class CronStore:
         return entry
 
     def remove(self, cron_id: str) -> bool:
+        with self.locked():
+            return self._remove(cron_id)
+
+    def _remove(self, cron_id: str) -> bool:
         entries = self._load()
         new = [e for e in entries if e.cron_id != cron_id]
         if len(new) == len(entries):
@@ -135,6 +161,10 @@ class CronStore:
         return True
 
     def set_enabled(self, cron_id: str, enabled: bool) -> bool:
+        with self.locked():
+            return self._set_enabled(cron_id, enabled)
+
+    def _set_enabled(self, cron_id: str, enabled: bool) -> bool:
         entries = self._load()
         found = False
         for e in entries:
@@ -161,12 +191,20 @@ class CronStore:
         return (base + timedelta(seconds=interval)).isoformat()
 
     def refresh_next_runs(self) -> None:
+        with self.locked():
+            self._refresh_next_runs()
+
+    def _refresh_next_runs(self) -> None:
         entries = self._load()
         for e in entries:
             e.next_run_at = self.compute_next_run(e)
         self._save(entries)
 
     def migrate_from_watch(self) -> int:
+        with self.locked():
+            return self._migrate_from_watch()
+
+    def _migrate_from_watch(self) -> int:
         """Import legacy recon watch configs as cron entries."""
         from wth_ai.recon.realtime import list_watches
         migrated = 0
@@ -180,6 +218,10 @@ class CronStore:
         return migrated
 
     def update_run(self, cron_id: str) -> None:
+        with self.locked():
+            self._update_run(cron_id)
+
+    def _update_run(self, cron_id: str) -> None:
         now = datetime.now(timezone.utc).isoformat()
         entries = self._load()
         for e in entries:

@@ -121,7 +121,11 @@ def redact_secrets(text: str) -> str:
     return redacted
 
 
-_CONTROL_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
+_CONTROL_RE = re.compile(
+    "[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f"   # kontrol ASCII + C1
+    "\u200b-\u200f\u202a-\u202e\u2066-\u2069\ufeff"  # zero-width + bidi
+    "]"
+)
 
 
 def sanitize_untrusted_text(text: str, *, limit: int = 200) -> str:

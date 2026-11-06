@@ -66,3 +66,27 @@ def test_cron_store_lock_is_exclusive(tmp_path):
     for t in threads:
         t.join()
     assert overlap == []
+
+
+def test_cron_mutators_take_lock_and_write_atomically(tmp_path, monkeypatch):
+    import contextlib
+    import pathlib
+
+    from wth_ai.cron.store import CronStore
+
+    store = CronStore(path=tmp_path / "cron.json")
+    entered: list[int] = []
+
+    @contextlib.contextmanager
+    def rec():
+        entered.append(1)
+        yield
+
+    def boom(self, *a, **k):
+        raise AssertionError("cron store harus menulis atomik")
+
+    monkeypatch.setattr(store, "locked", rec)
+    monkeypatch.setattr(pathlib.Path, "write_text", boom)
+    store.add("recon", "example.com", "every 6h")
+    assert entered
+    assert "example.com" in (tmp_path / "cron.json").read_text(encoding="utf-8")

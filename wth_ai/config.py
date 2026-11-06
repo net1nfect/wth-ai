@@ -221,6 +221,9 @@ class IntelConfig:
     # Default mati: update template butuh egress (P2-8). Field dipertahankan
     # agar config lama tetap bisa dibaca.
     nuclei_templates_check: bool = False
+    # Default mati: `cve_hints_for_tech` memanggil services.nvd.nist.gov di
+    # luar EgressGuard/scope. Hanya operator yang mengaktifkan eksplisit.
+    cve_lookup: bool = False
     wayback_delta: bool = True
 
 

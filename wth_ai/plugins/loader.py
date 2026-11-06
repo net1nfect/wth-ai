@@ -3,16 +3,23 @@
 from __future__ import annotations
 
 import importlib.util
+import sys
 from pathlib import Path
 from typing import Any
 
+from wth_ai.audit import audit_log
 from wth_ai.plugins.context import PluginContext
 from wth_ai.workspace import wth_home
 
 
 def discover_plugin_dirs() -> list[Path]:
-    dirs = [wth_home() / "plugins", Path(".wth") / "plugins"]
-    return [d for d in dirs if d.is_dir()]
+    # P0-1 (audit 2026-11-06): hanya load dari $WTH_HOME/plugins (dimiliki
+    # user, absolut). Sebelumnya `.wth/plugins` relatif CWD ikut dimuat dan
+    # tereksekusi via exec_module — supply-chain/code-injection vector: sebuah
+    # `.wth/plugins/*.py` di direktori tempat tool dijalankan (repo clone,
+    # artifact target, workspace bersama) dieksekusi dengan privilege penuh.
+    dirs = [wth_home() / "plugins"]
+    return [d for d in dirs if d.is_dir() and d.is_absolute()]
 
 
 def load_directory_plugins(ctx: PluginContext) -> list[str]:
@@ -31,8 +38,13 @@ def load_directory_plugins(ctx: PluginContext) -> list[str]:
                 if hasattr(mod, "register"):
                     mod.register(ctx)
                     loaded.append(name)
-            except Exception:
-                pass
+            except Exception as exc:  # noqa: BLE001 - plugin pihak ketiga
+                # Dulu `pass` membuat plugin lama (mis. yang membaca `ctx.config`)
+                # menghilang tanpa pesan sama sekali.
+                print(f"plugin {name} gagal dimuat: {type(exc).__name__}: {exc}",
+                      file=sys.stderr)
+                audit_log("plugin_load_failed", plugin=name,
+                          error=f"{type(exc).__name__}: {exc}")
     return loaded
 
 

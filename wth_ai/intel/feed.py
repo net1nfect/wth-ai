@@ -12,6 +12,7 @@ import re
 
 import requests
 
+from wth_ai.audit import audit_log
 from wth_ai.config import WTHConfig
 from wth_ai.models import AttackSurface
 from wth_ai.redaction import sanitize_untrusted_text
@@ -36,19 +37,29 @@ def _version_in_range(cve: dict[str, Any], version: str) -> bool:
                for m in node.get("cpeMatch") or []]
     if not matches:
         return True
+    if not re.search(r"\d", str(version)):
+        # "v?" / "unknown": cannot judge, so do not hide the hint.
+        return True
     have = _vtuple(version)
+
+    def pad(value: tuple[int, ...], width: int) -> tuple[int, ...]:
+        return value + (0,) * (width - len(value))
+
     for m in matches:
         lo_in = m.get("versionStartIncluding")
         lo_ex = m.get("versionStartExcluding")
         hi_in = m.get("versionEndIncluding")
         hi_ex = m.get("versionEndExcluding")
-        if lo_in and have < _vtuple(lo_in):
+        bounds = [_vtuple(b) for b in (lo_in, lo_ex, hi_in, hi_ex) if b]
+        width = max([len(have)] + [len(b) for b in bounds])
+        cur = pad(have, width)
+        if lo_in and cur < pad(_vtuple(lo_in), width):
             continue
-        if lo_ex and have <= _vtuple(lo_ex):
+        if lo_ex and cur <= pad(_vtuple(lo_ex), width):
             continue
-        if hi_in and have > _vtuple(hi_in):
+        if hi_in and cur > pad(_vtuple(hi_in), width):
             continue
-        if hi_ex and have >= _vtuple(hi_ex):
+        if hi_ex and cur >= pad(_vtuple(hi_ex), width):
             continue
         return True
     return False
@@ -90,10 +101,13 @@ class IntelFeed:
         }
 
     def cve_hints_for_tech(self, tech_stack: dict[str, str]) -> list[dict[str, str]]:
+        if not self.config.intel.cve_lookup:
+            return []
         hints: list[dict[str, str]] = []
         for product, version in tech_stack.items():
             if not product or len(product) < 2:
                 continue
+            audit_log("egress", host="services.nvd.nist.gov", purpose="cve_hints")
             try:
                 r = requests.get(
                     "https://services.nvd.nist.gov/rest/json/cves/2.0",

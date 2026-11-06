@@ -47,7 +47,10 @@ def test_cve_hint_is_sanitized_and_tagged(tmp_path, monkeypatch):
             }}]}
 
     monkeypatch.setattr("wth_ai.intel.feed.requests.get", lambda *a, **k: Resp())
-    hints = IntelFeed().cve_hints_for_tech({"nginx": "1.25"})
+    monkeypatch.setattr("wth_ai.intel.feed.audit_log", lambda *a, **k: None)
+    feed = IntelFeed()
+    feed.config.intel.cve_lookup = True
+    hints = feed.cve_hints_for_tech({"nginx": "1.25"})
     assert hints[0]["provenance"] == "external-nvd"
     assert "ghp_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" not in hints[0]["summary"]
 
@@ -88,5 +91,29 @@ def test_cve_hints_skip_version_outside_range(tmp_path, monkeypatch):
             }}]}
 
     monkeypatch.setattr("wth_ai.intel.feed.requests.get", lambda *a, **k: Resp())
-    assert IntelFeed().cve_hints_for_tech({"nginx": "1.25.0"}) == []
-    assert IntelFeed().cve_hints_for_tech({"nginx": "1.20.0"})
+    monkeypatch.setattr("wth_ai.intel.feed.audit_log", lambda *a, **k: None)
+    feed = IntelFeed()
+    feed.config.intel.cve_lookup = True
+    assert feed.cve_hints_for_tech({"nginx": "1.25.0"}) == []
+    assert feed.cve_hints_for_tech({"nginx": "1.20.0"})
+
+
+def test_version_in_range_pads_short_versions():
+    from wth_ai.intel.feed import _version_in_range
+
+    cve = {"configurations": [{"nodes": [{"cpeMatch": [{"versionStartIncluding": "1.2.0"}]}]}]}
+    assert _version_in_range(cve, "1.2") is True
+
+
+def test_version_in_range_unparseable_version_is_true():
+    from wth_ai.intel.feed import _version_in_range
+
+    assert _version_in_range(CVE_RANGE, "v?") is True
+
+
+def test_sanitize_strips_bidi_and_zero_width():
+    from wth_ai.redaction import sanitize_untrusted_text
+
+    out = sanitize_untrusted_text("abc\u202edef\u200bghi\u2028j\x9b")
+    for ch in ("\u202e", "\u200b", "\u2028", "\x9b"):
+        assert ch not in out

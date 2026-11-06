@@ -9,12 +9,14 @@ import socket
 import subprocess
 import tempfile
 import threading
+import uuid
 from pathlib import Path
 from typing import Any
 
 from wth_ai.models import PermissionMode
 from wth_ai.permission_manager import PermissionManager
 from wth_ai.scope_manager import ScopeManager
+from wth_ai.audit import audit_log
 from wth_ai.workspace import wth_home
 
 from wth_ai.redaction import redact_secrets as _canonical_redact
@@ -52,7 +54,23 @@ class ExecuteRpcServer:
         self.perms = PermissionManager()
         self._stop = threading.Event()
 
-    def _sandbox_argv(self, script_dir: Path) -> list[str]:
+    def _network_is_internal(self) -> bool:
+        """Pastikan `wth-lab-internal` benar-benar tanpa egress.
+
+        `--network <nama>` hanya menunjuk nama; kalau operator membuatnya
+        sebagai bridge biasa (flag `--internal` lupa), payload dapat egress
+        penuh tanpa EgressGuard dan tanpa audit.
+        """
+        try:
+            proc = subprocess.run(
+                ["docker", "network", "inspect", "-f", "{{.Internal}}", "wth-lab-internal"],
+                capture_output=True, text=True, timeout=15, shell=False,
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            return False
+        return proc.returncode == 0 and proc.stdout.strip().lower() == "true"
+
+    def _sandbox_argv(self, script_dir: Path, container: str) -> list[str]:
         """Argv docker: mount script read-only, tanpa jaringan keluar.
 
         P2-14: sebelumnya kode RPC berjalan sebagai proses host dengan akses
@@ -61,7 +79,8 @@ class ExecuteRpcServer:
         from wth_ai.containment import SandboxSpec
 
         spec = SandboxSpec(extra_mounts=(f"{script_dir}:/work:ro",))
-        return spec.docker_args(["python3", "/work/run.py"])
+        return ["docker", "run", "--rm", "-i", "--name", container, *spec.docker_args(
+            ["python3", "/work/run.py"])[3:]]
 
     def start_background(self) -> None:
         threading.Thread(target=self.serve, daemon=True, name="execute-rpc").start()
@@ -80,7 +99,10 @@ class ExecuteRpcServer:
                 conn, _ = server.accept()
             except TimeoutError:
                 continue
-            self._handle(conn)
+            try:
+                self._handle(conn)
+            except Exception as exc:  # noqa: BLE001 - satu request buruk tidak boleh mematikan server
+                audit_log("execute_rpc_error", error=f"{type(exc).__name__}: {exc}")
         server.close()
 
     def _handle(self, conn: socket.socket) -> None:
@@ -97,6 +119,8 @@ class ExecuteRpcServer:
             conn.sendall(json.dumps(result).encode("utf-8"))
 
     def execute(self, req: dict[str, Any]) -> dict[str, Any]:
+        if not isinstance(req, dict):
+            return {"status": "blocked", "error": "request harus objek JSON"}
         target = str(req.get("target", ""))
         code = str(req.get("code", ""))
         lang = str(req.get("lang", "python"))
@@ -137,15 +161,24 @@ class ExecuteRpcServer:
             if shutil.which("docker") is None:
                 return {"status": "blocked",
                         "error": "sandbox tidak tersedia (docker)"}
+            if not self._network_is_internal():
+                return {"status": "blocked",
+                        "error": "sandbox network wth-lab-internal tidak ada atau tidak internal"}
+            container = f"wth-exec-{uuid.uuid4().hex[:12]}"
             try:
                 proc = subprocess.run(
-                    self._sandbox_argv(Path(tmp)),
+                    self._sandbox_argv(Path(tmp), container),
                     capture_output=True,
                     text=True,
                     timeout=timeout_s,
                     shell=False,
+                    stdin=subprocess.DEVNULL,
                 )
             except subprocess.TimeoutExpired:
+                # `timeout` hanya membunuh klien docker; container tetap hidup
+                # dan terus memakai CPU/jaringan. Hapus eksplisit.
+                subprocess.run(["docker", "rm", "-f", container],
+                               capture_output=True, text=True, timeout=30, shell=False)
                 return {"status": "timeout", "stdout": "", "stderr": ""}
             return {
                 "status": "success" if proc.returncode == 0 else "failed",

@@ -17,8 +17,14 @@ class PluginContext:
     """Permukaan yang dilihat plugin: settings minimal, bukan WTHConfig utuh.
 
     P2-4: sebelumnya plugin menerima objek config penuh (token provider,
-    path, policy) dan EventBus mentah. Yang dibutuhkan plugin hanya mode
-    permission dan daftar provider sebagai label.
+    path, policy). Yang dibutuhkan plugin hanya mode permission dan daftar
+    provider sebagai label.
+
+    Batas kepercayaan: plugin berjalan in-process lewat `exec_module`, jadi
+    ia tetap bisa membaca file config atau memanggil apa pun. `settings`
+    mengurangi paparan default, bukan sandbox. Event yang ia emit lewat
+    `bus` diberi `_untrusted_plugin=True`, tetapi penanda itu hanya sinyal
+    provenance, bukan jaminan: plugin tepercaya yang salah tetap berbahaya.
     """
 
     settings: dict[str, Any] = field(default_factory=dict)
