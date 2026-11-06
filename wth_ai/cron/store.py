@@ -9,6 +9,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from contextlib import contextmanager
+from typing import Iterator
+
 from wth_ai.workspace import wth_home
 
 
@@ -57,6 +60,29 @@ class CronStore:
         self.path = path or (wth_home() / "runtime" / "cron.json")
         self.path.parent.mkdir(parents=True, exist_ok=True)
 
+    @contextmanager
+    def locked(self) -> Iterator[None]:
+        """Kunci eksklusif untuk read-modify-write `cron.json`.
+
+        P3-3: tanpa kunci, dua ticker (TUI + gateway) sama-sama membaca
+        `last_run_at` lama lalu sama-sama meng-enqueue job yang sama.
+        """
+        lock_path = self.path.with_name(self.path.name + ".lock")
+        lock_path.parent.mkdir(parents=True, exist_ok=True)
+        with open(lock_path, "a+", encoding="utf-8") as fh:
+            try:
+                import fcntl
+
+                fcntl.flock(fh.fileno(), fcntl.LOCK_EX)
+                locked = True
+            except (ImportError, OSError):
+                locked = False
+            try:
+                yield
+            finally:
+                if locked:
+                    fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
+
     def _load(self) -> list[CronEntry]:
         if not self.path.exists():
             return []
@@ -77,7 +103,7 @@ class CronStore:
 
     def add(self, job_type: str, target: str, schedule: str, *, profile: str = "recon-only") -> CronEntry:
         entries = self._load()
-        # Idempotent per (job_type, target). `wth recon watch example.com`
+        # Idempotent per (job_type, target). `wth-ai recon watch example.com`
         # previously appended a SECOND entry whenever it was re-run (e.g. to
         # change the profile), so the target was scanned twice per interval --
         # double the traffic for one watch. Re-running now updates the existing

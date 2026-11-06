@@ -40,3 +40,29 @@ def test_cron_not_due_before_interval(monkeypatch, tmp_path):
     mgr = MagicMock()
     sched = CronScheduler(mgr, store=store)
     assert sched.tick() == []
+
+
+def test_cron_store_lock_is_exclusive(tmp_path):
+    import threading
+    import time
+
+    from wth_ai.cron.store import CronStore
+
+    store = CronStore(path=tmp_path / "cron.json")
+    inside = {"n": 0}
+    overlap: list[int] = []
+
+    def worker() -> None:
+        with store.locked():
+            inside["n"] += 1
+            if inside["n"] > 1:
+                overlap.append(inside["n"])
+            time.sleep(0.05)
+            inside["n"] -= 1
+
+    threads = [threading.Thread(target=worker) for _ in range(4)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert overlap == []

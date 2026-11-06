@@ -29,6 +29,14 @@ class CronScheduler:
         self.store = store or CronStore()
 
     def tick(self) -> list[dict[str, Any]]:
+        fired: list[dict[str, Any]] = []
+        # Seluruh read-modify-write (list -> enqueue -> update_run) di bawah
+        # kunci: ticker lain menunggu, jadi satu jadwal tidak terpicu dua kali.
+        with self.store.locked():
+            fired = self._tick_locked()
+        return fired
+
+    def _tick_locked(self) -> list[dict[str, Any]]:
         now = datetime.now(timezone.utc)
         fired: list[dict[str, Any]] = []
         for entry in self.store.list():
@@ -67,11 +75,14 @@ class CronScheduler:
             # sinyal, dijalankan, lalu belajar. Opt-in destruktif TIDAK diambil dari
             # cron -- ia dibaca dari scope saat job berjalan, sehingga cron tidak
             # pernah menjadi jalur pintas untuk membuka gate.
+            # P1-1: jangan tanami `authorized=True` di sini. Otorisasi autopilot
+            # dibaca handler dari `scope_card.json`, bukan dari metadata job; metadata
+            # authorized akan menjadi klaim palsu/tersesat.
             return self.jobs.create_job(
                 "autopilot",
                 target=entry.target,
                 created_by="cron",
-                metadata={"authorized": True, "profile": entry.profile, "steps": 6, "cycles": 2},
+                metadata={"profile": entry.profile, "steps": 6, "cycles": 2},
             )
         if entry.job_type == "recon":
             return self.jobs.create_job(
@@ -79,14 +90,10 @@ class CronScheduler:
                 target=entry.target,
                 profile=entry.profile,
                 created_by="cron",
-                # The watch entry itself was created by an explicit operator
-                # `wth recon watch` command, so authorization is asserted here,
-                # at that boundary -- the recon handler no longer defaults it to
-                # True. `realtime` is set because `record_run()` only fires when
-                # it is, and nothing ever set it: a watch's last_run_at /
-                # last_job_id / runs stayed permanently stale even though the
-                # scans ran.
-                metadata={"authorized": True, "realtime": True, "profile": entry.profile},
+                # P0-1: otorisasi datang dari scope card (handler_recon), bukan
+                # dari metadata cron. `realtime` tetap diset karena `record_run()`
+                # hanya menyala bila flag ini ada.
+                metadata={"realtime": True, "profile": entry.profile},
             )
         return self.jobs.create_job(
             "custom",
