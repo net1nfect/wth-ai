@@ -29,6 +29,35 @@ _SHELL_TOOLS = frozenset(
 )
 
 
+def _valid_http_args(args: dict[str, Any]) -> str | None:
+    """Validasi tipe argumen sebelum `str()` memaksa nilai apa pun jadi teks.
+
+    P3-4: `str(args.get("url"))` mengubah `123` menjadi URL sah dan
+    `["ls","-la"]` menjadi command yang tampak normal, jadi broker bisa
+    menjalankan sesuatu yang tidak pernah diklasifikasi pemanggil.
+    """
+    url = args.get("url")
+    if not isinstance(url, str) or not url.strip():
+        return "argumen `url` harus string non-kosong"
+    method = args.get("method", "GET")
+    if not isinstance(method, str) or not method.strip():
+        return "argumen `method` harus string non-kosong"
+    headers = args.get("headers")
+    if headers is not None and not isinstance(headers, dict):
+        return "argumen `headers` harus dict"
+    body = args.get("body")
+    if body is not None and not isinstance(body, (str, bytes)):
+        return "argumen `body` harus string atau bytes"
+    return None
+
+
+def _valid_shell_args(args: dict[str, Any]) -> str | None:
+    command = args.get("command")
+    if not isinstance(command, str) or not command.strip():
+        return "argumen `command` harus string non-kosong"
+    return None
+
+
 class ExecutionBroker:
     """Routes intents to the bridge method that can carry them out."""
 
@@ -65,10 +94,20 @@ class ExecutionBroker:
         return result
 
     def _dispatch(self, intent: ActionIntent) -> ExecutionResult:
+        # P2-7 (audit 2026-11-06): klasifikasi berdasarkan tool_name, bukan bentuk
+        # args. Versi lama memakai fallback bentuk-args — `"url" in args` atau
+        # `"command" in args` — sehingga tool bernama apa pun yang membawa arg
+        # `url`/`command` diarahkan ke http/shell. Itu misclassification: sebuah
+        # tool tak dikenal (atau tool non-jaringan dengan field `url`) dijalankan
+        # sebagai probe HTTP. Sekarang hanya nama yang dikenal yang dirute; nama
+        # tak dikenal diblokir dengan alasan eksplisit.
         name = (intent.tool_name or "").strip().lower()
         args: dict[str, Any] = dict(intent.arguments or {})
 
-        if name in _HTTP_TOOLS or (name not in _SHELL_TOOLS and "url" in args):
+        if name in _HTTP_TOOLS:
+            bad = _valid_http_args(args)
+            if bad:
+                return ExecutionResult.blocked_for(intent, bad)
             terminal = self.bridge.http_probe(
                 str(args.get("method") or "GET"),
                 str(args.get("url") or ""),
@@ -80,7 +119,10 @@ class ExecutionBroker:
             )
             return ExecutionResult.from_terminal(terminal, intent)
 
-        if name in _SHELL_TOOLS or "command" in args:
+        if name in _SHELL_TOOLS:
+            bad = _valid_shell_args(args)
+            if bad:
+                return ExecutionResult.blocked_for(intent, bad)
             terminal = self.bridge.run_shell(
                 str(args.get("command") or ""),
                 actor=intent.actor,
