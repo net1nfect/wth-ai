@@ -13,8 +13,9 @@ from wth_ai.agents.supervisor_dispatch import dispatch_supervisor_tool
 from wth_ai.agents.tool_registry import tools_for_actor
 from wth_ai.evidence.vault import EvidenceVault
 from wth_ai.graph.asset_graph import AssetGraph
+from wth_ai.llm.compaction import compact_messages
 from wth_ai.llm.errors import LLMUnavailableError
-from wth_ai.llm.limits import ToolCallBudget
+from wth_ai.llm.limits import ToolCallBudget, filter_response_calls
 from wth_ai.llm.router import LLMProviderRouter
 from wth_ai.terminal.bridge import AgentTerminalBridge
 
@@ -78,6 +79,10 @@ class AgentToolLoop:
             data = self._chat_with_tools(role, messages, tools, timeout=timeout)
             msg = data.get("message", {})
             tool_calls = msg.get("tool_calls") or []
+            if self.budget is not None and tool_calls:
+                tool_calls, _dropped = filter_response_calls(
+                    tool_calls, limit=self.budget.max_in_response
+                )
 
             if not tool_calls:
                 content = msg.get("content") or ""
@@ -125,6 +130,9 @@ class AgentToolLoop:
         provider = self.client.provider_for_role(role)
         model, _backup = self.client.model_for_role(role)
         rc = self.client.role_config(role)
+        # Compaction dijalankan sebelum request: jendela konteks provider tidak
+        # memberi kesempatan kedua setelah prompt terkirim.
+        messages, _summarized = compact_messages(messages, model=model)
         host = ""
         try:
             parsed = urlparse(getattr(provider, "base_url", "") or "")

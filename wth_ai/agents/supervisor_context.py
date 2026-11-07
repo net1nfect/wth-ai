@@ -52,6 +52,8 @@ class SupervisorContext:
     approved_tasks: set[str] = field(default_factory=set)
     callbacks: SupervisorCallbacks = field(default_factory=SupervisorCallbacks)
     current_phase: str = "idle"
+    # Dibaca loop tool untuk berhenti di tengah iterasi; ditulis supervisor.stop().
+    stopped: bool = False
     tool_count: int = 0
     persist_fn: Callable[[], None] | None = None
     orchestrator: Any = None
