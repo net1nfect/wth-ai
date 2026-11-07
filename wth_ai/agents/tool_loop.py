@@ -14,6 +14,7 @@ from wth_ai.agents.tool_registry import tools_for_actor
 from wth_ai.evidence.vault import EvidenceVault
 from wth_ai.graph.asset_graph import AssetGraph
 from wth_ai.llm.errors import LLMUnavailableError
+from wth_ai.llm.limits import ToolCallBudget
 from wth_ai.llm.router import LLMProviderRouter
 from wth_ai.terminal.bridge import AgentTerminalBridge
 
@@ -34,6 +35,7 @@ class AgentToolLoop:
         max_iters: int = 8,
         supervisor_ctx: SupervisorContext | None = None,
         on_token: Callable[[str], None] | None = None,
+        budget: ToolCallBudget | None = None,
     ) -> None:
         self.client = client
         self.bridge = bridge
@@ -42,6 +44,7 @@ class AgentToolLoop:
         self.max_iters = max_iters
         self.supervisor_ctx = supervisor_ctx
         self.on_token = on_token
+        self.budget = budget
         self.grounding = GroundingFirewall()
 
     def run(
@@ -59,7 +62,7 @@ class AgentToolLoop:
             import os
             if os.environ.get("WTH_TEST_MODE") == "1":
                 return {"content": "LLM offline", "transcripts": [], "grounded": True}
-            raise LLMUnavailableError("LLM tidak tersedia untuk tool loop. Jalankan `wth setup`.")
+            raise LLMUnavailableError("LLM tidak tersedia untuk tool loop. Jalankan `wth-ai setup`.")
 
         messages: list[dict[str, Any]] = [
             {"role": "system", "content": system},
@@ -175,6 +178,12 @@ class AgentToolLoop:
         return data
 
     def _dispatch_tool(self, name: str, args: dict[str, Any], *, actor: str, approved: bool) -> str:
+        if self.budget is not None:
+            refusal = self.budget.check(name)
+            if refusal is not None:
+                return refusal
+            self.budget.spend(name)
+
         if actor == "supervisor" and self.supervisor_ctx is not None:
             return dispatch_supervisor_tool(self.supervisor_ctx, name, args, approved=approved)
 
