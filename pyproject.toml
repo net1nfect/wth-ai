@@ -25,18 +25,23 @@ dependencies = [
 [project.optional-dependencies]
 browser = ["nodriver>=0.38"]
 tui = ["textual>=0.80"]
-full = ["nodriver>=0.38", "aiohttp>=3.9", "dnspython>=2.4", "beautifulsoup4>=4.12", "lxml>=5.0", "textual>=0.80"]
+full = ["nodriver>=0.38", "dnspython>=2.4", "beautifulsoup4>=4.12", "lxml>=5.0", "textual>=0.80"]
 mcp = ["mcp>=1.0.0"]
+dev = ["pyflakes>=3.2", "coverage>=7.4"]
+
+# P1-8: console script `wth-ai` -> `wth_ai.cli.entry:main`. Sebelumnya
+# sengaja dihilangkan karena wheel tidak ikut `wth-ai-main.py` (entry.py lalu
+# gagal); sekarang `cli/wth-ai-main.py` masuk package-data, jadi entry point
+# berfungsi. `scripts/install.sh` tetap menulis launcher sendiri di venv.
 
 [project.scripts]
-wth = "wth_ai.cli.entry:main"
 wth-ai = "wth_ai.cli.entry:main"
 
 [tool.setuptools.packages.find]
 include = ["wth_ai*"]
 
 [tool.setuptools.package-data]
-wth_ai = ["tools/manifest.yaml", "recon/recon_rules.yaml"]
+wth_ai = ["tools/manifest.yaml", "recon/recon_rules.yaml", "cli/wth-ai-main.py"]
 
 [tool.setuptools.data-files]
 "prompts/agent" = ["prompts/agent/AGENT.md"]
@@ -46,3 +51,9 @@ include = ["wth_ai", "tests"]
 extraPaths = ["."]
 pythonVersion = "3.10"
 typeCheckingMode = "basic"
+
+# `wth_ai` adalah paket repo ini. Tanpa ini isort memperlakukannya sebagai
+# third-party, dan blok import di `tests/` (stdlib / pytest / wth_ai) dianggap
+# tidak terurut meski gaya itu dipakai di seluruh repo.
+[tool.ruff.lint.isort]
+known-first-party = ["wth_ai"]

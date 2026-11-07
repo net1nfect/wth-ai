@@ -54,6 +54,9 @@ class Finding:
     evidence: list[str] = field(default_factory=list)
     attestation: dict = field(default_factory=dict)
     provenance: str = "CWE_PATTERN"
+    # `dynamic` = ada request/response; `static` = dari analisis kode (SAST).
+    # Temuan statis tidak pernah bisa naik ke CONFIRMED: bukti runtime-nya nol.
+    origin: str = "dynamic"
     chain_id: str = ""
     created_at: str = field(default_factory=_now)
     updated_at: str = field(default_factory=_now)
@@ -91,6 +94,13 @@ class Finding:
             state_value = AttemptState(state)
         except ValueError:
             state_value = AttemptState.QUEUED
+        attestation = dict(data.get("attestation") or {})
+        # P0-2: `state: confirmed` di JSON adalah klaim dari luar, bukan bukti.
+        # Hanya attestation veracity yang boleh mengangkatnya.
+        if state_value is AttemptState.CONFIRMED and (
+            str(attestation.get("level", "")).lower() != "confirmed"
+        ):
+            state_value = AttemptState.CANDIDATE
         return cls(
             id=data.get("id", ""),
             hypothesis=data.get("hypothesis", ""),
@@ -100,7 +110,7 @@ class Finding:
             state=state_value,
             attempts=int(data.get("attempts", 0) or 0),
             evidence=list(data.get("evidence") or []),
-            attestation=dict(data.get("attestation") or {}),
+            attestation=attestation,
             provenance=data.get("provenance", "CWE_PATTERN"),
             chain_id=data.get("chain_id", ""),
         )
