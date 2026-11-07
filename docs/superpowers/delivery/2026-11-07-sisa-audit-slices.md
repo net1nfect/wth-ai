@@ -43,7 +43,7 @@ biarkan (perubahan ikut ter-commit) atau keluarkan lewat rebase interaktif.
 Tracker: `audit/2026-11-06` (draft, tanpa commit). Tiap anak menargetkan induk
 langsungnya; slice = rentang commit kontigu.
 
-```
+```text
 tracker audit/2026-11-06
   └─ s1 audit/s1-rpc-timeout           735b776  (rpc timeout; +3116/-? termasuk pohon legacy)
       └─ s2 audit/s2-gateway-sandbox   71a434f  (buffer gateway + sandbox rpc, 182)
@@ -52,7 +52,7 @@ tracker audit/2026-11-06
                   └─ s5 audit/s5-plugins-cron-broker 8f1ac92 (plugins, recall, cron, broker, 309)
                       └─ s6 audit/s6-review-fixes 5ac7525 (temuan review, 266)
                           └─ s7 audit/s7-typing-docs e51de65 (typing + dokumen ini, 175)
-```
+```text
 
 Setiap slice ≤ ~400 baris kecuali s1, yang membawa penghapusan pohon legacy
 bawaan working tree (`size:exception` bila kebijakan repo mengizinkan).
