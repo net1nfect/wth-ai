@@ -1,0 +1,35 @@
+rules:
+  # Starter set. Sengaja kecil dan bisa dibaca: rule yang tidak dipahami tidak
+  # dipakai. Operator boleh mount ruleset opengrep sendiri lewat `rules_dir`.
+  - id: wth.python.sql-string-concat
+    languages: [python]
+    severity: ERROR
+    message: >-
+      Query SQL digabung dengan string; gunakan parameter binding, bukan
+      interpolasi nilai dari input.
+    patterns:
+      - pattern-either:
+          - pattern: 'execute("..." + $X)'
+          - pattern: 'execute("..." % $X)'
+          - pattern: 'execute(f"...{$X}...")'
+
+  - id: wth.python.subprocess-shell-true
+    languages: [python]
+    severity: ERROR
+    message: >-
+      subprocess dipanggil dengan shell=True; pakai argv-list (lihat
+      shell_runner.run_argv).
+    pattern: subprocess.$FUNC(..., shell=True, ...)
+
+  - id: wth.python.hardcoded-credential
+    languages: [python]
+    severity: WARNING
+    message: >-
+      Kredensial tampak di-hardcode. Pindahkan ke variabel lingkungan atau
+      vault; jangan validasi nilainya saat scan.
+    patterns:
+      - pattern-either:
+          - pattern: $KEY = "..."
+      - metavariable-regex:
+          metavariable: $KEY
+          regex: (password|passwd|secret|api_key|apikey|token)
