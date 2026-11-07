@@ -265,9 +265,9 @@ class MCPClientManager:
             merge_manifest(self.config.mcp.servers, manifest))
         self._connections: dict[str, Any] = {}
         self._audit_path = Path(os.environ.get("WTH_HOME", Path.home() / ".wth-ai")) / "logs" / "mcp_audit.jsonl"
-        # P2-3 (audit 2026-11-06): state untuk rate-limit per menit.
-        self._rate_window_start = time.monotonic()
-        self._rate_count = 0
+        # P2-3 (audit 2026-11-06): state untuk rate-limit per menit, per server;
+        # kuota server longgar tidak boleh dipotong oleh server lain.
+        self._rates: dict[str, tuple[float, int]] = {}
 
     def connect_all(self) -> dict[str, bool]:
         status: dict[str, bool] = {}
@@ -316,18 +316,23 @@ class MCPClientManager:
         # mati, sehingga tool berbahaya bisa dipanggil tanpa batas.
         allowed = self.config.mcp.policy.get("allowed_tools", ["*"])
         if "*" not in allowed and tool not in allowed:
+            self._denied(server, tool, "allowed_tools")
             return MCPToolResult(tool=tool, success=False, output="",
                                  error=f"tool '{tool}' tidak diizinkan oleh policy allowed_tools")
-        limit = int(self.config.mcp.policy.get("max_calls_per_minute", 0) or 0)
+        try:
+            limit = int(self.config.mcp.policy.get("max_calls_per_minute", 0) or 0)
+        except (TypeError, ValueError):
+            limit = 0
         if limit > 0:
             now = time.monotonic()
-            if now - self._rate_window_start >= 60.0:
-                self._rate_window_start = now
-                self._rate_count = 0
-            if self._rate_count >= limit:
+            window_start, count = self._rates.get(server, (now, 0))
+            if now - window_start >= 60.0:
+                window_start, count = now, 0
+            if count >= limit:
+                self._denied(server, tool, "max_calls_per_minute")
                 return MCPToolResult(tool=tool, success=False, output="",
                                      error=f"batas rate-limit MCP terlampaui ({limit}/menit)")
-            self._rate_count += 1
+            self._rates[server] = (window_start, count + 1)
         self._audit(server, tool, arguments)
         conn = self._connections.get(server)
         if not conn:
@@ -337,6 +342,24 @@ class MCPClientManager:
 
         result.output = redact_secrets(result.output)
         return result
+
+    def _denied(self, server: str, tool: str, reason: str) -> None:
+        """Catat penolakan policy; allowlist yang diam-diam menolak sulit diaudit."""
+        if not self.config.mcp.policy.get("audit_log", True):
+            return
+        try:
+            self._audit_path.parent.mkdir(parents=True, exist_ok=True)
+            with self._audit_path.open("a", encoding="utf-8") as fh:
+                fh.write(json.dumps({
+                    "event": "mcp_tool_denied",
+                    "server": server,
+                    "tool": tool,
+                    "reason": reason,
+                    "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                }) + "\n")
+        except OSError:
+            # Audit gagal tidak boleh menggagalkan panggilan tool.
+            pass
 
     def _audit(self, server: str, tool: str, arguments: dict[str, Any]) -> None:
         if not self.config.mcp.policy.get("audit_log", True):
@@ -350,6 +373,7 @@ class MCPClientManager:
             with self._audit_path.open("a", encoding="utf-8") as fh:
                 fh.write(json.dumps(entry) + "\n")
         except OSError:
+            # Audit gagal tidak boleh menggagalkan panggilan tool.
             pass
 
     def format_status(self) -> str:

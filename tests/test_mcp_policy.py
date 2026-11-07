@@ -81,3 +81,24 @@ def test_max_calls_zero_means_unlimited(tmp_path, monkeypatch):
     for _ in range(5):
         assert m.call_tool("stub", "a", {}, mode=None).success is True
     assert len(conn.calls) == 5
+
+def test_rate_limit_dihitung_per_server(tmp_path, monkeypatch):
+    """Kuota 1 pada satu server tidak boleh memblokir server lain."""
+    m, conn = _manager(tmp_path, monkeypatch)
+    m.config.mcp.servers["lain"] = {"command": "true", "args": []}
+    m._connections["lain"] = _FakeConn()
+    m.config.mcp.policy["allowed_tools"] = ["*"]
+    m.config.mcp.policy["max_calls_per_minute"] = 1
+    assert m.call_tool("stub", "a", {}, mode=None).success is True
+    blokir = m.call_tool("stub", "b", {}, mode=None)
+    assert blokir.success is False
+    # server lain masih punya kuota sendiri
+    assert m.call_tool("lain", "a", {}, mode=None).success is True
+
+def test_deny_policy_dicatat_di_mcp_audit(tmp_path, monkeypatch):
+    m, _conn = _manager(tmp_path, monkeypatch)
+    m.config.mcp.policy["allowed_tools"] = ["ping"]
+    m.call_tool("stub", "echo", {}, mode=None)
+    log = (tmp_path / "logs" / "mcp_audit.jsonl").read_text()
+    assert "mcp_tool_denied" in log
+    assert "echo" in log
