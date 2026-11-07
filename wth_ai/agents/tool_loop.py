@@ -179,7 +179,7 @@ class AgentToolLoop:
 
     def _dispatch_tool(self, name: str, args: dict[str, Any], *, actor: str, approved: bool) -> str:
         if self.budget is not None:
-            refusal = self.budget.check(name)
+            refusal = self.budget.check(name) or self.budget.observe(name, args)
             if refusal is not None:
                 return refusal
             self.budget.spend(name)
@@ -211,4 +211,7 @@ class AgentToolLoop:
             result = self.bridge.dispatch_tool(name, args, actor=actor, approved=approved)
             return result.summary() + "\n" + (result.stdout[:3000] if result.stdout else result.stderr[:500])
 
-        return f"Unknown tool: {name}"
+        return (
+            f"Tool `{name}` tidak dikenal. Pilih tool yang tersedia atau akhiri "
+            "dengan jawaban akhir."
+        )

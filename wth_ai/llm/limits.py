@@ -11,10 +11,14 @@ Semua batas bernilai `<= 0` berarti mati: perilaku lama harus tetap sama.
 
 from __future__ import annotations
 
+import hashlib
+import json
 from collections import Counter
 from typing import Any
 
 from wth_ai.audit import audit_log
+
+_IDENTICAL_CALL_THRESHOLD = 3
 
 
 class ToolCallBudget:
@@ -31,6 +35,7 @@ class ToolCallBudget:
         self.max_in_response = max_in_response
         self.spent = 0
         self.per_tool: Counter[str] = Counter()
+        self._identical: Counter[str] = Counter()
         self._audited = False
 
     def check(self, tool: str) -> str | None:
@@ -50,6 +55,24 @@ class ToolCallBudget:
     def spend(self, tool: str) -> None:
         self.spent += 1
         self.per_tool[tool] += 1
+
+    def observe(self, tool: str, args: dict[str, Any]) -> str | None:
+        """Deteksi panggilan identik berulang.
+
+        Argumen di-hash dengan urutan kunci distabilkan: model sering mengirim
+        dict yang sama dengan urutan berbeda, dan itu bukan langkah baru.
+        Refusenya recoverable — model melihat penolakan pada turn berikutnya.
+        """
+        key = hashlib.sha256(
+            f"{tool}:{json.dumps(args, sort_keys=True, default=str)}".encode()
+        ).hexdigest()
+        self._identical[key] += 1
+        count = self._identical[key]
+        if count >= _IDENTICAL_CALL_THRESHOLD:
+            return self._refuse(
+                f"panggilan identik `{tool}` ke-{count}; argumen tidak berubah", tool
+            )
+        return None
 
     def _refuse(self, reason: str, tool: str) -> str:
         if not self._audited:
