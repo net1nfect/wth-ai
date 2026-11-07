@@ -9,6 +9,11 @@ Batas review yang dipakai: ~400 baris perubahan per PR.
 Satu PR 16 commit tidak bisa direview fokus. Tiap slice di bawah bisa mendarat
 sendiri, punya test sendiri, dan tidak bergantung pada slice lain.
 
+## Keputusan pemilik (2026-11-07)
+
+- Kontaminasi working tree: **dibiarkan**, hanya didokumentasikan di bawah.
+- Strategi delivery: **feature branch chain** (`chain_strategy=feature-branch-chain`).
+
 ## Slice
 
 | # | Judul | Commit | Baris | Catatan |
@@ -32,6 +37,27 @@ ada sebelumnya ikut masuk ke commit task:
 
 Perubahan itu bukan bagian plan. Sebelum slice 1 dipublikasikan, putuskan:
 biarkan (perubahan ikut ter-commit) atau keluarkan lewat rebase interaktif.
+
+## Chain (cabang lokal, belum di-push)
+
+Tracker: `audit/2026-11-06` (draft, tanpa commit). Tiap anak menargetkan induk
+langsungnya; slice = rentang commit kontigu.
+
+```
+tracker audit/2026-11-06
+  └─ s1 audit/s1-rpc-timeout           735b776  (rpc timeout; +3116/-? termasuk pohon legacy)
+      └─ s2 audit/s2-gateway-sandbox   71a434f  (buffer gateway + sandbox rpc, 182)
+          └─ s3 audit/s3-intel         1913e02  (nuclei, NVD, filter versi, 323)
+              └─ s4 audit/s4-eval-computer-use 08a2ca0 (eval + computer-use, 303)
+                  └─ s5 audit/s5-plugins-cron-broker 8f1ac92 (plugins, recall, cron, broker, 309)
+                      └─ s6 audit/s6-review-fixes 5ac7525 (temuan review, 266)
+                          └─ s7 audit/s7-typing-docs e51de65 (typing + dokumen ini, 175)
+```
+
+Setiap slice ≤ ~400 baris kecuali s1, yang membawa penghapusan pohon legacy
+bawaan working tree (`size:exception` bila kebijakan repo mengizinkan).
+
+Push/PR belum dilakukan: pemilihan strategi tidak memberi izin push.
 
 ## Status verifikasi
 
