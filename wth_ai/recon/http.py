@@ -135,6 +135,23 @@ def host_of(target: str) -> str:
     return (urlparse(t).hostname or "").lower().rstrip(".")
 
 
+def _record_exchange(result: HttpResponse, *, headers: dict[str, str]) -> None:
+    """Catat transaksi ke jurnal proxy; kegagalan tulis tidak boleh memutus recon."""
+    from uuid import uuid4
+
+    from wth_ai.proxy.local import append_exchange
+
+    try:
+        append_exchange(
+            tx_id=f"TX-{uuid4().hex[:10]}",
+            request={"method": "GET", "url": result.url, "headers": headers},
+            response={"status": result.status, "headers": result.headers, "body": result.text},
+        )
+    except OSError:
+        # Disk penuh / read-only: recon tetap jalan, riwayat yang hilang lebih
+        # baik daripada probe gagal karena jurnal.
+        pass
+
 def fetch(
     url: str,
     *,
@@ -226,7 +243,7 @@ def fetch(
             }
             for c in resp.cookies
         ]
-        return HttpResponse(
+        result = HttpResponse(
             url=url,
             status=resp.status_code,
             headers={k: v for k, v in resp.headers.items()},
@@ -234,5 +251,7 @@ def fetch(
             elapsed_ms=elapsed,
             cookies=cookies,
         )
+        _record_exchange(result, headers=req_headers)
+        return result
     except Exception as exc:  # noqa: BLE001 — network failures are expected
         return HttpResponse(url=url, error=str(exc))
