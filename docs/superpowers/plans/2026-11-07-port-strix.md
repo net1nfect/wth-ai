@@ -54,7 +54,7 @@ WTH-AI tidak memakai litellm: jendela konteks diambil dari `wth_ai/llm/model_cat
 
 **Interfaces:** Tidak ada API. Hasil akhir: enam larangan berubah menjadi izin berbatas yang default-nya mati, masing-masing dengan satu paragraf alasan dan satu baris konsekuensi keamanan.
 
-- [ ] **Step 1: Tulis ulang §1** menjadi dua bagian: "Batas keras (tidak pernah)" dan "Izin berbatas (default mati)".
+- [x] **Step 1: Tulis ulang §1** menjadi dua bagian: "Batas keras (tidak pernah)" dan "Izin berbatas (default mati)".
 
   Batas keras yang **tetap**: authorized target only; recon non-destruktif; tanpa brute force/OTP bypass/eksfiltrasi; secret hanya candidate ter-masking; tidak ada eksekusi shell bebas.
   Izin berbatas yang **dibuka** (permintaan pemilik repo, 2026-11-07):
@@ -66,10 +66,10 @@ WTH-AI tidak memakai litellm: jendela konteks diambil dari `wth_ai/llm/model_cat
   5. **Telemetry** — default mati, hanya agregat (jumlah run, durasi, exit code), tidak pernah target/host/temuan/secret.
   6. **Distributed worker** — proses lokal dalam satu mesin, antrean berbasis file dengan lock; tidak ada scheduler remote, tidak ada worker lintas jaringan.
 
-- [ ] **Step 2: Tulis ulang §7** agar mencerminkan keputusan di atas: pindahkan enam item dari "sengaja tidak dibangun" ke "izin berbatas, default mati, belum diimplementasikan".
-- [ ] **Step 3: Perbarui §2 peta modul** — bagian ini sudah usang (hanya menyebut redteam/kb/ot/recon/cli-tui; kenyataannya ~40 paket termasuk `agents/`, `llm/`, `hunt/`, `jobs/`, `gateway/`, `bots/`, `computer_use/`, `memory/`, `eval/`, `research/`, `plugins/`, `cron/`, `graph/`, `policy/`, `rpc/`, `mcp/`, `platform/`, `broker/`, `brain/`, `probe/`, `ctf/`, `intel/`).
-- [ ] **Step 4: `docs/COMPARISON.md`** — tambah baris: cloud/REST, auto-fix PR, MCP auth, ChatGPT-subscription auth, dashboard. Setiap baris menyebut status WTH-AI apa adanya ("tidak ada" / "berbatas, default mati").
-- [ ] **Step 5: Commit**
+- [x] **Step 2: Tulis ulang §7** agar mencerminkan keputusan di atas: pindahkan enam item dari "sengaja tidak dibangun" ke "izin berbatas, default mati, belum diimplementasikan".
+- [x] **Step 3: Perbarui §2 peta modul** — bagian ini sudah usang (hanya menyebut redteam/kb/ot/recon/cli-tui; kenyataannya ~40 paket termasuk `agents/`, `llm/`, `hunt/`, `jobs/`, `gateway/`, `bots/`, `computer_use/`, `memory/`, `eval/`, `research/`, `plugins/`, `cron/`, `graph/`, `policy/`, `rpc/`, `mcp/`, `platform/`, `broker/`, `brain/`, `probe/`, `ctf/`, `intel/`).
+- [x] **Step 4: `docs/COMPARISON.md`** — tambah baris: cloud/REST, auto-fix PR, MCP auth, ChatGPT-subscription auth, dashboard. Setiap baris menyebut status WTH-AI apa adanya ("tidak ada" / "berbatas, default mati").
+- [x] **Step 5: Commit**
 
 ```bash
 git add AGENTS.md docs/COMPARISON.md
@@ -89,11 +89,11 @@ git commit -m "docs: izin berbatas untuk fitur strix + peta modul akurat"
 
 **Interfaces:** `ToolCallBudget(max_total: int = 40, max_per_tool: int = 12, max_in_response: int = 16)` dengan metode `check(tool: str) -> str | None` (mengembalikan pesan penolakan atau `None`) dan `spend(tool: str) -> None`; `filter_response_calls(calls: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], int]` membatasi jumlah tool call dalam satu respons (paritas `TurnToolCallLimiter` Strix: yang pertama dipertahankan, sisanya dibuang dan dihitung). `AgentToolLoop.__init__(..., budget: ToolCallBudget | None = None)`.
 
-- [ ] **Step 1: Test gagal** — `ToolCallBudget(max_total=2)` menolak panggilan ketiga dengan pesan yang menyebut batas; `max_per_tool=1` menolak tool yang sama dua kali; `AgentToolLoop._dispatch_tool` mengembalikan string penolakan (bukan exception) saat anggaran habis.
-- [ ] **Step 2: Jalankan, pastikan gagal** — `.venv/bin/python -m pytest tests/test_llm_tool_limits.py -q` → `ModuleNotFoundError: wth_ai.llm.limits`.
-- [ ] **Step 3: Implementasi** — counter `collections.Counter`, pesan Bahasa Indonesia, `audit_log("tool_budget_exhausted", tool=..., total=...)` sekali per run.
-- [ ] **Step 4: Jalankan, pastikan lulus** — termasuk `pytest tests -q -k tool_loop` untuk memastikan perilaku lama tidak berubah saat `budget=None`.
-- [ ] **Step 5: Commit** — `feat: batas tool-call per run dan per tool`.
+- [x] **Step 1: Test gagal** — `ToolCallBudget(max_total=2)` menolak panggilan ketiga dengan pesan yang menyebut batas; `max_per_tool=1` menolak tool yang sama dua kali; `AgentToolLoop._dispatch_tool` mengembalikan string penolakan (bukan exception) saat anggaran habis.
+- [x] **Step 2: Jalankan, pastikan gagal** — `.venv/bin/python -m pytest tests/test_llm_tool_limits.py -q` → `ModuleNotFoundError: wth_ai.llm.limits`.
+- [x] **Step 3: Implementasi** — counter `collections.Counter`, pesan Bahasa Indonesia, `audit_log("tool_budget_exhausted", tool=..., total=...)` sekali per run.
+- [x] **Step 4: Jalankan, pastikan lulus** — termasuk `pytest tests -q -k tool_loop` untuk memastikan perilaku lama tidak berubah saat `budget=None`.
+- [x] **Step 5: Commit** — `feat: batas tool-call per run dan per tool`.
 
 ### Task 3: Deteksi panggilan duplikat dan tool tak dikenal
 
@@ -103,11 +103,11 @@ git commit -m "docs: izin berbatas untuk fitur strix + peta modul akurat"
 
 **Interfaces:** `ToolCallBudget.observe(tool: str, args: dict[str, Any]) -> str | None` memakai hash `(tool, json.dumps(args, sort_keys=True))`; duplikat ke-3 dalam satu run mengembalikan pesan "panggilan identik ke-N, ubah argumen atau lanjut". `AgentToolLoop` menangani tool yang tidak ada di `ToolRegistry` sebagai pesan recoverable (tidak menghentikan loop).
 
-- [ ] **Step 1: Test gagal** — tiga panggilan identik → penolakan pada yang ketiga; tool tak dikenal → pesan "tool `x` tidak dikenal" dan loop lanjut ke iterasi berikutnya.
-- [ ] **Step 2: Jalankan, pastikan gagal.**
-- [ ] **Step 3: Implementasi.**
-- [ ] **Step 4: Jalankan, pastikan lulus.**
-- [ ] **Step 5: Commit** — `feat: pulihkan tool call duplikat dan tool tak dikenal`.
+- [x] **Step 1: Test gagal** — tiga panggilan identik → penolakan pada yang ketiga; tool tak dikenal → pesan "tool `x` tidak dikenal" dan loop lanjut ke iterasi berikutnya.
+- [x] **Step 2: Jalankan, pastikan gagal.**
+- [x] **Step 3: Implementasi.**
+- [x] **Step 4: Jalankan, pastikan lulus.**
+- [x] **Step 5: Commit** — `feat: pulihkan tool call duplikat dan tool tak dikenal`.
 
 ### Task 4: Compaction konteks yang tidak membuang bukti
 
@@ -118,11 +118,11 @@ git commit -m "docs: izin berbatas untuk fitur strix + peta modul akurat"
 
 **Interfaces:** `compact_messages(messages: list[dict[str, Any]], *, model: str | None = None, keep_last: int = 6) -> tuple[list[dict[str, Any]], int]` mengembalikan pesan baru dan jumlah pesan yang diringkas. Aturan (paritas Strix `compaction.py`): bila `len(messages) < 6` tidak ada compaction; anggaran = `max(4_000, context_length(model) - 4_000)` token, dihitung dari byte UTF-8 sebagai batas atas; hasil tool lama dipotong head+tail ke 2.000 karakter; pesan yang mengandung `[TX:` atau blok `evidence` **tidak pernah** dibuang isinya, hanya dipotong ke 4.000 karakter dengan penanda `…dipotong, bukti utuh di bundel`.
 
-- [ ] **Step 1: Test gagal** — pesan dengan `[TX:abc]` tetap memuat `[TX:abc]` setelah compaction; `len` pesan turun; pesan sistem tidak pernah disentuh; dengan `messages` berisi 5 item tidak ada perubahan; tool output 10.000 karakter dipotong ke 2.000 (head+tail, bukan kepala saja).
-- [ ] **Step 2: Jalankan, pastikan gagal.**
-- [ ] **Step 3: Implementasi** — ringkas hasil tool lama menjadi satu baris `{"role":"tool",...}` dengan nama tool + jumlah byte, jangan pakai LLM untuk meringkas (deterministik dan offline); Strix memakai checkpoint-summary lewat model, kita sengaja tidak.
-- [ ] **Step 4: Jalankan, pastikan lulus** + `pytest tests -q -k "agents or router"`.
-- [ ] **Step 5: Commit** — `feat: compaction konteks yang mempertahankan referensi bukti`.
+- [x] **Step 1: Test gagal** — pesan dengan `[TX:abc]` tetap memuat `[TX:abc]` setelah compaction; `len` pesan turun; pesan sistem tidak pernah disentuh; dengan `messages` berisi 5 item tidak ada perubahan; tool output 10.000 karakter dipotong ke 2.000 (head+tail, bukan kepala saja).
+- [x] **Step 2: Jalankan, pastikan gagal.**
+- [x] **Step 3: Implementasi** — ringkas hasil tool lama menjadi satu baris `{"role":"tool",...}` dengan nama tool + jumlah byte, jangan pakai LLM untuk meringkas (deterministik dan offline); Strix memakai checkpoint-summary lewat model, kita sengaja tidak.
+- [x] **Step 4: Jalankan, pastikan lulus** + `pytest tests -q -k "agents or router"`.
+- [x] **Step 5: Commit** — `feat: compaction konteks yang mempertahankan referensi bukti`.
 
 ---
 
@@ -136,11 +136,11 @@ git commit -m "docs: izin berbatas untuk fitur strix + peta modul akurat"
 
 **Interfaces:** `SourceTarget(path: Path, name: str)`; scope card menerima `kind="source"` dengan `path` absolut yang harus berada di bawah root repo operator; `scan --source DIR` berjalan hanya bila scope card memuat `kind=source` dan `authorized=true`.
 
-- [ ] **Step 1: Test gagal** — `scope --source DIR` tanpa `--authorized` → exit 2 dengan pesan scope; path di luar `$HOME` → ditolak; scope card memuat `kind: source` dan hash isi direktori (sha256 daftar file relatif).
-- [ ] **Step 2: Jalankan, pastikan gagal.**
-- [ ] **Step 3: Implementasi** — tanpa jaringan; `_user_path()` untuk path operator.
-- [ ] **Step 4: Jalankan, pastikan lulus.**
-- [ ] **Step 5: Commit** — `feat: target source dengan scope card berjenis source`.
+- [x] **Step 1: Test gagal** — `scope --source DIR` tanpa `--authorized` → exit 2 dengan pesan scope; path di luar `$HOME` → ditolak; scope card memuat `kind: source` dan hash isi direktori (sha256 daftar file relatif).
+- [x] **Step 2: Jalankan, pastikan gagal.**
+- [x] **Step 3: Implementasi** — tanpa jaringan; `_user_path()` untuk path operator.
+- [x] **Step 4: Jalankan, pastikan lulus.**
+- [x] **Step 5: Commit** — `feat: target source dengan scope card berjenis source`.
 
 ### Task 6: Runner opengrep di dalam sandbox
 
@@ -151,11 +151,11 @@ git commit -m "docs: izin berbatas untuk fitur strix + peta modul akurat"
 
 **Interfaces:** `run_opengrep(target: Path, *, rules_dir: Path, timeout_s: int = 300) -> list[dict[str, Any]]` memanggil `SandboxSpec(image="opengrep/opengrep:latest", extra_mounts=(f"{target}:/src:ro", f"{rules_dir}:/rules:ro"), network="none")` dan mem-parse output JSON opengrep. Docker/jaringan tidak tersedia → `SastUnavailable("opengrep tidak tersedia (docker)")`, bukan traceback.
 
-- [ ] **Step 1: Test gagal** — fake `docker` mengembalikan JSON opengrep → daftar temuan dengan `rule_id`, `path`, `line`, `severity`; `network="none"` ada di argv; tanpa docker → `SastUnavailable`.
-- [ ] **Step 2: Jalankan, pastikan gagal.**
-- [ ] **Step 3: Implementasi** — `shell=False`, timeout, argv-list; tolak path target di luar scope card.
-- [ ] **Step 4: Jalankan, pastikan lulus.**
-- [ ] **Step 5: Commit** — `feat: runner opengrep dalam sandbox tanpa jaringan`.
+- [x] **Step 1: Test gagal** — fake `docker` mengembalikan JSON opengrep → daftar temuan dengan `rule_id`, `path`, `line`, `severity`; `network="none"` ada di argv; tanpa docker → `SastUnavailable`.
+- [x] **Step 2: Jalankan, pastikan gagal.**
+- [x] **Step 3: Implementasi** — `shell=False`, timeout, argv-list; tolak path target di luar scope card.
+- [x] **Step 4: Jalankan, pastikan lulus.**
+- [x] **Step 5: Commit** — `feat: runner opengrep dalam sandbox tanpa jaringan`.
 
 ### Task 7: Normalisasi temuan statis ke model temuan
 
@@ -165,13 +165,20 @@ git commit -m "docs: izin berbatas untuk fitur strix + peta modul akurat"
 
 **Interfaces:** `to_finding(raw: dict[str, Any], *, target: SourceTarget) -> Finding` dengan `status="candidate"`, `evidence={"kind":"static","rule":...,"snippet":...}`, `origin="static"`. `veracity.assess_claim` menolak menaikkan temuan `origin="static"` ke `CONFIRMED` (test regresi).
 
-- [ ] **Step 1: Test gagal** — temuan statis selalu `candidate`; `apply_verification` dengan `verdict="confirmed"` pada temuan statis tetap `candidate` dan menulis alasan `static-no-runtime-evidence`.
-- [ ] **Step 2: Jalankan, pastikan gagal.**
-- [ ] **Step 3: Implementasi** — jangan ubah jalur dinamis; tambah cabang eksplisit.
-- [ ] **Step 4: Jalankan, pastikan lulus** + `pytest tests -q -k veracity`.
-- [ ] **Step 5: Commit** — `feat: temuan statis masuk sebagai candidate dengan bukti snippet`.
+- [x] **Step 1: Test gagal** — temuan statis selalu `candidate`; `apply_verification` dengan `verdict="confirmed"` pada temuan statis tetap `candidate` dan menulis alasan `static-no-runtime-evidence`.
+- [x] **Step 2: Jalankan, pastikan gagal.**
+- [x] **Step 3: Implementasi** — jangan ubah jalur dinamis; tambah cabang eksplisit.
+- [x] **Step 4: Jalankan, pastikan lulus** + `pytest tests -q -k veracity`.
+- [x] **Step 5: Commit** — `feat: temuan statis masuk sebagai candidate dengan bukti snippet`.
 
 ---
+
+> Status 2026-11-08: Task 1–9 selesai dan ter-commit (aecdf48 … febc8e4).
+> Branch `big-dix` sudah 45 commit / ~24k baris di depan `origin/main` sebelum
+> Task 10 dimulai — jauh melewati satu slice review 400 baris. Aturan untuk
+> sisa fase: satu task = satu commit bertema, dan pengiriman dipecah per fase
+> (Phase 3 sisa, Phase 4, Phase 5, Phase 6) sebagai PR terpisah, bukan satu PR
+> raksasa. Task 10 (proxy terstruktur) memulai slice baru.
 
 ## Phase 3 — MCP parity dan proxy terstruktur
 
@@ -183,11 +190,11 @@ git commit -m "docs: izin berbatas untuk fitur strix + peta modul akurat"
 
 **Interfaces:** `_HttpMCPConnection(name, spec)` dengan `start()`, `stop()`, `_rpc(method, params, timeout)`, `call_tool(tool, args) -> MCPToolResult`; header `Authorization: Bearer <vault-ref>` di-resolve `_resolve_headers` yang sudah ada. Setiap request melewati `EgressGuard.check(host)`.
 
-- [ ] **Step 1: Test gagal** — manifest `{"transport":"http","url":"http://127.0.0.1:PORT/mcp", "headers":{"Authorization":"vault:x"}}` → `list_tools` mengembalikan tool; host di luar allowlist → `EgressDenied`.
-- [ ] **Step 2: Jalankan, pastikan gagal.**
-- [ ] **Step 3: Implementasi** — JSON-RPC over HTTP, timeout per request, `Accept: application/json, text/event-stream`.
-- [ ] **Step 4: Jalankan, pastikan lulus.**
-- [ ] **Step 5: Commit** — `feat: transport MCP http dengan bearer dari vault`.
+- [x] **Step 1: Test gagal** — manifest `{"transport":"http","url":"http://127.0.0.1:PORT/mcp", "headers":{"Authorization":"vault:x"}}` → `list_tools` mengembalikan tool; host di luar allowlist → `EgressDenied`.
+- [x] **Step 2: Jalankan, pastikan gagal.**
+- [x] **Step 3: Implementasi** — JSON-RPC over HTTP, timeout per request, `Accept: application/json, text/event-stream`.
+- [x] **Step 4: Jalankan, pastikan lulus.**
+- [x] **Step 5: Commit** — `feat: transport MCP http dengan bearer dari vault`.
 
 ### Task 9: Namespacing, allowlist, dan anggaran panggilan per server
 
@@ -197,11 +204,11 @@ git commit -m "docs: izin berbatas untuk fitur strix + peta modul akurat"
 
 **Interfaces:** `MCPClientManager.call_tool(server, tool, arguments, ...)` menolak tool di luar `allowed_tools` dengan `{"status":"blocked"}`; tool diekspos ke LLM sebagai `f"{server}_{tool}"` dan dipetakan balik; `max_calls_per_minute > 0` ditegakkan dengan sliding window per server.
 
-- [ ] **Step 1: Test gagal** — tool tidak diizinkan → blocked + audit `mcp_tool_denied`; kuota 2 → panggilan ketiga dalam 60 detik blocked; pemetaan nama bolak-balik benar.
-- [ ] **Step 2: Jalankan, pastikan gagal.**
-- [ ] **Step 3: Implementasi** — jangan longgarkan default `allowed_tools: ["*"]` menjadi tanpa pengecekan; tetap hormati nilai config.
-- [ ] **Step 4: Jalankan, pastikan lulus** + `pytest tests -q -k mcp`.
-- [ ] **Step 5: Commit** — `feat: policy MCP namespacing + kuota per server`.
+- [x] **Step 1: Test gagal** — tool tidak diizinkan → blocked + audit `mcp_tool_denied`; kuota 2 → panggilan ketiga dalam 60 detik blocked; pemetaan nama bolak-balik benar.
+- [x] **Step 2: Jalankan, pastikan gagal.**
+- [x] **Step 3: Implementasi** — jangan longgarkan default `allowed_tools: ["*"]` menjadi tanpa pengecekan; tetap hormati nilai config.
+- [x] **Step 4: Jalankan, pastikan lulus** + `pytest tests -q -k mcp`.
+- [x] **Step 5: Commit** — `feat: policy MCP namespacing + kuota per server`.
 
 ### Task 10: Proxy terstruktur (adapter lokal, Caido opsional)
 
