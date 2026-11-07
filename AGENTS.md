@@ -11,7 +11,7 @@ Untuk Claude Code, lihat `CLAUDE.md` (pointer ke file ini).
 > arsipnya ada di riwayat git, rencana aktif ada di `.hermes/plans/`.
 >
 > **File ini bukan tempat instruksi sesi.** `prompts/agent/AGENT.md` (profil
-> `wth`, dipakai lewat `wth --bypass` atau `/bypass on`) memuat instruksi
+> `wth-ai`, dipakai lewat `wth-ai --bypass` atau `/bypass on`) memuat instruksi
 > tambahan untuk model. Yang di sini adalah konvensi kerja repo, dan sengaja
 > dibaca setiap sesi — jangan campurkan keduanya.
 
@@ -23,23 +23,58 @@ WTH-AI adalah CLI red team berbahasa Python untuk **authorized security testing*
 lab milik sendiri, CTF, target dengan izin tertulis, engagement red team dengan
 Rules of Engagement.
 
-Batas keras yang tidak boleh dilonggarkan oleh kode baru:
+### 1.1 Batas keras (tidak pernah dilonggarkan)
 
 - Authorized target only. Tanpa `scope_card.json` yang valid (`authorized=true`,
-  minimal satu CIDR/domain) tidak ada aksi.
+  minimal satu CIDR/domain, atau `kind=source` dengan path) tidak ada aksi.
 - Recon non-destruktif: hanya GET/HEAD; Modbus hanya FC 1–4.
 - Tidak ada brute force login, bypass OTP/captcha, atau eksfiltrasi data.
 - Secret yang ditemukan hanya dicatat sebagai **candidate** yang dimasking;
   jangan divalidasi, jangan dipakai.
-- Tidak ada dashboard/server, updater, license server, atau cloud agent.
-- Tidak ada auto-fix PR.
+- Tidak ada eksekusi shell bebas (`shell=True`), tidak ada descriptor container
+  yang menambah kapabilitas di luar `containment.SandboxSpec`.
+- Setiap temuan tanpa request/response tertangkap tetap `candidate`. Fitur baru
+  tidak boleh menulis status temuan di luar `verify_gate.apply_verification`.
+
+### 1.2 Izin berbatas (dibuka 2026-11-07, default mati)
+
+Enam hal berikut dulu dilarang mutlak. Pemilik repo membukanya untuk mengejar
+paritas Strix. Yang dibuka adalah **izin berbatas**, bukan penghapusan kontrol:
+masing-masing punya flag, default `false`, dan konsekuensi yang harus diterima.
+
+1. **Dashboard lokal** (`wth-ai view`). Hanya bind `127.0.0.1`, hanya membaca
+   bundel yang sudah ditulis, token acak per proses, tanpa rute mutasi, mati
+   kecuali flag eksplisit. Tidak ada multi-user, TLS, atau bind `0.0.0.0`.
+   Konsekuensi: menambah permukaan HTTP di mesin operator; jangan pernah
+   dijalankan di host yang tidak dipercaya.
+2. **Auto-fix PR.** Hanya mode `full_lab` + `--destructive`, hanya repo target
+   yang tercantum di scope card, patch di worktree terpisah, wajib retest, dan
+   **tidak pernah** `git push` otomatis. Konsekuensi: kode target bisa berubah;
+   operator bertanggung jawab atas review patch.
+3. **Cloud sync.** Opt-in dengan URL eksplisit yang harus lolos `EgressGuard`;
+   tidak ada endpoint default; unggahan artefak target butuh flag terpisah.
+   Konsekuensi: data engagement bisa keluar mesin — hanya untuk engagement yang
+   RoE-nya mengizinkan.
+4. **Updater.** Verifikasi tanda tangan + allowlist host sebelum memasang;
+   verifikasi gagal berarti tolak, bukan fallback diam-diam. Konsekuensi:
+   menambah jalur unduh eksternal; kunci publik harus dipin di repo.
+5. **Telemetry.** Default mati; hanya agregat (`runs`, durasi, exit code,
+   versi). Tidak pernah host, target, temuan, atau secret. Konsekuensi: tetap
+   ada egress ke endpoint telemetry bila dinyalakan.
+6. **Worker lokal.** Beberapa proses di satu mesin dengan antrean berbasis file
+   dan `fcntl.flock`; tidak ada scheduler remote atau worker lintas jaringan.
+   Konsekuensi: paralelisme terbatas pada satu host.
+
+Aturan yang mengikat keenam izin ini: mati secara default, tercatat di
+`audit.log` saat dipakai, dan tidak boleh menambah jalan pintas untuk status
+temuan, scope, atau egress allowlist.
 
 ---
 
 ## 2. Peta modul (yang dipakai sekarang)
 
 ```
-wth-main.py                 entry point CLI (Click); semua perintah di sini
+wth-ai-main.py              entry point CLI (Click); semua perintah di sini
 wth_ai/
   modes.py                  7 mode agen; `auto` = superset, lainnya pecahan
   scope_manager.py          CIDR/host matcher (dipakai scope + egress)
@@ -67,27 +102,55 @@ wth_ai/
   cli/tui/redteam/          TUI mode agen (app, banner, theme, skills/mcp view)
   skills/                   registry.py, select.py (auto-pilih <=5)
   tools/doctor.py           health check (termasuk lapisan red team)
-core/, reporting/ (root), executor/, agents/   legacy — jangan digabung ke wth_ai/
 ```
+
+Daftar di atas adalah peta **inti**, bukan daftar lengkap. Paket lain yang juga
+jalur produksi (per 2026-11-07): `agents/` (planner, supervisor, subagent,
+tool_loop), `llm/` (router, model_catalog, budget), `hunt/`, `jobs/`,
+`gateway/` (daemon, background, rpc), `bots/`, `computer_use/`, `memory/`,
+`eval/`, `research/`, `plugins/`, `cron/`, `graph/`, `policy/`, `rpc/`,
+`mcp/`, `platform/`, `broker/`, `brain/`, `probe/`, `ctf/`, `intel/`,
+`evidence/`, `terminal/`, `orchestrator.py`.
+
+Kalau menambah paket baru, tambahkan satu baris di sini dengan alasan satu
+kalimat — peta yang basi lebih berbahaya daripada tidak ada peta.
+
+Pohon legacy di root (`core/`, `agents/`, `exploitation/`, `reconnaissance/`,
+`learning/`, `integration/`, `reporting/`, `utils/`, `main.py`) sudah dihapus
+(P3-4). `wth_ai/agents/*` dan `wth_ai/executor/vuln/*` adalah jalur produksi,
+bukan turunannya.
 
 ---
 
 ## 3. Invarian yang tidak boleh rusak
 
-1. **Scope ditegakkan mesin.** `ScopeManager` + `EgressGuard`. Tidak ada flag
-   untuk mematikannya; mode tidak memperluas scope.
-2. **Kill switch ≤2 detik.** `wth kill` / `ctrl+k` menulis flag dan mengirim
-   SIGTERM lalu SIGKILL ke process group.
-3. **CONFIRMED hanya lewat `veracity`.** Butuh request/response tertangkap,
-   minimal satu reproduksi, dan kontrol negatif yang berperilaku berbeda.
-   Tanpa itu status maksimal `candidate`.
-4. **Bundel bukti bisa diverifikasi ulang.** `wth verify` menghitung sha256 dari
-   isi; mengubah satu byte harus membuat verifikasi gagal.
+1. **Scope ditegakkan mesin.** `ScopeManager` (`wth_ai/scope_manager.py:20`) +
+   `EgressGuard` (`wth_ai/netguard.py:22`; dipasang di `wth_ai/recon/engine.py:99`
+   dan `wth_ai/terminal/bridge.py:250`). Tidak ada flag untuk mematikannya; mode
+   tidak memperluas scope.
+2. **Kill switch ≤2 detik.** `KillSwitch.activate` (`wth_ai/killswitch.py:76`)
+   menulis flag lalu SIGTERM ke process group, SIGKILL setelahnya.
+3. **CONFIRMED hanya lewat `veracity`.** `veracity.assess_claim`
+   (`wth_ai/veracity.py:75`) memutuskan; satu-satunya penulis status adalah
+   `verify_gate.apply_verification` (`wth_ai/verify_gate.py:82`), yang dipakai
+   `orchestrator._verify`, `supervisor_dispatch.verify_finding`, dan
+   `loop/engagement_loop`. Butuh request/response tertangkap, minimal satu
+   reproduksi, dan kontrol negatif yang berperilaku berbeda. Tanpa itu status
+   maksimal `candidate`.
+4. **Bundel bukti bisa diverifikasi ulang.** `bundle.verify_bundle`
+   (`wth_ai/redteam/bundle.py:86`) menghitung sha256 dari isi; mengubah satu
+   byte harus membuat verifikasi gagal.
 5. **Semua koneksi keluar lewat allowlist** dan tercatat (`audit.log`,
-   `EGRESS_DENIED`). Proxy (`WTH_PROXY`) tidak memperluas scope.
-6. **Tidak ada eksekusi shell.** `shell_runner`/argv-list saja; jangan pernah
+   `EGRESS_DENIED`). Ditegakkan `EgressGuard.check` (`wth_ai/netguard.py`);
+   proxy (`WTH_PROXY`) tidak memperluas scope.
+6. **Tidak ada eksekusi shell.** `shell_runner.run_argv`
+   (`wth_ai/shell_runner.py:37`) hanya menerima argv-list; jangan pernah
    `shell=True`.
 7. **Secret tidak pernah plaintext** di log, laporan, hasil, atau fixture.
+   Satu redaktor: `redaction.redact_secrets` / `redact_data`
+   (`wth_ai/redaction.py:102,129`), dipanggil di chokepoint
+   `redteam/artifacts_write.write_findings`, `redteam/bundle.write_bundle`, dan
+   `evidence/vault.py`.
 
 ---
 
@@ -97,21 +160,21 @@ core/, reporting/ (root), executor/, agents/   legacy — jangan digabung ke wth
 source .venv/bin/activate              # atau venv lain
 pytest tests -q -p no:cacheprovider --timeout=120
 
-wth scope --target H --cidr C --authorized [--spec openapi.json]
-wth scan --offline-demo --out out       # deterministik, tanpa jaringan
-wth scan -n --fail-on high --out out    # CI: exit 0/1/2
-wth scan --scope-mode diff --diff-base origin/main
-wth verify out/bundle
-wth report --bundle out/bundle --format html|sarif|json|id|pdf
-wth disclosure F-001 --bundle out/bundle
-wth kb build --source DIR ; wth kb status ; wth kb search Q
-wth ot plan --host H --block holding:0:10
-wth ot read --host H --cidr C --confirm
-wth visual cluster shots/ --out out/clusters.json
-wth browser capture URL --out shots/
-wth sandbox plan ... ; wth sandbox run --yes -- CMD
-wth interactive --redteam --mode plan
-wth kill
+wth-ai scope --target H --cidr C --authorized [--spec openapi.json]
+wth-ai scan --offline-demo --out out       # deterministik, tanpa jaringan
+wth-ai scan -n --fail-on high --out out    # CI: exit 0/1/2
+wth-ai scan --scope-mode diff --diff-base origin/main
+wth-ai verify out/bundle
+wth-ai report --bundle out/bundle --format html|sarif|json|id|pdf
+wth-ai disclosure F-001 --bundle out/bundle
+wth-ai kb build --source DIR ; wth-ai kb status ; wth-ai kb search Q
+wth-ai ot plan --host H --block holding:0:10
+wth-ai ot read --host H --cidr C --confirm
+wth-ai visual cluster shots/ --out out/clusters.json
+wth-ai browser capture URL --out shots/
+wth-ai sandbox plan ... ; wth-ai sandbox run --yes -- CMD
+wth-ai interactive --redteam --mode plan
+wth-ai kill
 ```
 
 Artefak scan: `out/{run.json,findings.sarif,vulnerabilities/,report.*,bundle/}`.
@@ -177,9 +240,14 @@ veracity, SARIF/HTML/ID/PDF, diff-scope, spec OpenAPI/Postman, KB CVE dengan
 validator sitasi, novel-finding labels + prior-art, disclosure pack, Modbus
 read-only (TCP), Playwright adapter, proxy, sandbox plan/run, visual clustering.
 
-Sengaja **tidak** dibangun: dashboard/web server, auto-fix PR, cloud platform,
-distributed worker, updater/license. Modbus RTU/serial belum ada. Token-level
-agent resume belum ada (pakai `wth resume` / `wth job retry`).
+Sengaja **tidak** dibangun (masih): Modbus RTU/serial, token-level agent
+resume. Token-level resume diganti `wth-ai resume` / `wth-ai job retry`.
+
+Dibuka sebagai izin berbatas (§1.2) dan **belum diimplementasikan** per
+2026-11-07: dashboard lokal read-only, auto-fix PR, cloud sync, updater,
+telemetry, worker lokal. Rencana port ada di
+`docs/superpowers/plans/2026-11-07-port-strix.md`. Jangan anggap izin sebagai
+fitur yang sudah ada.
 
 Rencana kerja & status per item: `.hermes/plans/` (bukan bagian produk).
 
@@ -196,7 +264,7 @@ Rencana kerja & status per item: `.hermes/plans/` (bukan bagian produk).
 | `docs/MODES.md` | matriks mode × kapabilitas (di-generate dari kode) |
 | `docs/COMPARISON.md` | perbandingan jujur dengan Strix (hanya yang punya bukti) |
 | `docs/AIRGAP.md` | pemasangan tertutup, LLM lokal, KB offline |
-| `prompts/agent/AGENT.md` | profil bypass bawaan (`wth --bypass`), bukan konvensi repo |
+| `prompts/agent/AGENT.md` | profil bypass bawaan (`wth-ai --bypass`), bukan konvensi repo |
 | `docs/archive/` | arsip perencanaan lama (bukan rujukan kerja) |
 
 ---
@@ -207,7 +275,7 @@ Instruksi sesi untuk model tinggal di `prompts/agent/AGENT.md` dan/atau
 `$WTH_HOME/bypass/<nama>.md` (override direktori: `WTH_BYPASS_DIR`). Semantik
 yang harus dipertahankan:
 
-- **Mati secara default.** `wth --bypass` (tanpa nilai) memakai profil `wth`;
+- **Mati secara default.** `wth-ai --bypass` (tanpa nilai) memakai profil `wth-ai`;
   `--bypass <nama>` memakai profil bernama; tanpa flag tidak ada blok apa pun.
 - **Label di meta.** Balasan chat/supervisor menambahkan `· bypass: <profil>`.
   Jangan hapus: transkrip harus jujur soal konteks sesi.
