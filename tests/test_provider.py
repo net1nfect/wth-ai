@@ -250,6 +250,10 @@ def test_smoke_test_success_mock():
         config = WTHConfig.load()
         router = LLMProviderRouter(config)
         router._providers["openrouter"] = FakeProvider(ok=True)
+        # Langkah role_models_valid menilai tiap role; arahkan semuanya ke provider
+        # palsu supaya test tidak pernah membuat provider nyata dan menunggu jaringan.
+        for role in ROLE_NAMES:
+            config.providers[role] = ProviderRoleConfig(type="openrouter", model="fake/model-a")
         report = run_smoke_test(config, "openrouter", model="fake/model-a", router=router)
         assert report["ok"] is True
         names = {s["name"]: s["ok"] for s in report["steps"]}
@@ -262,6 +266,10 @@ def test_smoke_test_failure_mock():
         config = WTHConfig.load()
         router = LLMProviderRouter(config)
         router._providers["openrouter"] = FakeProvider(ok=False)
+        # Langkah role_models_valid menilai tiap role; arahkan semuanya ke provider
+        # palsu supaya test tidak pernah membuat provider nyata dan menunggu jaringan.
+        for role in ROLE_NAMES:
+            config.providers[role] = ProviderRoleConfig(type="openrouter", model="fake/model-a")
         report = run_smoke_test(config, "openrouter", model="fake/model-a", router=router)
         assert report["ok"] is False
         names = {s["name"]: s["ok"] for s in report["steps"]}
