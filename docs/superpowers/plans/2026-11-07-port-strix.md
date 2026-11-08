@@ -286,16 +286,17 @@ benar-benar dinilai tetapi tidak pernah membuat provider nyata. Bukti: prefix
 ### Task 12: Panel agen di TUI (read-only)
 
 **Files:**
-- Modify: `wth_ai/cli/tui/app.py`, `wth_ai/cli/tui/theme.py`
+- Modify: `wth_ai/cli/tui/redteam/app.py` (perintah `/agents`; `wth_ai/cli/tui/theme.py` tidak ada — tema hidup di `wth_ai/cli/ui/theme.py` dan panel ini tidak butuh warna baru)
+- Create: `wth_ai/cli/tui/redteam/agent_view.py`
 - Test: `tests/test_tui_agent_panel.py`
 
 **Interfaces:** Panel membaca `AgentGraph.tree()` dan menampilkan `node_id | agent | status | durasi`; tidak ada tombol yang memutasi graf.
 
-- [ ] **Step 1: Test gagal** — renderer menerima tree fixture dan menghasilkan teks berisi 3 node.
-- [ ] **Step 2: Jalankan, pastikan gagal.**
-- [ ] **Step 3: Implementasi** — tanpa Rich Table baru bila sudah ada pola.
-- [ ] **Step 4: Jalankan, pastikan lulus.**
-- [ ] **Step 5: Commit** — `feat: panel agen read-only di TUI`.
+- [x] **Step 1: Test gagal** — renderer menerima tree fixture dan menghasilkan teks berisi 3 node.
+- [x] **Step 2: Jalankan, pastikan gagal** (collection error: modul belum ada).
+- [x] **Step 3: Implementasi** — fungsi teks biasa (`agent_panel`, `agent_summary`) mengikuti pola `skills_view`/`mcp_view`, tanpa Rich Table baru.
+- [x] **Step 4: Jalankan, pastikan lulus** — 6 test panel + 33 test TUI lama hijau.
+- [x] **Step 5: Commit** — `feat: panel agen read-only di TUI`.
 
 ---
 

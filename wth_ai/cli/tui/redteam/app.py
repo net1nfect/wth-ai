@@ -23,11 +23,12 @@ from textual.widgets import DataTable, Input, RichLog, Static
 
 from wth_ai import __version__
 from wth_ai.cli.tui.redteam import banner as banner_mod
+from wth_ai.cli.tui.redteam.agent_view import agent_summary
 from wth_ai.cli.tui.redteam.mcp_view import mcp_summary
 from wth_ai.cli.tui.redteam.skills_view import skill_fragment, skill_summary
 from wth_ai.cli.tui.redteam.theme_css import redteam_css
-from wth_ai.modes import (BY_KEY, Cap, capability_header, check, matrix_rows,
-                          next_mode)
+from wth_ai.cli.ui.theme import THEME
+from wth_ai.modes import BY_KEY, Cap, capability_header, check, matrix_rows, next_mode
 
 DEMO_STEPS: tuple[tuple[int, str], ...] = (
     (0, "[b]scope[/b] 172.28.0.0/16 · red_team · authorized=yes"),
@@ -115,7 +116,7 @@ class WthApp(App[None]):
 
     def _refresh_hdr(self) -> None:
         mode = self.mode
-        live = "[#f87171]● live[/#f87171]" if self.running else "[dim]○ idle[/dim]"
+        live = f"[{THEME['error']}]● live[/{THEME['error']}]" if self.running else "[dim]○ idle[/dim]"
         target = self.target or "[dim]belum diset[/dim]"
         cidr = self.cidr or "[dim]—[/dim]"
         self.query_one("#rt-hdr", Static).update(
@@ -128,9 +129,9 @@ class WthApp(App[None]):
 
     def _refresh_hints(self) -> None:
         mode = self.mode
-        confirm = "konfirmasi" if mode.asks else "[#f87171]TANPA konfirmasi[/#f87171]"
+        confirm = "konfirmasi" if mode.asks else f"[{THEME['error']}]TANPA konfirmasi[/{THEME['error']}]"
         self.query_one("#rt-hints", Static).update(
-            f"[dim]tab[/dim] mode · [#f87171]ctrl+k[/#f87171] kill · "
+            f"[dim]tab[/dim] mode · [{THEME['error']}]ctrl+k[/{THEME['error']}] kill · "
             f"[dim]ctrl+s[/dim] skills · [dim]ctrl+t[/dim] mcp · "
             f"[dim]f1[/dim] help · [dim]ctrl+q[/dim] keluar      "
             f"[dim]mode ini:[/dim] {confirm} · {mode.blurb}"
@@ -152,7 +153,7 @@ class WthApp(App[None]):
 
     def _set_mode(self, key: str) -> None:
         if key not in BY_KEY:
-            self._log(f"[#f87171]mode tidak dikenal: {key}[/#f87171]")
+            self._log(f"[{THEME['error']}]mode tidak dikenal: {key}[/{THEME['error']}]")
             return
         self.mode_key = key
         mode = BY_KEY[key]
@@ -180,18 +181,24 @@ class WthApp(App[None]):
         self.running = False
         if self._demo_task and not self._demo_task.done():
             self._demo_task.cancel()
-        self._log("[bold #f87171]KILL[/bold #f87171] semua worker berhenti (≤2 s) · "
+        self._log(f"[bold {THEME['error']}]KILL[/bold {THEME['error']}] semua worker berhenti (≤2 s) · "
                   "flag ditulis ke $WTH_HOME/runtime/KILL")
         self._refresh_hdr()
 
     def action_skills(self) -> None:
         self._log(skill_summary())
 
+    def action_agents(self) -> None:
+        try:
+            self._log(agent_summary())
+        except Exception as exc:  # noqa: BLE001 - panel must never crash the UI
+            self._log(f"[{THEME['warn']}]agen[/{THEME['warn']}] tidak bisa dibaca: {exc}")
+
     def action_mcp(self) -> None:
         try:
             self._log(mcp_summary())
         except Exception as exc:  # noqa: BLE001 - status must never crash the UI
-            self._log(f"[#fbbf24]mcp[/#fbbf24] tidak bisa dibaca: {exc}")
+            self._log(f"[{THEME['warn']}]mcp[/{THEME['warn']}] tidak bisa dibaca: {exc}")
 
     def action_help(self) -> None:
         self._log(
@@ -203,6 +210,7 @@ class WthApp(App[None]):
             "  /egress-test        uji pagar keluar (harus DENIED)\n"
             "  /skill list | use <nama> | reload\n"
             "  /mcp                status server MCP\n"
+            "  /agents             graf agen (read-only)\n"
             "  /demo on|off | /kill | /clear | /banner | /quit"
         )
 
@@ -255,10 +263,12 @@ class WthApp(App[None]):
             self._log(skill_summary())
         elif cmd == "mcp":
             self.action_mcp()
+        elif cmd == "agents":
+            self.action_agents()
         elif cmd == "demo":
             self._do_demo(args)
         else:
-            self._log(f"[#f87171]perintah tidak dikenal: /{cmd}[/#f87171]")
+            self._log(f"[{THEME['error']}]perintah tidak dikenal: /{cmd}[/{THEME['error']}]")
 
     def _show_matrix(self) -> None:
         header = capability_header()
@@ -273,7 +283,7 @@ class WthApp(App[None]):
     # --- command handlers ------------------------------------------
     def _do_scope(self, args: list[str]) -> None:
         if not args:
-            self._log("[#fbbf24]pakai: /scope 172.28.0.10 --cidr 172.28.0.0/16[/#fbbf24]")
+            self._log(f"[{THEME['warn']}]pakai: /scope 172.28.0.10 --cidr 172.28.0.0/16[/{THEME['warn']}]")
             return
         target = args[0]
         cidr = ""
@@ -282,7 +292,7 @@ class WthApp(App[None]):
             if index + 1 < len(args):
                 cidr = args[index + 1]
         if not cidr:
-            self._log("[#f87171]ditolak:[/#f87171] scope tanpa CIDR tidak boleh — "
+            self._log(f"[{THEME['error']}]ditolak:[/{THEME['error']}] scope tanpa CIDR tidak boleh — "
                       "pagar egress butuh allowlist")
             return
         from wth_ai.scope_card import ScopeCard, ScopeCardError
@@ -293,34 +303,34 @@ class WthApp(App[None]):
         try:
             path = card.write(wth_home() / "scope_card.json")
         except ScopeCardError as exc:
-            self._log(f"[#f87171]ditolak:[/#f87171] {exc}")
+            self._log(f"[{THEME['error']}]ditolak:[/{THEME['error']}] {exc}")
             return
         self.target, self.cidr = target, cidr
         self._refresh_hdr()
-        self._log(f"[#4ade80]scope diset[/#4ade80] target={target} cidr={cidr} "
+        self._log(f"[{THEME['accent']}]scope diset[/{THEME['accent']}] target={target} cidr={cidr} "
                   f"authorized=yes · ditulis ke {path}")
 
     def _do_run(self, cap_name: str) -> None:
         try:
             cap = Cap(cap_name)
         except ValueError:
-            self._log(f"[#f87171]kapabilitas tidak dikenal: {cap_name}[/#f87171]")
+            self._log(f"[{THEME['error']}]kapabilitas tidak dikenal: {cap_name}[/{THEME['error']}]")
             return
         mode = self.mode
         if not check(mode, cap):
-            self._log(f"[#f87171]DITOLAK[/#f87171] mode '{mode.label}' tidak punya "
+            self._log(f"[{THEME['error']}]DITOLAK[/{THEME['error']}] mode '{mode.label}' tidak punya "
                       f"kapabilitas '{cap.value}'")
             return
         if cap is Cap.MUTATE and not self.allow_destructive:
-            self._log("[#f87171]DITOLAK[/#f87171] mutate butuh --destructive "
+            self._log(f"[{THEME['error']}]DITOLAK[/{THEME['error']}] mutate butuh --destructive "
                       "(lab saja) · destructive=false")
             return
         self.running = True
         self._refresh_hdr()
         self.queue_len = max(self.queue_len, 1)
         self._refresh_queue()
-        self._log(f"[#4ade80]{cap.value}[/#4ade80] siap di mode {mode.label} "
-                  "[dim](loop nyata dijalankan `wth scan`)[/dim]")
+        self._log(f"[{THEME['accent']}]{cap.value}[/{THEME['accent']}] siap di mode {mode.label} "
+                  "[dim](loop nyata dijalankan `wth-ai scan`)[/dim]")
 
     def _do_egress_test(self) -> None:
         from wth_ai.netguard import EgressDenied, EgressGuard
@@ -329,10 +339,10 @@ class WthApp(App[None]):
         try:
             guard.check("1.1.1.1")
         except EgressDenied as exc:
-            self._log(f"[#4ade80]EGRESS DENIED[/#4ade80] {exc} "
+            self._log(f"[{THEME['accent']}]EGRESS DENIED[/{THEME['accent']}] {exc} "
                       "[dim](tercatat di audit.log)[/dim]")
             return
-        self._log("[#f87171]BOCOR[/#f87171] 1.1.1.1 LOLOS dari allowlist — "
+        self._log(f"[{THEME['error']}]BOCOR[/{THEME['error']}] 1.1.1.1 LOLOS dari allowlist — "
                   "jangan merekam demo ini")
 
     def _do_skill(self, args: list[str]) -> None:
@@ -345,13 +355,13 @@ class WthApp(App[None]):
         if args[0] == "use" and len(args) > 1:
             fragment = skill_fragment(args[1])
             if not fragment:
-                self._log(f"[#f87171]skill '{args[1]}' tidak ada[/#f87171]")
+                self._log(f"[{THEME['error']}]skill '{args[1]}' tidak ada[/{THEME['error']}]")
                 return
             self.active_skill = args[1]
-            self._log(f"[#4ade80]skill aktif[/#4ade80] {args[1]} "
+            self._log(f"[{THEME['accent']}]skill aktif[/{THEME['accent']}] {args[1]} "
                       f"({len(fragment.splitlines())} baris) → dimasukkan ke prompt")
             return
-        self._log("[#fbbf24]pakai: /skill list | use <nama> | reload[/#fbbf24]")
+        self._log(f"[{THEME['warn']}]pakai: /skill list | use <nama> | reload[/{THEME['warn']}]")
 
     def _do_demo(self, args: list[str]) -> None:
         want = (args[0].lower() if args else "on") in {"on", "1", "true"}
