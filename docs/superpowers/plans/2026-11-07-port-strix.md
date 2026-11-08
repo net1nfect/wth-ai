@@ -421,10 +421,35 @@ Setiap task di phase ini punya flag eksplisit, default mati, dan **tidak** dieks
 - Interfaces: `build_report(run_meta) -> dict[str, Any]` hanya berisi `{runs, durations, exit_codes, version}`; test memastikan tidak ada host/temuan/secret.
 - Commit: `feat(telemetry): agregat opt-in tanpa data target`.
 
+- [x] Selesai. `build_report(run_meta)` hanya menghasilkan empat kunci:
+  `runs`, `durations`, `exit_codes`, `version`.
+- [x] Modul **tidak punya jalur kirim** sama sekali (tanpa `requests`/socket):
+  payload dibentuk murni supaya bisa diuji tanpa jaringan. Endpoint, flag opt-in,
+  dan pengiriman adalah pekerjaan lain yang belum dikerjakan dan tidak diklaim.
+- [x] Nilai aneh tidak melempar: `duration_s` non-angka / `None` dibuang,
+  `exit_code` non-int dibuang; `bool` sengaja tidak dianggap angka.
+- [x] Verifikasi: `pytest tests/test_telemetry_aggregate.py -q` → 5 passed
+  (termasuk test yang memastikan host, target, temuan, dan secret tidak muncul
+  di payload JSON).
+
 ### Task 18: Worker lokal (bukan distributed remote)
 - Files: `wth_ai/jobs/local_queue.py`
 - Interfaces: antrean berbasis file + `fcntl.flock`, satu worker per job, tanpa network listener.
 - Commit: `feat(jobs): antrean worker lokal berbasis file`.
+
+- [x] Selesai. `LocalQueue(path)` menyimpan `{jobs: {...}}` di `<path>` dengan
+  kunci `<path>.lock`; klaim job terjadi di dalam kunci sehingga dua worker
+  tidak bisa memegang job yang sama.
+- [x] Kunci reentrant per thread (depth counter) karena helper penyimpanan juga
+  mengunci; `flock` pada fd kedua di proses yang sama akan mengunci diri sendiri.
+  Tanpa `fcntl` (platform lain) modul tetap jalan, hanya tanpa jaminan
+  antar-proses.
+- [x] API: `enqueue(payload) -> id`, `claim(worker_id) -> job | None`,
+  `complete(id)`, `fail(id, error)`, `result(id)`, `pending()`.
+- [x] Test regresi memastikan modul **tidak** berisi `import socket`, `bind((`,
+  `listen(`, `HTTPServer`, atau `requests.` — tidak ada pendengar jaringan.
+- [x] Verifikasi: `pytest tests/test_local_queue.py -q` → 8 passed, termasuk 4
+  thread yang mengklaim 20 job tanpa satu pun terklaim dua kali.
 
 ---
 
