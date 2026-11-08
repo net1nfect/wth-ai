@@ -57,6 +57,9 @@ class SupervisorContext:
     tool_count: int = 0
     persist_fn: Callable[[], None] | None = None
     orchestrator: Any = None
+    # Graf fan-out agen (lazy, dibuat oleh dispatcher tool `agent_*`); hidup
+    # selama sesi supervisor supaya node bertahan lintas iterasi tool.
+    agent_graph: Any = None
 
     def notify_phase(self, phase: str, pct: int) -> None:
         self.current_phase = phase

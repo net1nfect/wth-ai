@@ -388,6 +388,59 @@ TOOL_DEFINITIONS: dict[str, dict[str, Any]] = {
             },
         },
     },
+    "agent_spawn": {
+        "type": "function",
+        "function": {
+            "name": "agent_spawn",
+            "description": "Spawn a node in the agent fan-out graph (bounded by MAX_NODES/MAX_DEPTH)",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "subagent": {"type": "string"},
+                    "prompt": {"type": "string"},
+                    "parent_id": {"type": "string"},
+                },
+                "required": ["subagent", "prompt"],
+            },
+        },
+    },
+    "agent_send": {
+        "type": "function",
+        "function": {
+            "name": "agent_send",
+            "description": "Queue an extra message for a graph node",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "node_id": {"type": "string"},
+                    "message": {"type": "string"},
+                },
+                "required": ["node_id", "message"],
+            },
+        },
+    },
+    "agent_wait": {
+        "type": "function",
+        "function": {
+            "name": "agent_wait",
+            "description": "Wait for one node (or every node) until done/timeout/killed",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "node_id": {"type": "string"},
+                    "timeout": {"type": "number"},
+                },
+            },
+        },
+    },
+    "agent_tree": {
+        "type": "function",
+        "function": {
+            "name": "agent_tree",
+            "description": "Show the agent graph tree with status and duration per node",
+            "parameters": {"type": "object", "properties": {}},
+        },
+    },
     "session_search": {
         "type": "function",
         "function": {

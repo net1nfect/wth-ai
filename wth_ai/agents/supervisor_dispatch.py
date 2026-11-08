@@ -2,13 +2,20 @@
 
 from __future__ import annotations
 
+import contextlib
 import json
 import time
 from typing import Any
 
 from wth_ai.agents.supervisor_context import SupervisorContext
 from wth_ai.engagement.mode import auto_approve_enabled
-from wth_ai.models import AssessmentPhase, ExecutorTask, FindingState, PermissionMode, sort_tasks_by_dependencies
+from wth_ai.models import (
+    AssessmentPhase,
+    ExecutorTask,
+    FindingState,
+    PermissionMode,
+    sort_tasks_by_dependencies,
+)
 from wth_ai.permission_presets import apply_preset
 from wth_ai.verify_gate import apply_verification
 
@@ -47,10 +54,9 @@ def _dispatch_computer_use(ctx: SupervisorContext, args: dict[str, Any], *, appr
     result = ComputerUse().run_action(action, **kwargs)
 
     if ctx.action_memory is not None:
-        try:
+        # memory best-effort: kegagalan mencatat tidak boleh menggagalkan aksi
+        with contextlib.suppress(Exception):
             ctx.action_memory.record(f"computer_use:{action}", kwargs, result.describe()[:400])
-        except Exception:  # noqa: BLE001 - memory is best-effort, never fatal
-            pass
 
     if not result.ok:
         return f"GAGAL {result.describe()} — jalankan action=detect untuk melihat backend yang terdeteksi."
@@ -106,7 +112,6 @@ def dispatch_supervisor_tool(
     *,
     approved: bool = False,
 ) -> str:
-    import os
     started = time.time()
     ctx.notify_tool_start(name, args)
 
@@ -133,6 +138,42 @@ def dispatch_supervisor_tool(
     if ctx.action_memory is not None:
         ctx.action_memory.record(name, args, result, duration_ms=duration_ms)
     return result
+
+
+def _dispatch_agent_graph(ctx: SupervisorContext, name: str, args: dict[str, Any]) -> str:
+    """Tool `agent_*` di atas satu `AgentGraph` milik ctx.
+
+    Graf dibuat lazy di sini (bukan di constructor) supaya sesi supervisor yang
+    tidak pernah memakai fan-out tidak membayar apa pun — termasuk thread dan
+    penulisan state ke `$WTH_HOME/runtime/agents/`.
+    """
+    from wth_ai.agents.graph import AgentGraph
+
+    graph = getattr(ctx, "agent_graph", None)
+    if graph is None:
+        graph = AgentGraph(orchestrator=ctx.orchestrator)
+        ctx.agent_graph = graph
+
+    if name == "agent_spawn":
+        parent_id = args.get("parent_id")
+        result = graph.spawn(
+            str(args.get("subagent", "")),
+            str(args.get("prompt", "")),
+            parent_id=str(parent_id) if parent_id else None,
+        )
+    elif name == "agent_send":
+        result = graph.send(str(args.get("node_id", "")), str(args.get("message", "")))
+    elif name == "agent_wait":
+        # LLM boleh mengirim `timeout` sebagai string; nilai non-angka harus jadi
+        # error yang bisa dibaca model, bukan ValueError yang memutus tool loop.
+        try:
+            timeout = float(args.get("timeout") or 30.0)
+        except (TypeError, ValueError):
+            return json.dumps({"ok": False, "error": "timeout harus angka detik"})
+        result = graph.wait(args.get("node_id") or None, timeout=timeout)
+    else:
+        result = {"ok": True, **graph.tree()}
+    return json.dumps(result, indent=2)
 
 
 def _dispatch(ctx: SupervisorContext, name: str, args: dict[str, Any], *, approved: bool) -> str:
@@ -447,6 +488,9 @@ def _dispatch(ctx: SupervisorContext, name: str, args: dict[str, Any], *, approv
             str(args.get("prompt", "")),
             depth=depth,
         )
+
+    if name in ("agent_spawn", "agent_send", "agent_wait", "agent_tree"):
+        return _dispatch_agent_graph(ctx, name, args)
 
     if name == "session_search":
         from wth_ai.memory.fts import SessionFtsIndex

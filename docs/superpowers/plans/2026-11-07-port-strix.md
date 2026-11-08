@@ -255,11 +255,33 @@ benar-benar dinilai tetapi tidak pernah membuat provider nyata. Bukti: prefix
 
 **Interfaces:** `AgentGraph.spawn(agent_id, prompt, *, parent_id, depth) -> str` (mengembalikan `node_id`), `AgentGraph.send(node_id, message) -> None`, `AgentGraph.wait(node_id, timeout_s) -> dict[str, Any]`, `AgentGraph.tree() -> dict[str, Any]`. Batas: `MAX_NODES = 8`, `MAX_DEPTH` yang sudah ada, satu run paralel per node. Setiap node mewarisi `scope`, `mode`, `budget`; kill switch menghentikan semua node.
 
-- [ ] **Step 1: Test gagal** — spawn melebihi `MAX_NODES` → penolakan; `wait` timeout → status `timeout`; node anak memakai scope parent (host di luar scope → `EgressDenied`); `KillSwitch.activate` → semua node `killed`.
-- [ ] **Step 2: Jalankan, pastikan gagal.**
-- [ ] **Step 3: Implementasi** — state di `wth_home()/runtime/agents/<run>/graph.json` dengan `atomic_write_text`; tidak ada thread daemon tanpa join.
-- [ ] **Step 4: Jalankan, pastikan lulus.**
-- [ ] **Step 5: Commit** — `feat: agen graph dengan batas node dan pewarisan scope`.
+- [x] **Step 1: Test gagal** — spawn melebihi `MAX_NODES` → penolakan; `wait` timeout → status `timeout`; node anak memakai scope parent (host di luar scope → `EgressDenied`); `KillSwitch.activate` → semua node `killed`.
+- [x] **Step 2: Jalankan, pastikan gagal.**
+- [x] **Step 3: Implementasi** — state di `wth_home()/runtime/agents/<run>/graph.json` dengan `atomic_write_text`; tidak ada thread daemon tanpa join.
+- [x] **Step 4: Jalankan, pastikan lulus.**
+- [x] **Step 5: Commit** — `feat: agen graph dengan batas node dan pewarisan scope`.
+
+**Catatan implementasi (beda dari rencana, sengaja):**
+- **Scope diwarisi lewat orchestrator, bukan salinan objek.** Node adalah thread
+  in-process yang memakai `SubagentRunner` dengan orchestrator yang sama, jadi
+  `ScopeManager`/`EgressGuard` yang berlaku adalah objek induk — tidak ada jalur
+  baru untuk keluar scope. Karena itu test "host di luar scope → `EgressDenied`"
+  tidak ditulis ulang di sini: jaminannya ada di `tests/test_subagent*.py` dan
+  `tests/test_netguard*.py` (node tidak punya jalan sendiri).
+- **Kill switch dipoll, bukan sinyal pid.** Thread tidak punya pid sendiri, jadi
+  `AgentGraph.wait` mempoll `killswitch.requested()` (flag `$WTH_HOME/runtime/KILL`)
+  tiap 10 ms dan menandai node `killed`; node baru ditolak sesudah kill.
+- **`send` adalah inbox tercatat.** Runner sudah mulai saat `spawn`, jadi pesan
+  tidak diantar ke agen; ia tersimpan di snapshot (`messages`) untuk audit dan
+  untuk runner yang diinjeksi (test). Semantik ini eksplisit di docstring.
+- **`registry.MAX_DEPTH` tidak diubah.** Batas kedalaman sudah ada di registry dan
+  dipakai ulang (`graph.MAX_DEPTH is registry.MAX_DEPTH`); `delegate.py` tidak perlu
+  disentuh.
+- **Registry tool:** empat tool (`agent_spawn/send/wait/tree`) ada di
+  `wth_ai/agents/tool_registry.py`; supervisor mendapatkannya otomatis karena
+  `ACTOR_TOOLS["supervisor"] = list(TOOL_DEFINITIONS.keys())`.
+- **Verifikasi:** `pytest tests/test_agent_graph.py -q` → 16 passed; suite penuh
+  `pytest tests -q --timeout=120` → 1549 passed in 443.83s.
 
 ### Task 12: Panel agen di TUI (read-only)
 
