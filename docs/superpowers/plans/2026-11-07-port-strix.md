@@ -219,11 +219,22 @@ git commit -m "docs: izin berbatas untuk fitur strix + peta modul akurat"
 
 **Interfaces:** `class ProxyAdapter(Protocol)` dengan `history(limit: int = 20) -> list[dict[str, Any]]` dan `replay(entry_id: str) -> dict[str, Any]`; `LocalProxyAdapter` membaca jurnal request/response yang sudah ditulis `recon/http.py`; `CaidoAdapter` aktif hanya bila `WTH_CAIDO_URL` diset dan host-nya lolos allowlist; tanpa Caido → `ProxyUnavailable`.
 
-- [ ] **Step 1: Test gagal** — `LocalProxyAdapter.history` mengembalikan entri dengan `request`/`response`/`tx_id`; `replay` memakai `EgressGuard` dan menolak host di luar scope; `CaidoAdapter` tanpa env → `ProxyUnavailable`.
-- [ ] **Step 2: Jalankan, pastikan gagal.**
-- [ ] **Step 3: Implementasi** — tidak ada dependency `caido-sdk-client`; pakai HTTP biasa ke API Caido bila ada.
-- [ ] **Step 4: Jalankan, pastikan lulus.**
-- [ ] **Step 5: Commit** — `feat: proxy terstruktur lokal + adapter caido opsional`.
+- [x] **Step 1: Test gagal** — `LocalProxyAdapter.history` mengembalikan entri dengan `request`/`response`/`tx_id`; `replay` memakai `EgressGuard` dan menolak host di luar scope; `CaidoAdapter` tanpa env → `ProxyUnavailable`.
+- [x] **Step 2: Jalankan, pastikan gagal.**
+- [x] **Step 3: Implementasi** — tidak ada dependency `caido-sdk-client`; pakai HTTP biasa ke API Caido bila ada. `netguard.py` tidak perlu diubah: penolakan host terjadi di `replay` lewat `guard.check` sebelum `recon.http.fetch`. Jurnal diputar ke `history.1.jsonl` pada 8 MB supaya `$WTH_HOME` tidak tumbuh tanpa batas.
+- [x] **Step 4: Jalankan, pastikan lulus** (`10 passed`; suite penuh 1530 passed, 2 gagal di `tests/test_provider.py` yang tidak terkait slice ini — lihat catatan di bawah).
+- [x] **Step 5: Commit** — `feat: proxy terstruktur lokal + adapter caido opsional`.
+
+**Catatan 2026-11-08 (Task 10):** suite penuh `1530 passed, 2 failed`.
+Dua kegagalan itu di `tests/test_provider.py::test_smoke_test_{success,failure}_mock`
+dan **bukan** akibat slice ini: keduanya lulus saat dijalankan sendiri, dan tetap
+gagal saat slice proxy dikeluarkan dari pemanggilan. Penyebabnya `run_smoke_test`
+(`wth_ai/llm/smoke.py:76-80`) memanggil `router.list_models(rc.type)` untuk tiap
+role; bila config role sudah terisi oleh test lain, provider dibuat sungguhan dan
+`requests.get(f"{base_url}/models", timeout=30)` menunggu jaringan sampai
+`pytest-timeout` memotong (traceback: `socket.py:725: self._sock.recv_into(b)`,
+`openai_compat.py:155`). Perbaikannya terpisah: test harus mematikan role model
+(netralkan `router` role) atau `run_smoke_test` perlu mode tanpa jaringan.
 
 ---
 
