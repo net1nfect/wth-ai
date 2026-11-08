@@ -378,6 +378,24 @@ Setiap task di phase ini punya flag eksplisit, default mati, dan **tidak** dieks
 - Test: `tests/test_autofix_gate.py`
 - Commit: `feat(autofix): patch + retest di worktree terpisah, tanpa push`.
 
+- [x] Selesai. `plan_fix(finding)` **tidak mengarang** perbaikan: satu-satunya
+  sumber patch adalah blok ```` ```diff ```` di evidence temuan (mis. dari
+  runner SAST). Temuan tanpa saran → `AutofixUnavailable` dengan pesan
+  "tidak punya saran patch".
+- [x] `apply_patch(patch, worktree, *, mode, destructive, retest_argv=None)`:
+  gerbang `mode == "full_lab"` lalu `destructive`, cek eksplisit
+  `target.is_relative_to(worktree)` ("path patch di luar worktree"), `git apply
+  --check` → `git apply`, retest opsional, dan `git apply -R` bila retest gagal
+  (audit `autofix_reverted`). Sukses diaudit `autofix_applied`.
+- [x] Test regresi `test_applies_patch_and_never_pushes` merekam setiap argv dan
+  menegaskan tidak ada satu pun elemen berisi `"push"`.
+- [x] Catatan cakupan: yang diuji adalah **gerbang**, bukan kualitas patch. Patch
+  tetap pekerjaan review operator; tidak ada `git push`, tidak ada commit.
+- [x] CLI `autofix --bundle DIR --finding ID --worktree DIR [--retest CMD]
+  [--mode full_lab] [--destructive]` di kedua launcher: tanpa `--destructive`
+  atau dengan mode < `full_lab`, keluar 1 dan file target tidak berubah.
+- [x] Verifikasi: `pytest tests/test_autofix_gate.py -q` → 11 passed.
+
 ### Task 16: Updater bertanda tangan
 - Files: `wth_ai/update/verifier.py`
 - Interfaces: `verify_artifact(path, signature_path, pubkey_path) -> bool`; host allowlist lewat `EgressGuard`.

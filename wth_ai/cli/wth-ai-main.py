@@ -501,6 +501,61 @@ def view_cmd(bundle: str, port: int, yes: bool, print_only: bool) -> None:
         server.stop()
 
 
+@cli.command("autofix")
+@click.option("--bundle", default="out/bundle", show_default=True)
+@click.option("--finding", "finding_id", required=True, help="ID temuan di bundel.")
+@click.option("--worktree", required=True, help="Worktree target (terpisah dari repo ini).")
+@click.option("--retest", default="", help="Perintah retest; argumen dipisah spasi.")
+@click.option("--mode", default="plan", show_default=True)
+@click.option("--destructive", is_flag=True,
+              help="Wajib: izinkan perubahan file target (hanya berlaku di full_lab).")
+def autofix_cmd(bundle: str, finding_id: str, worktree: str, retest: str,
+                mode: str, destructive: bool) -> None:
+    """Terapkan patch saran temuan di worktree terpisah; tidak pernah push."""
+    import shlex
+
+    from wth_ai.autofix.apply import apply_patch
+    from wth_ai.autofix.planner import AutofixUnavailable, plan_fix
+    from wth_ai.redteam.models import Finding
+
+    findings_path = _user_path(bundle) / "findings.json"
+    if not findings_path.is_file():
+        raise click.ClickException(f"bundel tidak punya findings.json: {findings_path}")
+    try:
+        raw = json.loads(findings_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise click.ClickException(f"findings.json tidak terbaca: {exc}") from exc
+
+    item = next((f for f in raw if isinstance(f, dict) and str(f.get("id")) == finding_id), None)
+    if item is None:
+        raise click.ClickException(f"temuan {finding_id} tidak ada di bundel")
+
+    finding = Finding(
+        id=str(item.get("id", "")),
+        hypothesis=str(item.get("hypothesis", "")),
+        vuln_class=str(item.get("vuln_class", "")),
+        target=str(item.get("target", "")),
+        evidence=[str(e) for e in (item.get("evidence") or [])],
+    )
+    try:
+        patch = plan_fix(finding)
+    except AutofixUnavailable as exc:
+        raise click.ClickException(str(exc)) from exc
+
+    result = apply_patch(
+        patch,
+        _user_path(worktree),
+        mode=mode,
+        destructive=destructive,
+        retest_argv=shlex.split(retest) or None,
+    )
+    if not result.ok:
+        click.echo(f"autofix: tidak diterapkan · {result.error}", err=True)
+        raise SystemExit(1)
+    click.echo(f"autofix: {patch.path} · diterapkan · "
+               f"retest={'ya' if retest else 'tidak'} · tanpa push")
+
+
 @cli.command("bench")
 @click.option("--tasks", "tasks_dir", required=True,
               help="Direktori berisi task benchmark (satu subdir per task).")

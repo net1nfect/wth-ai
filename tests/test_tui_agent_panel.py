@@ -12,8 +12,10 @@ from typing import Any
 
 import pytest
 
-from wth_ai.agents import graph_store
-from wth_ai.cli.tui.redteam.agent_view import agent_panel, agent_summary
+pytest.importorskip("textual")
+
+from wth_ai.agents import graph_store  # noqa: E402
+from wth_ai.cli.tui.redteam.agent_view import agent_panel, agent_summary  # noqa: E402
 
 _TREE: dict[str, Any] = {
     "run_id": "run-1",
