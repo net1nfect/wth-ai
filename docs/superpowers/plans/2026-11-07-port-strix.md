@@ -357,6 +357,21 @@ Setiap task di phase ini punya flag eksplisit, default mati, dan **tidak** dieks
 - Test: `tests/test_view_server.py` — token salah → 403; bind address `127.0.0.1`; tidak ada rute POST.
 - Commit: `feat(view): dashboard read-only loopback`.
 
+- [x] Selesai. `ViewServer(bundle_dir, *, port=0, token=None, host="127.0.0.1")`;
+  `host` selain loopback ditolak `ValueError` (bukan parameter yang bisa
+  dilonggarkan). Token acak `secrets.token_urlsafe(24)` per proses, dibanding
+  `hmac.compare_digest` lewat header `X-WTH-Token` atau `?token=`.
+- [x] Semua selain `GET`/`HEAD` dijawab 405; path tak dikenal 404; hypothesis
+  temuan di-`html.escape` (test mengirim `<script>` dan memastikan tidak lolos).
+- [x] `serve()` mencatat `view_start` (host, port, bundle) ke
+  `<WTH_HOME>/logs/audit.log` — bukan `<WTH_HOME>/audit.log` seperti yang
+  diasumsikan test pertama; test diperbaiki, bukan auditnya.
+- [x] CLI `wth-ai view --bundle DIR [--port N] [--yes] [--print-only]` di kedua
+  launcher: tanpa `--yes` keluar dengan pesan "butuh --yes", dengan `--yes`
+  membuka port dan mencetak URL + token.
+- [x] Verifikasi: `pytest tests/test_view_server.py -q` → 8 passed;
+  `pytest tests -q -k "view or cli_scope or cli_identity or tui"` → 21 passed.
+
 ### Task 15: Auto-fix PR berbatas
 - Files: `wth_ai/autofix/planner.py`, `wth_ai/autofix/apply.py`, `wth_ai/cli/wth-ai-main.py`
 - Interfaces: `plan_fix(finding) -> Patch`, `apply_patch(patch, worktree: Path) -> ApplyResult`; hanya `mode == "full_lab"` dan `--destructive`; `git push` tidak pernah dipanggil (test regresi memastikan tidak ada `"push"` di argv).

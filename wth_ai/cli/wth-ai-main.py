@@ -462,6 +462,45 @@ def scan_cmd(red_team: bool, offline_demo: bool, scan_mode: str, max_attempts: i
                                    scope_authorized=scope_authorized))
 
 
+@cli.command("view")
+@click.option("--bundle", default="out/bundle", show_default=True)
+@click.option("--port", default=0, show_default=True,
+              help="0 = port acak dari OS.")
+@click.option("--yes", is_flag=True,
+              help="Konfirmasi eksplisit: membuka port HTTP lokal.")
+@click.option("--print-only", "print_only", is_flag=True,
+              help="Cetak URL + token lalu keluar (tanpa menunggu).")
+def view_cmd(bundle: str, port: int, yes: bool, print_only: bool) -> None:
+    """Dashboard bundel read-only di 127.0.0.1 (izin berbatas, default mati)."""
+    import time
+
+    from wth_ai.view.server import ViewServer
+
+    bundle_dir = _user_path(bundle)
+    if not (bundle_dir / "manifest.json").is_file():
+        raise click.ClickException(f"bundel tidak ditemukan: {bundle_dir / 'manifest.json'}")
+    if not yes:
+        raise click.UsageError(
+            "butuh --yes: `view` membuka port HTTP di mesin ini. "
+            "Hanya bind 127.0.0.1, read-only, token acak per proses."
+        )
+
+    server = ViewServer(bundle_dir, port=port)
+    url = server.start()
+    try:
+        click.echo(f"view: {url}")
+        click.echo(f"token: {server.token}")
+        click.echo("bind 127.0.0.1 · read-only · tanpa rute mutasi · ctrl+c untuk berhenti")
+        if print_only:
+            return
+        while True:
+            time.sleep(3600)
+    except KeyboardInterrupt:
+        click.echo("view: berhenti")
+    finally:
+        server.stop()
+
+
 @cli.command("bench")
 @click.option("--tasks", "tasks_dir", required=True,
               help="Direktori berisi task benchmark (satu subdir per task).")
