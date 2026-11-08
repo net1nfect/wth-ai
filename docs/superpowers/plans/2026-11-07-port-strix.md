@@ -402,6 +402,20 @@ Setiap task di phase ini punya flag eksplisit, default mati, dan **tidak** dieks
 - Test: `tests/test_update_verify.py` (fixture kunci + signature; signature rusak → False)
 - Commit: `feat(update): verifikasi tanda tangan sebelum pasang`.
 
+- [x] Selesai. `wth_ai/update/verifier.py` memakai Ed25519 (`cryptography`
+  sudah jadi dependency sejak awal, bukan tambahan baru).
+- [x] `verify_artifact(path, signature_path, pubkey_path) -> bool`: **semua**
+  kegagalan jadi `False` (file hilang, kunci bukan 32 byte, signature bukan 64
+  byte, isi berubah, kunci beda) — pemanggil tidak perlu membedakan sebab untuk
+  memutuskan menolak.
+- [x] `install_artifact(...)` menolak dengan `UpdateDenied` dan mencatat
+  `update_rejected`; bila lolos menyalin artefak lalu mencatat `update_install`.
+- [x] `ALLOWED_HOSTS = ("github.com", "objects.githubusercontent.com")` dan
+  `host_allowed(url)` hanya menerima `https` ke host itu (`file://` ditolak).
+  Allowlist sengaja berupa konstanta kode, bukan konfigurasi runtime.
+- [x] Belum ada (tidak diklaim): unduhan jaringan dan perintah CLI `update`.
+- [x] Verifikasi: `pytest tests/test_update_verify.py -q` → 10 passed.
+
 ### Task 17: Telemetry opt-in agregat
 - Files: `wth_ai/telemetry/aggregate.py`
 - Interfaces: `build_report(run_meta) -> dict[str, Any]` hanya berisi `{runs, durations, exit_codes, version}`; test memastikan tidak ada host/temuan/secret.
