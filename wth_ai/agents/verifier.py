@@ -71,7 +71,17 @@ class VerifierAgent(BaseLLMAgent):
             [],
             prompt,
         )
-        return self._parse_verification(raw, finding.id, model)
+        return self._capped(finding, self._parse_verification(raw, finding.id, model),
+                            evidence_vault)
+
+    def _capped(self, finding: Finding, verdict: dict[str, Any],
+                evidence_vault: Any) -> dict[str, Any]:
+        """P0-5: model hanya boleh menurunkan. Verdict "verified" tanpa
+        request/response + reproduksi + kontrol turun ke CANDIDATE di sini,
+        jadi setiap call site menerima hasil yang sudah benar."""
+        from wth_ai.verify_gate import cap_verdict
+
+        return cap_verdict(finding.state, verdict, evidence_vault, finding.id)
 
     def verify_offline(self, finding: Finding, evidence_vault: Any = None) -> dict[str, Any]:
         """Rule-based verification when LLM unavailable."""
@@ -83,7 +93,7 @@ class VerifierAgent(BaseLLMAgent):
             verdict = "candidate"
         if not has_evidence:
             verdict = "false_positive" if finding.state == FindingState.VERIFIED else "needs_more_evidence"
-        return {
+        return self._capped(finding, {
             "finding_id": finding.id,
             "verdict": verdict,
             "reason": "Offline rule-based check — butuh LLM atau evidence manual untuk verified",
@@ -93,7 +103,7 @@ class VerifierAgent(BaseLLMAgent):
             "replan_hint": "Gather more reproducible evidence" if not has_evidence else "",
             "model": "offline",
             "raw": "",
-        }
+        }, evidence_vault)
 
     def _parse_verification(self, raw: str, finding_id: str, model: str) -> dict[str, Any]:
         def field(name: str) -> str:

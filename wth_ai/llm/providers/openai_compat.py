@@ -8,7 +8,7 @@ from typing import Any, Callable
 import requests
 
 from wth_ai.llm.errors import LLMError
-from wth_ai.llm.providers.base import BaseLLMProvider, http_error_message, raise_for_status
+from wth_ai.llm.providers.base import BaseLLMProvider, raise_for_status
 
 DEFAULT_BASE_URLS = {
     "openai": "https://api.openai.com/v1",

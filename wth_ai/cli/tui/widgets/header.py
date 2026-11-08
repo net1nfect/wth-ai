@@ -4,13 +4,15 @@ from __future__ import annotations
 
 from textual.widgets import Static
 
-from wth_ai.cli.ui.theme import SPINNER_FRAMES
+from wth_ai.cli.ui.theme import BAR_EMPTY, BAR_FULL, SPINNER_FRAMES, THEME
 
 
 def _bar(pct: int, width: int = 16) -> str:
     pct = max(0, min(100, pct))
     filled = int(width * pct / 100)
-    return f"[{'█' * filled}{'░' * (width - filled)}] {pct:>3}%"
+    # P2-5: `█`/`░` here while `theme.budget_bar` drew `▰`/`▱` -- two bar
+    # alphabets in one product. Same glyphs, same palette.
+    return f"[{BAR_FULL * filled}{BAR_EMPTY * (width - filled)}] {pct:>3}%"
 
 
 class HeaderBar(Static):
@@ -27,6 +29,7 @@ class HeaderBar(Static):
         self._perm = ""
         self._llm = "offline"
         self._mode = "default"
+        self._model = ""
 
     def on_mount(self) -> None:
         self._render_header()
@@ -53,26 +56,29 @@ class HeaderBar(Static):
         llm: str,
         phase: str,
         mode: str = "default",
+        model: str = "",
     ) -> None:
         self._version = version
         self._target = target or "unset"
         self._perm = perm
         self._llm = llm
         self._mode = mode.replace("_", "-")
+        self._model = model or ""
         if not self._busy:
             self._phase = phase or "idle"
         self._render_header()
 
     def _render_header(self) -> None:
         spin = SPINNER_FRAMES[self._spin_idx % len(SPINNER_FRAMES)] if self._busy else "●"
-        llm_color = "#3fb950" if self._llm == "online" else "#f85149"
-        busy_tag = "[bold #d29922] RUNNING [/]" if self._busy else ""
+        llm_color = THEME["accent"] if self._llm == "online" else THEME["error"]
+        busy_tag = f"[bold {THEME['warn']}] RUNNING [/]" if self._busy else ""
         bar = _bar(self._pct) if self._busy or self._pct > 0 else ""
         phase_bit = f"  [dim]phase[/] [bold]{self._phase}[/]"
         bar_bit = f"  {bar}" if bar else ""
+        model_bit = f"  [dim]·[/] model: [bold]{self._model}[/]" if self._model else ""
         self.update(
-            f" {spin} [bold #58a6ff]WTH-AI[/] v{self._version}  {busy_tag}"
+            f" {spin} [bold {THEME['brand']}]WTH-AI[/] v{self._version}  {busy_tag}"
             f"[dim]·[/] {self._mode}  [dim]·[/] target: [bold]{self._target}[/]  "
             f"[dim]·[/] perm: {self._perm}  [dim]·[/] llm: [{llm_color}]{self._llm}[/]"
-            f"{phase_bit}{bar_bit} "
+            f"{model_bit}{phase_bit}{bar_bit} "
         )

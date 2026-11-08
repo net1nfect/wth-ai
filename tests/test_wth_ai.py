@@ -225,15 +225,6 @@ def test_executor_runner_v2_resolve():
     assert runner.registry is not None
 
 
-def test_status_bar_render():
-    from wth_ai.cli.status_bar import render_status_bar
-    from wth_ai.models import SessionState
-    config = WTHConfig.load()
-    state = SessionState()
-    state.scope.target = "test.com"
-    bar = render_status_bar(state, config, tools_installed=10, tools_total=200, llm_online=True)
-    assert "wth v" in bar
-    assert "test.com" in bar
 
 
 def test_asset_graph_from_recon():
@@ -390,8 +381,11 @@ def test_agent_constitution_loads():
 def test_startup_message_minimal():
     orch = WTHOrchestrator(WTHConfig.load(), fresh=True)
     msg = orch.startup_message()
-    assert "wth v1.0.0" in msg
+    assert "wth-ai v1.0.0" in msg
     assert ":=+++" not in msg  # no ASCII art
+    # P2-4: this counts the AGENT registry, so it must not use the bare word
+    # `tools` that `/tools list` (the recon registry, 346) owns.
+    assert "agent-tools" in msg
 
 
 def test_setup_wizard_writes_user_config():

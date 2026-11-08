@@ -70,7 +70,7 @@ def http_error_message(provider_name: str, model: str, url: str, status: int, bo
     if status == 401:
         hint = (
             f"{provider_name}: API key ditolak (HTTP 401). "
-            f"Cek vault/env (`ROUTER9_API_KEY` atau `wth doctor`)."
+            f"Cek vault/env (`ROUTER9_API_KEY` atau `wth-ai doctor`)."
         )
         return hint + suffix
     if status == 404:
@@ -83,7 +83,7 @@ def http_error_message(provider_name: str, model: str, url: str, status: int, bo
         else:
             hint = (
                 f"{provider_name}: model atau endpoint tidak ditemukan (HTTP 404) — "
-                f"model={model!r}, url={url}. Jalankan `wth model list`."
+                f"model={model!r}, url={url}. Jalankan `wth-ai model list`."
             )
         return hint + suffix
     if status == 429:

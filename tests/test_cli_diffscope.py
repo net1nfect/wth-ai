@@ -34,7 +34,7 @@ def _scan(repo, tmp_path, *extra):
     env = {**os.environ, "WTH_HOME": str(tmp_path / "home"),
            "WTH_SKIP_SETUP": "1", "WTH_PLAIN": "1"}
     return subprocess.run(
-        [sys.executable, str(REPO / "wth-main.py"), "scan", "--offline-demo",
+        [sys.executable, str(REPO / "wth-ai-main.py"), "scan", "--offline-demo",
          "--out", "out", *extra],
         cwd=repo, capture_output=True, text=True, timeout=180, env=env)
 

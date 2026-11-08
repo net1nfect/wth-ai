@@ -1,5 +1,5 @@
 services:
-  wth-worker:
+  wth-ai-worker:
     build: .
     command: ["wth-ai", "worker", "run", "--no-drain"]
     env_file: .env
@@ -9,12 +9,12 @@ services:
       ROUTER9_BASE_URL: http://9router:20128/v1
       OLLAMA_BASE_URL: http://ollama:11434
     volumes:
-      - wth-home:/data/wth-ai
+      - wth-ai-home:/data/wth-ai
     depends_on:
       - 9router
     restart: unless-stopped
 
-  wth-cli:
+  wth-ai-cli:
     build: .
     command: ["sleep", "infinity"]
     env_file: .env
@@ -23,7 +23,7 @@ services:
       WTH_UNRESTRICTED: "1"
       ROUTER9_BASE_URL: http://9router:20128/v1
     volumes:
-      - wth-home:/data/wth-ai
+      - wth-ai-home:/data/wth-ai
     depends_on:
       - 9router
 
@@ -47,5 +47,5 @@ services:
     profiles: ["oob"]
 
 volumes:
-  wth-home:
+  wth-ai-home:
   ollama-data:

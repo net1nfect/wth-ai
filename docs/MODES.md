@@ -19,7 +19,7 @@ otonomi lebih rendah; tidak ada mode yang punya kapabilitas di luar `auto`.
 
 1. **Scope ditegakkan mesin** — `ScopeManager` + `wth_ai/netguard.py`; mode
    tidak punya flag untuk mematikannya.
-2. **Kill switch <=2 detik** — `ctrl+k` di TUI, `wth kill` untuk worker lain.
+2. **Kill switch <=2 detik** — `ctrl+k` di TUI, `wth-ai kill` untuk worker lain.
 
 ## MUTATE
 

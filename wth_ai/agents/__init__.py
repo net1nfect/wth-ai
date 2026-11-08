@@ -5,7 +5,7 @@ from __future__ import annotations
 import os
 import re
 from pathlib import Path
-from typing import Any, Callable
+from typing import Callable
 
 from wth_ai.config import WTHConfig
 from wth_ai.llm.errors import LLMUnavailableError

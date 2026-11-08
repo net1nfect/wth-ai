@@ -109,6 +109,20 @@ def test_banner_shows_logo_and_context(monkeypatch):
     assert "authorized targets only" in out
 
 
+def test_banner_model_follows_the_router_not_the_legacy_field(monkeypatch):
+    """P2-1: the masthead showed `models.planner` while the router called
+    `providers['planner'].model`, so an override printed a model not in use."""
+    monkeypatch.setenv("WTH_COMPACT", "1")
+    from wth_ai.config import ProviderRoleConfig, WTHConfig
+
+    cfg = WTHConfig()
+    cfg.models.planner = "legacy/model-a"
+    cfg.providers["planner"] = ProviderRoleConfig(type="openai", model="routed/model-b")
+    out = _render(render_banner, config=cfg, extra={})
+    assert "model-b" in out, "masthead tidak mengikuti model yang dipakai router"
+    assert "model-a" not in out
+
+
 def test_banner_degrades_to_one_line_when_compact(monkeypatch):
     monkeypatch.setenv("WTH_COMPACT", "1")
     out = _render(render_banner, config=None, extra={"target": "example.com"})
@@ -205,6 +219,29 @@ def test_toolbar_caches_between_keystrokes(monkeypatch):
     repl._toolbar()
     repl._toolbar()
     assert calls["n"] == 1, "toolbar tidak di-cache"
+
+
+def test_startup_does_not_repeat_the_status_card_on_a_live_toolbar():
+    """P2-2: the toolbar under the input already carries model/target/perm, so
+    printing the status card at startup showed the same facts twice."""
+    repl = WTHRepl(lambda t: t, status_fn=lambda: "STATUS-KARTU")
+    repl.live_status = True
+    repl.session.prompt = lambda *a, **k: (_ for _ in ()).throw(EOFError)
+    buf = StringIO()
+    repl.console = Console(file=buf, width=100, highlight=False, force_terminal=True)
+    repl.run()
+    assert "STATUS-KARTU" not in buf.getvalue(), "status dicetak ulang padahal toolbar sudah memuatnya"
+
+
+def test_startup_still_prints_the_status_card_without_a_live_toolbar():
+    """Non-tty: there is no toolbar, so the card is the ONLY place these facts appear."""
+    repl = WTHRepl(lambda t: t, status_fn=lambda: "STATUS-KARTU")
+    repl.live_status = False
+    repl.session.prompt = lambda *a, **k: (_ for _ in ()).throw(EOFError)
+    buf = StringIO()
+    repl.console = Console(file=buf, width=100, highlight=False, force_terminal=True)
+    repl.run()
+    assert "STATUS-KARTU" in buf.getvalue()
 
 
 def test_toolbar_shows_test_target_and_permission():

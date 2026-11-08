@@ -83,6 +83,45 @@ def test_pip_normalize_uses_python_m():
     assert "install" in argv
 
 
+def test_normalize_install_is_argv_for_package_managers():
+    """P2-9: perintah manager paket dijalankan sebagai argv, bukan shell."""
+    argv, display, shell = normalize_install_command("apt", "apt-get install -y nmap", use_sudo=False)
+    assert shell is False
+    assert argv == ["apt-get", "install", "-y", "nmap"]
+    assert display == "apt-get install -y nmap"
+
+
+def test_normalize_install_keeps_sudo_as_argv_prefix():
+    with patch("wth_ai.tools.platform.should_use_sudo", return_value=True):
+        argv, _display, shell = normalize_install_command("apt", "apt-get install -y nmap", use_sudo=True)
+    assert shell is False
+    assert argv[:2] == ["sudo", "apt-get"]
+
+
+def test_scoop_remains_the_only_shell_exception():
+    """`scoop` di Windows adalah skrip PowerShell; argv tidak bisa menjalankannya."""
+    argv, _display, shell = normalize_install_command("scoop", "scoop install subfinder", use_sudo=False)
+    assert (argv, shell) == (None, True)
+
+
+def test_no_shell_call_site_outside_the_allowlist():
+    from wth_ai.tools.doctor import unallowlisted_shell_sites
+
+    assert unallowlisted_shell_sites() == []
+
+
+def test_doctor_flags_a_new_shell_call_site(tmp_path):
+    from wth_ai.tools.doctor import unallowlisted_shell_sites
+
+    bad = tmp_path / "tools" / "new.py"
+    bad.parent.mkdir()
+    bad.write_text(
+        "import subprocess\n\n\ndef go(cmd):\n    return subprocess.run(cmd, shell=True)\n",
+        encoding="utf-8",
+    )
+    assert unallowlisted_shell_sites(tmp_path) == ["tools/new.py:go"]
+
+
 def test_pick_installer_prefers_go_on_all_platforms():
     reg = ToolRegistry()
     inst = ToolInstaller(reg)

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any, Callable
+from typing import Callable
 
 from wth_ai.cli.tui.bus import UiEventBus
 from wth_ai.events import Event, get_event_bus

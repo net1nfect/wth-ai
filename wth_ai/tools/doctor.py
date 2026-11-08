@@ -15,7 +15,50 @@ from wth_ai.config import USER_CONFIG_PATH, WTHConfig
 from wth_ai.tools.installer import ToolInstaller
 from wth_ai.tools.registry import ToolRegistry
 from wth_ai.vault import SecretVault, is_vault_ref, ref_name
-from wth_ai.workspace import SENSITIVE_FILES, wth_home, workspace_status
+from wth_ai.workspace import RESULTS_DIR_NAME, SENSITIVE_FILES, wth_home, workspace_status
+
+
+# P2-9: satu-satunya call site `shell=True` yang diizinkan. `scoop` di Windows
+# berupa skrip PowerShell, jadi tidak bisa dieksekusi sebagai argv.
+SHELL_ALLOWLIST: frozenset[str] = frozenset({"tools/installer.py:_run_command"})
+
+
+def unallowlisted_shell_sites(root: Path | None = None) -> list[str]:
+  """Pindai seluruh pohon paket via AST; kembalikan `shell=True` di luar allowlist.
+
+  `check_platform` dulu hanya membaca `inspect.getsource(ToolRunner._run_command)`,
+  jadi `shell=True` di modul lain tidak pernah ketahuan.
+  """
+  import ast
+
+  package = Path(root) if root is not None else Path(__file__).resolve().parents[1]
+  bad: list[str] = []
+  for path in sorted(package.rglob("*.py")):
+    if "__pycache__" in path.parts:
+      continue
+    try:
+      tree = ast.parse(path.read_text(encoding="utf-8"))
+    except (SyntaxError, UnicodeDecodeError):
+      continue
+    funcs = [
+      node for node in ast.walk(tree)
+      if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+    ]
+    rel = path.relative_to(package).as_posix()
+    for node in ast.walk(tree):
+      if not isinstance(node, ast.Call):
+        continue
+      if not any(
+        kw.arg == "shell" and isinstance(kw.value, ast.Constant) and kw.value.value is True
+        for kw in node.keywords
+      ):
+        continue
+      enclosing = [f for f in funcs if f.lineno <= node.lineno <= (f.end_lineno or f.lineno)]
+      owner = max(enclosing, key=lambda f: f.lineno).name if enclosing else "<module>"
+      site = f"{rel}:{owner}"
+      if site not in SHELL_ALLOWLIST:
+        bad.append(site)
+  return bad
 
 
 class ToolDoctor:
@@ -259,7 +302,7 @@ class ToolDoctor:
     }
     try:
       from wth_ai.recon.registry import ReconToolRegistry
-      from wth_ai.recon.planner import ReconPlanner, PROFILE_CAP, detect_target_type
+      from wth_ai.recon.planner import PROFILE_CAP, detect_target_type
       from wth_ai.recon.tools.builtin import BuiltinContext, run_builtin
       from wth_ai.recon.wordlists import safe_paths
 
@@ -282,7 +325,7 @@ class ToolDoctor:
       info["profile_recon_only"] = "recon-only" in PROFILE_CAP
       info["local_policy"] = detect_target_type("127.0.0.1") == "local"
 
-      results_dir = wth_home() / "wth-results"
+      results_dir = wth_home() / RESULTS_DIR_NAME
       try:
         results_dir.mkdir(parents=True, exist_ok=True)
         probe = results_dir / ".doctor_write_test"
@@ -507,7 +550,9 @@ class ToolDoctor:
       from wth_ai.tool_runner import ToolRunner
 
       src = inspect.getsource(ToolRunner._run_command)
-      info["no_shell"] = "shell=True" not in src
+      sites = unallowlisted_shell_sites()
+      info["shell_sites"] = sites
+      info["no_shell"] = "shell=True" not in src and not sites
       if not info["no_shell"]:
         info["ok"] = False
     except Exception:
@@ -526,7 +571,6 @@ class ToolDoctor:
     """Agentic supervisor + bridge health."""
     info: dict[str, Any] = {"importable": False, "tool_count": 0, "bridge_ok": False, "ok": False}
     try:
-      from wth_ai.agents.supervisor import SupervisorAgent
       from wth_ai.agents.tool_registry import tools_for_actor
       from wth_ai.recon.agent_bridge import ReconAgentBridge
       info["importable"] = True
@@ -540,7 +584,7 @@ class ToolDoctor:
     return info
 
   def check_workspace_vault(self) -> dict[str, Any]:
-    """Aggregate workspace + vault health (used by /doctor and `wth doctor`)."""
+    """Aggregate workspace + vault health (used by /doctor and `wth-ai doctor`)."""
     ws = self.check_workspace()
     cfg = self.check_config()
     vault = self.check_vault()
@@ -607,7 +651,7 @@ class ToolDoctor:
       f"- Pip: {rt['pip']}",
       "",
       "## Workspace & Vault",
-      f"- Workspace: {'OK' if ws['complete'] else 'INCOMPLETE — run `wth setup`'}"
+      f"- Workspace: {'OK' if ws['complete'] else 'INCOMPLETE — run `wth-ai setup`'}"
       + (f" (missing: {', '.join(ws['missing_dirs'])})" if ws["missing_dirs"] else ""),
       f"- db.sqlite: {'present' if ws['db_exists'] else 'missing'}",
       f"- Config: {'valid' if cfg['valid'] else 'INVALID — ' + str(cfg['error'])}",
@@ -698,7 +742,7 @@ class ToolDoctor:
       "",
       "## Gateway & Platform (Fase 7)",
       f"- Gateway module: {'OK' if gw['importable'] else 'FAIL'} · "
-      + f"reachable: {'yes' if gw.get('reachable') else 'no (run `wth gateway run`)'}",
+      + f"reachable: {'yes' if gw.get('reachable') else 'no (run `wth-ai gateway run`)'}",
       f"- FTS memory: {'OK' if fts['ok'] else 'ISSUES'}",
       f"- Cron store: {'OK' if cron['ok'] else 'ISSUES'}",
       f"- Plugins: {plugins.get('loaded', 0)} loaded ({'OK' if plugins['ok'] else 'WARN'})",
@@ -717,7 +761,7 @@ class ToolDoctor:
           methods = ", ".join(spec.install.keys()) or "manual"
           lines.append(f"- `{tid}` ({methods})")
     lines.append("")
-    lines.append("Run: `/tools install recon.subdomain` or `wth tools install all`")
+    lines.append("Run: `/tools install recon.subdomain` or `wth-ai tools install all`")
     return "\n".join(lines)
 
   def auto_install(

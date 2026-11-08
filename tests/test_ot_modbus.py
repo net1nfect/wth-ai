@@ -48,7 +48,7 @@ def test_cli_ot_plan_prints_reads_only(tmp_path):
     repo = Path(__file__).resolve().parents[1]
     env = {**os.environ, "WTH_SKIP_SETUP": "1", "WTH_PLAIN": "1",
            "WTH_HOME": str(tmp_path / "home")}
-    proc = subprocess.run([sys.executable, str(repo / "wth-main.py"), "ot", "plan",
+    proc = subprocess.run([sys.executable, str(repo / "wth-ai-main.py"), "ot", "plan",
                            "--host", "172.28.0.10", "--unit", "2",
                            "--block", "holding:0:4"],
                           cwd=tmp_path, capture_output=True, text=True,
@@ -67,7 +67,7 @@ def test_cli_ot_plan_rejects_bad_block(tmp_path):
     repo = Path(__file__).resolve().parents[1]
     env = {**os.environ, "WTH_SKIP_SETUP": "1", "WTH_PLAIN": "1",
            "WTH_HOME": str(tmp_path / "home")}
-    proc = subprocess.run([sys.executable, str(repo / "wth-main.py"), "ot", "plan",
+    proc = subprocess.run([sys.executable, str(repo / "wth-ai-main.py"), "ot", "plan",
                            "--host", "172.28.0.10", "--block", "holding-0-4"],
                           cwd=tmp_path, capture_output=True, text=True,
                           timeout=180, env=env)

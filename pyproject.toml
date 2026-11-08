@@ -51,9 +51,3 @@ include = ["wth_ai", "tests"]
 extraPaths = ["."]
 pythonVersion = "3.10"
 typeCheckingMode = "basic"
-
-# `wth_ai` adalah paket repo ini. Tanpa ini isort memperlakukannya sebagai
-# third-party, dan blok import di `tests/` (stdlib / pytest / wth_ai) dianggap
-# tidak terurut meski gaya itu dipakai di seluruh repo.
-[tool.ruff.lint.isort]
-known-first-party = ["wth_ai"]

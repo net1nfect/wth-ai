@@ -112,6 +112,13 @@ _FINDING_STATE_FORWARD: dict[FindingState, frozenset[FindingState]] = {
 }
 
 
+def strict_state_machine() -> bool:
+    """Mode ketat: transisi state ilegal melempar, bukan diabaikan (WU-116)."""
+    import os
+
+    return any(os.environ.get(name) == "1" for name in ("WTH_TEST_MODE", "WTH_STRICT_SM"))
+
+
 def finding_state_transition_allowed(current: FindingState, new: FindingState) -> bool:
     """WU-116 (DATA-MODEL.md FindingState lifecycle) -- shared transition
     guard for Finding.state (FindingsDB) and Claim.verification_status
@@ -471,6 +478,8 @@ class Finding:
     cwe: str = ""
     created_at: str = field(default_factory=utc_now)
     updated_at: str = field(default_factory=utc_now)
+    # Item 4: attestasi verifikasi independen (dict kosong = belum ada).
+    attestation: dict = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -488,6 +497,7 @@ class Finding:
             "cwe": self.cwe,
             "created_at": self.created_at,
             "updated_at": self.updated_at,
+            "attestation": dict(self.attestation),
         }
 
 

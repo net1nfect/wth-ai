@@ -35,7 +35,7 @@ def test_bypass_default_adds_session_block(isolated):
     config = WTHConfig()
     config.agent.bypass = "default"
     block = load_bypass_block(config)
-    assert "SESSION INSTRUCTIONS (bypass: wth)" in block
+    assert "SESSION INSTRUCTIONS (bypass: wth-ai)" in block
     assert "Operating Policy" in block
 
 
@@ -157,7 +157,7 @@ def test_orchestrator_label_matches_prompt_actually_loaded(isolated, monkeypatch
     assert block == ""
 
     config.agent.bypass = "default"
-    assert WTHOrchestrator._resolve_bypass(config) == "wth"
+    assert WTHOrchestrator._resolve_bypass(config) == "wth-ai"
 
 
 def test_handler_install_then_show_and_use(isolated, tmp_path):
@@ -178,7 +178,7 @@ def test_handler_status_reports_off_by_default(isolated):
 
     out = handle_bypass(_orch(), [])
     assert "bypass: mati" in out
-    assert "wth" in out  # profil bawaan terdaftar
+    assert "wth-ai" in out  # profil bawaan terdaftar
 
 
 def test_platform_registry_exposes_bypass():

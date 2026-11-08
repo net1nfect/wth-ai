@@ -11,7 +11,7 @@ REPO = Path(__file__).resolve().parents[1]
 def _run(args, home):
     env = {**os.environ, "WTH_HOME": str(home), "WTH_SKIP_SETUP": "1",
            "WTH_PLAIN": "1"}
-    return subprocess.run([sys.executable, "wth-main.py", *args], cwd=REPO,
+    return subprocess.run([sys.executable, "wth-ai-main.py", *args], cwd=REPO,
                           capture_output=True, text=True, timeout=120, env=env)
 
 

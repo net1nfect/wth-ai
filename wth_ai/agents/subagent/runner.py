@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
-from wth_ai.agents.subagent.registry import SPECS, get_spec
+from wth_ai.agents.subagent.registry import get_spec
 
 
 @dataclass

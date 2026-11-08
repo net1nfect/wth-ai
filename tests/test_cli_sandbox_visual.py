@@ -12,7 +12,7 @@ REPO = Path(__file__).resolve().parents[1]
 def _run(args, cwd, home):
     env = {**os.environ, "WTH_SKIP_SETUP": "1", "WTH_PLAIN": "1",
            "WTH_HOME": str(home)}
-    return subprocess.run([sys.executable, str(REPO / "wth-main.py"), *args],
+    return subprocess.run([sys.executable, str(REPO / "wth-ai-main.py"), *args],
                           cwd=cwd, capture_output=True, text=True, timeout=180,
                           env=env)
 
@@ -48,10 +48,19 @@ def test_sandbox_plan_rejects_bad_mount(tmp_path):
 
 
 def test_sandbox_plan_pins_image(tmp_path):
-    proc = _run(["sandbox", "plan", "--image", "python@sha256:abc"], tmp_path,
+    digest = "deadbeef" * 8  # 64 hex
+    image = f"python@sha256:{digest}"
+    proc = _run(["sandbox", "plan", "--image", image], tmp_path,
                 tmp_path / "home")
     assert proc.returncode == 0, proc.stderr
-    assert "python@sha256:abc" in proc.stdout
+    assert image in proc.stdout
+
+
+def test_sandbox_plan_rejects_invalid_image_digest(tmp_path):
+    proc = _run(["sandbox", "plan", "--image", "python@sha256:abc"], tmp_path,
+                tmp_path / "home")
+    assert proc.returncode != 0
+    assert "image digest tidak valid" in (proc.stdout + proc.stderr)
 
 
 def _png(path: Path, width: int, height: int, value: int) -> Path:

@@ -7,6 +7,7 @@ from typing import Any
 
 from textual.widgets import RichLog
 
+from wth_ai.cli.ui.theme import THEME
 from wth_ai.cli.ui.tool_trace import ToolTracePanel
 
 
@@ -47,13 +48,13 @@ class ActivityPanel(RichLog):
         self.trace.add_pending(name, args)
         detail = _args_line(args)
         suffix = f" [dim]{detail}[/]" if detail else ""
-        self.write(f"[#58a6ff]▸ {name}[/]{suffix}", scroll_end=True)
+        self.write(f"[{THEME['brand']}]▸ {name}[/]{suffix}", scroll_end=True)
 
     def tool_end(self, name: str, result: str, ms: int) -> None:
         self.trace.complete(name, result, ms)
         ok = not (result or "").startswith("ERROR")
         icon = "✓" if ok else "✗"
-        color = "#3fb950" if ok else "#f85149"
+        color = THEME["accent"] if ok else THEME["error"]
         snippet = (result or "").replace("\n", " ").strip()[:80]
         dur = f" [dim]{ms}ms[/]" if ms else ""
         self.write(f"  [{color}]{icon} {name}[/]{dur} [dim]{snippet}[/]", scroll_end=True)
@@ -63,7 +64,7 @@ class ActivityPanel(RichLog):
         self._pct = pct
         self.trace.set_phase(phase, pct)
         if self._phase_changed(phase, pct):
-            self.write(f"[#d29922]◐ {phase}[/] [dim]{pct}%[/]", scroll_end=True)
+            self.write(f"[{THEME['warn']}]◐ {phase}[/] [dim]{pct}%[/]", scroll_end=True)
 
     def job_progress(self, job_id: str, current: int, total: int, message: str) -> None:
         pct = int(100 * current / max(total, 1))
@@ -71,28 +72,28 @@ class ActivityPanel(RichLog):
         self.set_phase(label, pct)
 
     def job_started(self, job_id: str, job_type: str) -> None:
-        self.write(f"[#58a6ff]▶ job {job_id[:8]}[/] {job_type} started", scroll_end=True)
+        self.write(f"[{THEME['brand']}]▶ job {job_id[:8]}[/] {job_type} started", scroll_end=True)
         self.set_phase(job_type or "job", 0)
 
     def job_completed(self, job_id: str) -> None:
-        self.write(f"[#3fb950]✓ job {job_id[:8]}[/] completed", scroll_end=True)
+        self.write(f"[{THEME['accent']}]✓ job {job_id[:8]}[/] completed", scroll_end=True)
         self.set_phase("idle", 100)
 
     def job_failed(self, job_id: str, reason: str) -> None:
-        self.write(f"[#f85149]✗ job {job_id[:8]}[/] {reason[:80]}", scroll_end=True)
+        self.write(f"[{THEME['error']}]✗ job {job_id[:8]}[/] {reason[:80]}", scroll_end=True)
         self.set_phase("failed", 0)
 
     def recon_completed(self, **data: object) -> None:
         target = str(data.get("target", ""))
         sync = data.get("graph_sync") or {}
         nodes = sync.get("nodes", 0) if isinstance(sync, dict) else 0
-        line = f"[#3fb950]✓ recon[/] {target}"
+        line = f"[{THEME['accent']}]✓ recon[/] {target}"
         if nodes:
             line += f" · graph +{nodes} nodes"
         self.write(line, scroll_end=True)
 
     def subagent_line(self, agent_id: str, status: str, summary: str = "") -> None:
-        self.write(f"[#d29922]◆ subagent {agent_id}[/] {status} {summary[:60]}", scroll_end=True)
+        self.write(f"[{THEME['warn']}]◆ subagent {agent_id}[/] {status} {summary[:60]}", scroll_end=True)
 
     def llm_start(self, role: str, provider: str, model: str, meta: dict | None = None) -> None:
         meta = meta or {}
@@ -101,7 +102,7 @@ class ActivityPanel(RichLog):
         host_bit = f" @ {host}" if host else ""
         self.trace.set_llm(f"llm {role} · {model}")
         self.write(
-            f"[#a371f7]▸ llm {role}[/] [dim]{model}[/] ({provider}{host_bit} · {tools_n} tools)",
+            f"[{THEME['plan']}]▸ llm {role}[/] [dim]{model}[/] ({provider}{host_bit} · {tools_n} tools)",
             scroll_end=True,
         )
 
@@ -115,11 +116,11 @@ class ActivityPanel(RichLog):
         err = str(meta.get("error", ""))
         self.trace.clear_llm()
         if err:
-            self.write(f"[#f85149]✗ llm {role}[/] {ms}ms — {err[:80]}", scroll_end=True)
+            self.write(f"[{THEME['error']}]✗ llm {role}[/] {ms}ms — {err[:80]}", scroll_end=True)
         else:
             tool_calls = meta.get("tool_calls", 0)
             self.write(
-                f"[#3fb950]✓ llm {role}[/] {ms}ms · {model} · {tool_calls} tool calls",
+                f"[{THEME['accent']}]✓ llm {role}[/] {ms}ms · {model} · {tool_calls} tool calls",
                 scroll_end=True,
             )
 
@@ -139,7 +140,7 @@ class ActivityPanel(RichLog):
 
     def thinking(self, label: str = "working") -> None:
         self.trace.set_phase(label, self._pct)
-        self.write(f"[#d29922]◐ {label}…[/]", scroll_end=True)
+        self.write(f"[{THEME['warn']}]◐ {label}…[/]", scroll_end=True)
 
     def clear_feed(self) -> None:
         self.clear()

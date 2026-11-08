@@ -1,11 +1,11 @@
 """Adaptive tables: rich on a terminal, aligned plain text through a pipe.
 
-Every list command printed `click.echo` lines, so `wth usage` / the 200+ tool
+Every list command printed `click.echo` lines, so `wth-ai usage` / the 200+ tool
 registry / model list read as undifferentiated text and gave no scannable
 structure -- while the REPL next to them was fully themed.
 
 The rule mirrors `compact_enabled()`: a pipe, `WTH_COMPACT=1` or `--plain` gets
-plain text with NO escape codes (so `wth usage | grep`, logs and CI stay
+plain text with NO escape codes (so `wth-ai usage | grep`, logs and CI stay
 machine-readable), and a real terminal gets a rich table using the shared THEME.
 """
 

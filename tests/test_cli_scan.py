@@ -13,7 +13,7 @@ def _run(args, tmp_path, extra=None):
     env = {**os.environ, "WTH_HOME": str(tmp_path / "home"),
            "WTH_SKIP_SETUP": "1", "WTH_PLAIN": "1"}
     env.update(extra or {})
-    return subprocess.run([sys.executable, "wth-main.py", *args], cwd=REPO,
+    return subprocess.run([sys.executable, "wth-ai-main.py", *args], cwd=REPO,
                           capture_output=True, text=True, timeout=180, env=env)
 
 
@@ -42,9 +42,19 @@ def test_verify_ok_then_tamper_fails(tmp_path):
 
 
 def test_non_interactive_exits_two_on_findings(tmp_path):
+    """P0-2: exit 2 hanya bila ada kartu izin yang benar-benar ada."""
+    from wth_ai.scope_card import ScopeCard
+
     out = tmp_path / "out"
     proc = _run(["scan", "--offline-demo", "-n", "--fail-on", "high",
                  "--out", str(out)], tmp_path)
+    assert proc.returncode == 0, (proc.returncode, proc.stdout, proc.stderr)
+
+    ScopeCard(target="fixture", domains=["fixture"], authorized=True).write(
+        tmp_path / "home" / "scope_card.json")
+    out2 = tmp_path / "out2"
+    proc = _run(["scan", "--offline-demo", "-n", "--fail-on", "high",
+                 "--out", str(out2)], tmp_path)
     assert proc.returncode == 2, (proc.returncode, proc.stdout, proc.stderr)
 
 
@@ -61,7 +71,7 @@ def test_relative_out_is_resolved_against_caller_cwd(tmp_path):
     repo_out = REPO / "out"
     before = repo_out.exists()
     proc = subprocess.run(
-        [sys.executable, str(REPO / "wth-main.py"), "scan", "--offline-demo",
+        [sys.executable, str(REPO / "wth-ai-main.py"), "scan", "--offline-demo",
          "--out", "out/"],
         cwd=tmp_path, capture_output=True, text=True, timeout=180, env=env)
     assert proc.returncode == 0, proc.stderr

@@ -88,7 +88,7 @@ def test_write_pdf_and_cli_format(tmp_path):
                                                encoding="utf-8")
     env = {**os.environ, "WTH_SKIP_SETUP": "1", "WTH_PLAIN": "1"}
     proc = subprocess.run(
-        [sys.executable, str(REPO / "wth-main.py"), "report", "--bundle", "out/bundle",
+        [sys.executable, str(REPO / "wth-ai-main.py"), "report", "--bundle", "out/bundle",
          "--format", "pdf"], cwd=tmp_path, capture_output=True, text=True,
         timeout=180, env=env)
     assert proc.returncode == 0, proc.stderr

@@ -6,7 +6,6 @@ import os
 import sys
 from typing import Any
 
-import click
 from rich.console import Console
 from rich.prompt import Confirm, Prompt
 
@@ -308,7 +307,7 @@ def build_setup_payload(
     agent_mode: str = "",
     require_llm: bool | None = None,
 ) -> dict[str, Any]:
-    """Ubah flag `wth setup` menjadi bentuk yang dipahami `_apply_non_interactive`.
+    """Ubah flag `wth-ai setup` menjadi bentuk yang dipahami `_apply_non_interactive`.
 
     Nama secret mengikuti konvensi `SecretsConfig`: 9router memakai awalan
     `router9`, provider lain memakai namanya sendiri. Tanpa pemetaan ini,

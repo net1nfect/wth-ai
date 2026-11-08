@@ -11,9 +11,12 @@ def discord_allowed(
     guild_id: int | None = None,
     channel_id: int | None = None,
 ) -> bool:
-    if config.discord_guild_ids and guild_id and guild_id not in config.discord_guild_ids:
+    # P3-2: an allowlist must fail CLOSED. `guild_id and ...` skipped the check
+    # whenever the id was absent, so a DM (no guild) sailed through the very
+    # allowlist meant to stop it. Configured + no id == deny.
+    if config.discord_guild_ids and guild_id not in config.discord_guild_ids:
         return False
-    if config.discord_channel_ids and channel_id and channel_id not in config.discord_channel_ids:
+    if config.discord_channel_ids and channel_id not in config.discord_channel_ids:
         return False
     return True
 

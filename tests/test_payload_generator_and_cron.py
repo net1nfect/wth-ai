@@ -220,7 +220,7 @@ def test_cron_registers_an_autopilot_entry(tmp_path):
     assert any(e.job_type == "autopilot" for e in store.list())
 
 
-def test_scheduler_enqueues_an_autopilot_job_with_authorization(tmp_path):
+def test_scheduler_enqueues_an_autopilot_job_without_authorization_claim(tmp_path):
     store = CronStore(tmp_path / "cron.json")
     store.add(target="example.com", schedule="every 6h", job_type="autopilot")
     manager = _StubManager()
@@ -230,7 +230,11 @@ def test_scheduler_enqueues_an_autopilot_job_with_authorization(tmp_path):
     call = manager.calls[0]
     assert call["job_type"] == "autopilot"
     assert call["target"] == "example.com"
-    assert call["metadata"]["authorized"] is True, "handler fail-closed butuh flag ini"
+    # P1-1: cron TIDAK boleh menanami `authorized=True`. Otorisasi dibaca handler
+    # dari scope_card.json; metadata authorized adalah klaim palsu/tersesat.
+    assert "authorized" not in call.get("metadata", {}), (
+        "cron tidak boleh mengklaim otorisasi — itu urusan scope card"
+    )
 
 
 def test_autopilot_handler_is_registered_and_fails_closed():
@@ -249,8 +253,10 @@ def test_autopilot_handler_is_registered_and_fails_closed():
         def should_stop(self): return False
 
     result = handler_autopilot(_Job(), _Ctx())
-    assert result["status"] == "blocked", result
-    assert "authorized" in result["reason"]
+    # Fail-closed: tanpa scope card valid, autopilot berhenti sebelum bridge dibuat
+    # (P1-1). Status boleh failed atau blocked, asal tidak lanjut probing.
+    assert result["status"] in ("failed", "blocked"), result
+    assert "scope" in result.get("error", "") + result.get("reason", "")
 
 
 def test_autopilot_handler_reads_the_destructive_flag_from_the_saved_scope():

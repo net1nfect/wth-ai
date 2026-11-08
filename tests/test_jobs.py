@@ -51,6 +51,15 @@ def _manager(bus=None) -> JobManager:
     return JobManager(WTHConfig(), bus=bus or EventBus())
 
 
+def _write_scope_card(base: Path, target: str = "example.com") -> None:
+    """P0-1: handler_recon membaca scope card dari disk, bukan metadata job."""
+    from wth_ai.scope_card import ScopeCard
+
+    ScopeCard(target=target, domains=[target], authorized=True).write(
+        base / "scope_card.json"
+    )
+
+
 # --- store ---
 
 def test_create_and_get_job():
@@ -101,7 +110,7 @@ def test_save_result_writes_file():
         job = store.create_job(Job(type="recon", target="a.com"))
         store.save_result(job.job_id, {"findings": 3})
         assert store.get_job(job.job_id).result == {"findings": 3}
-        assert (home / "wth-results" / job.job_id / "result.json").exists()
+        assert (home / "wth-ai-results" / job.job_id / "result.json").exists()
 
 
 # --- queue ---
@@ -123,11 +132,11 @@ def test_enqueue_dequeue_priority():
 def test_worker_run_once_success():
     with temp_home():
         mgr = _manager()
-        # Explicit authorization: the recon handler is fail-closed now
-        # (`metadata.authorized`, default False), and this test is about the
-        # worker lifecycle, not about the authorization gate. The gate itself is
-        # covered by test_recon_job_without_authorization_fails_closed below.
-        job = mgr.create_job("recon", target="example.com", metadata={"authorized": True})
+        # This test is about the worker lifecycle, not the scope gate, so it
+        # provides the real artifact the handler requires (P0-1). The gate itself
+        # is covered by test_recon_job_without_scope_card_fails_closed below.
+        _write_scope_card(Path(os.environ["WTH_HOME"]))
+        job = mgr.create_job("recon", target="example.com")
         res = WorkerEngine(mgr).run_once()
         assert res["status"] == "completed"
         done = mgr.get_job(job.job_id)
@@ -136,28 +145,29 @@ def test_worker_run_once_success():
         assert done.progress["current"] == 100
 
 
-def test_recon_job_without_authorization_fails_closed():
-    """Review pre-merge: `handler_recon` defaulted `authorized` to True, so any
-    caller that omitted the flag got a live scan against an unconfirmed target --
-    and the authorization gate in `ReconEngine.run()` could never fire, because
-    nothing ever sent authorized=False. It now matches
-    `run_executor_job()`'s fail-closed default."""
+def test_recon_job_without_scope_card_fails_closed():
+    """P0-1: otorisasi dibaca dari `scope_card.json`, bukan dari metadata job.
+    Sebelum ini setiap pemanggil hardcode `authorized=True`, sehingga kartu
+    tidak pernah diperiksa dan `wth recon run <host apa pun>` langsung memindai.
+    Tanpa kartu, job gagal SEBELUM engine dibuat."""
     with temp_home():
         mgr = _manager()
-        job = mgr.create_job("recon", target="example.com")  # no metadata
+        job = mgr.create_job("recon", target="example.com",
+                             metadata={"authorized": True})  # metadata saja tidak cukup
         res = WorkerEngine(mgr).run_once()
         assert res["status"] == "failed"
         done = mgr.get_job(job.job_id)
         assert done is not None
         assert done.status == "failed"
-        assert "authoriz" in (done.error or "").lower()
+        assert "scope" in (done.error or "").lower()
 
 
-def test_recon_job_with_explicit_authorization_runs():
+def test_recon_job_with_scope_card_runs():
     """The happy path for every real operator entry point."""
-    with temp_home():
+    with temp_home() as home:
+        _write_scope_card(home)
         mgr = _manager()
-        job = mgr.create_job("recon", target="example.com", metadata={"authorized": True})
+        job = mgr.create_job("recon", target="example.com")
         res = WorkerEngine(mgr).run_once()
         assert res["status"] == "completed"
 
@@ -174,12 +184,13 @@ def test_worker_handles_exception_marks_failed():
 
 
 def test_worker_emits_lifecycle_events():
-    with temp_home():
+    with temp_home() as home:
+        _write_scope_card(home, "x.com")
         bus = EventBus()
         mgr = _manager(bus=bus)
         seen: list[str] = []
         bus.subscribe(lambda e: seen.append(e.type))
-        mgr.create_job("recon", target="x.com", metadata={"authorized": True})
+        mgr.create_job("recon", target="x.com")
         WorkerEngine(mgr).run_once()
         assert "job.created" in seen
         assert "job.started" in seen
@@ -210,17 +221,16 @@ def test_retry_job():
 # --- approval gate ---
 
 def test_approval_gate_approved_continues():
-    with temp_home():
+    with temp_home() as home:
+        # The scope card is provided so these tests exercise the APPROVAL gate,
+        # not the scope gate -- otherwise the denial test would pass for the
+        # wrong reason.
+        _write_scope_card(home, "x.com")
         bus = EventBus()
         mgr = _manager(bus=bus)
         seen: list[str] = []
         bus.subscribe(lambda e: seen.append(e.type))
-        # `authorized` is set explicitly so these tests exercise the APPROVAL
-        # gate, not the (now fail-closed) authorization gate -- otherwise the
-        # denial test would pass for the wrong reason.
-        job = mgr.create_job(
-            "recon", target="x.com", requires_approval=True, metadata={"authorized": True},
-        )
+        job = mgr.create_job("recon", target="x.com", requires_approval=True)
         worker = WorkerEngine(mgr)
         first = worker.run_once()
         assert first["status"] == "waiting_approval"
@@ -285,11 +295,12 @@ def test_policy_forbidden_target():
 def test_no_secret_plaintext_in_job_artifacts():
     with temp_home() as home:
         SecretVault().set("openrouter_api_key", "sk-LEAK-SECRET-123")
+        _write_scope_card(home, "x.com")
         mgr = _manager()
         job = mgr.create_job("recon", target="x.com")
         WorkerEngine(mgr).run_once()
         log = mgr.logs(job.job_id)
-        result_file = (home / "wth-results" / job.job_id / "result.json").read_text()
+        result_file = (home / "wth-ai-results" / job.job_id / "result.json").read_text()
         assert "sk-LEAK-SECRET-123" not in log
         assert "sk-LEAK-SECRET-123" not in result_file
 
@@ -342,12 +353,12 @@ def test_cli_job_create_and_list():
         env = {**os.environ, "WTH_HOME": str(home), "WTH_SKIP_SETUP": "1"}
         root = Path(__file__).resolve().parents[1]
         created = subprocess.run(
-            [sys.executable, str(root / "wth-main.py"), "job", "create", "recon", "--target", "example.com"],
+            [sys.executable, str(root / "wth-ai-main.py"), "job", "create", "recon", "--target", "example.com"],
             capture_output=True, text=True, env=env, cwd=str(root),
         )
         assert "Created" in created.stdout, created.stderr
         listed = subprocess.run(
-            [sys.executable, str(root / "wth-main.py"), "job", "list"],
+            [sys.executable, str(root / "wth-ai-main.py"), "job", "list"],
             capture_output=True, text=True, env=env, cwd=str(root),
         )
         assert "recon" in listed.stdout

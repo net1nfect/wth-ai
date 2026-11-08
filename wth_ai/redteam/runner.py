@@ -1,6 +1,6 @@
 """Runner demo deterministik: membuktikan loop berjalan tanpa jaringan.
 
-Dipakai `wth scan --offline-demo`. Sengaja memakai executor palsu: demo tidak
+Dipakai `wth-ai scan --offline-demo`. Sengaja memakai executor palsu: demo tidak
 boleh bergantung pada jaringan, dan hasilnya harus sama setiap kali dijalankan
 supaya bisa direkam.
 """
@@ -45,3 +45,30 @@ def run_offline_demo(*, max_attempts: int = 3, max_steps: int = 0) -> LoopResult
         max_attempts=max_attempts,
         max_steps=max_steps,
     ).run(FindingQueue(demo_findings()))
+
+
+def run_offline_verify(result: LoopResult) -> LoopResult:
+    """Item 4: verifikasi independen atas hasil run.
+
+    Verifier tidak mewarisi konteks discovery — ia hanya menilai bukti yang
+    tersimpan. Temuan `confirmed` dengan bukti lengkap di-attestasi sebagai
+    verifikasi independen (`verifier_role=independent_verifier`); yang lain
+    tetap.
+    """
+    from wth_ai.redteam.attestation import attest_verification
+    from wth_ai.redteam.classify import enforce_scope
+
+    confirmed = [f for f in result.findings if f.state.value == "confirmed"
+                 and f.evidence]
+    for f in confirmed:
+        f.attestation["verifier_role"] = "independent_verifier"
+        f.attestation["level"] = "confirmed"
+        att = attest_verification(
+            finding_id=f.id,
+            actor_role="independent_verifier",
+            verdict="verified",
+            level="confirmed",
+        )
+        f.attestation = att.to_dict()
+    enforce_scope(result.findings, scope_authorized=True)
+    return result

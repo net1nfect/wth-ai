@@ -11,7 +11,7 @@ REPO = Path(__file__).resolve().parents[1]
 def test_redteam_flag_is_advertised():
     env = {**os.environ, "WTH_SKIP_SETUP": "1", "WTH_PLAIN": "1",
            "COLUMNS": "120"}
-    out = subprocess.run([sys.executable, "wth-main.py", "interactive", "--help"],
+    out = subprocess.run([sys.executable, "wth-ai-main.py", "interactive", "--help"],
                          cwd=REPO, capture_output=True, text=True, timeout=120,
                          env=env)
     assert out.returncode == 0, out.stderr

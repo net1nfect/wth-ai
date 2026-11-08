@@ -119,8 +119,25 @@ def test_header_progress_bar():
     pytest.importorskip("textual")
     from wth_ai.cli.tui.widgets.header import HeaderBar, _bar
 
-    assert "█" in _bar(50)
+    # P2-5: the glyphs come from `theme` now, so this bar and `budget_bar`
+    # draw the same alphabet instead of `█`/`░` vs `▰`/`▱`.
+    from wth_ai.cli.ui.theme import BAR_FULL
+
+    assert BAR_FULL in _bar(50)
     assert "50%" in _bar(50)
+
+
+def test_header_carries_the_planner_model():
+    """P2-1: the TUI header had no model at all — three surfaces disagreed."""
+    pytest.importorskip("textual")
+    from wth_ai.cli.tui.widgets.header import HeaderBar
+
+    header = HeaderBar()
+    header.update_status(
+        version="1.0.0", target="example.com", perm="ask",
+        llm="online", phase="idle", model="routed/model-b",
+    )
+    assert "model-b" in str(header.render())
 
 
 def test_activity_panel_append_only():
@@ -152,11 +169,87 @@ def test_render_status_line_unicode():
     state.session_id = "abcd1234-5678"
     state.scope.target = "example.com"
     line = render_status_line(state, WTHConfig(), llm_online=True, agent_phase="recon")
-    assert "wth v" in line
+    assert "wth-ai v" in line
     assert "example.com" in line
     assert STATUS_ONLINE in line
     assert "phase recon" in line
     assert "┌" not in line
+
+
+def test_status_line_omits_unmeasured_coverage():
+    """P2-3: `cov 0%` was printed before the graph was ever walked, which reads
+    as "0% covered" instead of "not measured"."""
+    from wth_ai.cli.ui.status_panel import render_status_line
+    from wth_ai.config import WTHConfig
+    from wth_ai.models import SessionState
+
+    state = SessionState()
+    assert "cov " not in render_status_line(state, WTHConfig())
+    state.metadata["graph_coverage"] = {"coverage_pct": 0}
+    assert "cov 0%" in render_status_line(state, WTHConfig())
+
+
+def test_context_bar_omits_an_unmeasured_context():
+    """P2-3: `ctx 0` means "no conversation yet", not "0 tokens used"."""
+    from wth_ai.cli.ui.context_bar import render_context_bar
+    from wth_ai.models import SessionState
+    from unittest.mock import MagicMock
+
+    orch = MagicMock()
+    orch.state = SessionState()
+    orch.state.conversation = []
+    orch.client.model_for_role.return_value = ("m", "m")
+    orch.client.role_config.return_value = MagicMock(type="openrouter")
+    orch.client.provider_for_role.return_value.get_context_length.return_value = 0
+    assert "ctx " not in render_context_bar(orch)
+    orch.state.conversation = [{"content": "x" * 400}]
+    assert "ctx 100" in render_context_bar(orch)
+
+
+def test_every_surface_names_the_same_tool_registry_the_same_way():
+    """P2-4: the agent registry (215 tools) is called `agent-tools` in the status
+    line, `tools` at startup and `Tools` in the sidebar, while `/tools list`
+    counts a DIFFERENT registry (recon, 346). One word must not mean two sets."""
+    from wth_ai.cli.ui.status_panel import render_status_line
+    from wth_ai.config import WTHConfig
+    from wth_ai.models import SessionState
+
+    status = render_status_line(
+        SessionState(), WTHConfig(), tools_installed=18, tools_total=215,
+    )
+    assert "agent-tools 18/215" in status
+
+    from wth_ai.cli.tui.widgets.sidebar import SidebarPanel
+
+    sidebar = SidebarPanel()
+    sidebar.update_context(
+        skills=[], tools_installed=18, tools_total=215, queue=0,
+    )
+    sidebar_text = str(sidebar.render())
+    assert "agent-tools" in sidebar_text.lower() and "18/215" in sidebar_text, sidebar_text
+
+    # The 346-tool RECON registry -- what `/tools list` counts -- must say so
+    # wherever it is shown, instead of being a second thing called `tools`.
+    from wth_ai.cli.ui.banner import _context_row
+
+    row = _context_row(
+        config=None, extra={"tools_total": 346, "tools_installed": 23},
+    ).plain
+    assert "recon-tools 23/346" in row, row
+
+
+def test_header_model_absent_renders_no_dangling_separator():
+    """P2-4 companion: an empty field must leave no stray `·` behind."""
+    pytest.importorskip("textual")
+    from wth_ai.cli.tui.widgets.header import HeaderBar
+
+    header = HeaderBar()
+    header.update_status(
+        version="1.0.0", target="t", perm="ask", llm="offline", phase="idle",
+    )
+    text = str(header.render())
+    assert "model:" not in text
+    assert "· ·" not in text
 
 
 def test_slash_completer_yields_help():
@@ -355,3 +448,4 @@ def test_tui_header_and_footer_are_populated():
     assert "WTH-AI" in header
     assert "example.com" in header, header
     assert "ctrl+p" in footer.lower() or "palette" in footer.lower(), footer
+

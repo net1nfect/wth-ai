@@ -22,7 +22,72 @@ def gateway_status_path() -> Path:
     return wth_home() / "runtime" / "gateway.status.json"
 
 
-def is_process_alive(pid: int) -> bool:
+def _proc_state_ticks(pid: int) -> int | None:
+    """Start time (clock ticks) of a process from /proc/<pid>/stat.
+
+    Field 22 (starttime) of the stat format. `comm` (field 2) may contain
+    spaces/parens, so we split after the last ')' rather than by whitespace
+    from the left.
+    """
+    try:
+        with open(f"/proc/{pid}/stat", encoding="utf-8") as fh:
+            data = fh.read()
+    except (OSError, ValueError):
+        return None
+    idx = data.rfind(")")
+    if idx < 0:
+        return None
+    fields = data[idx + 2:].split()
+    # After ') ' the first token is state (field 3); starttime (field 22)
+    # is therefore at local index 19.
+    if len(fields) <= 19:
+        return None
+    try:
+        return int(fields[19])
+    except ValueError:
+        return None
+
+
+def _gateway_identity() -> tuple[int, int | None] | None:
+    """Return (pid, start_ticks) recorded in the pid file, or None."""
+    path = gateway_pid_path()
+    if not path.exists():
+        return None
+    try:
+        text = path.read_text(encoding="utf-8").strip()
+    except OSError:
+        return None
+    parts = text.splitlines()
+    if not parts:
+        return None
+    try:
+        pid = int(parts[0].strip())
+    except ValueError:
+        return None
+    start: int | None = None
+    if len(parts) >= 2 and parts[1].strip():
+        try:
+            start = int(parts[1].strip())
+        except ValueError:
+            start = None
+    return pid, start
+
+
+def write_gateway_pid(pid: int) -> None:
+    """Write pid file as `<pid>\\n<start_ticks>\\n`.
+
+    The second line records the process start time so later liveness checks
+    can detect PID reuse (P2-1): a live PID whose start time differs is a
+    different process and must not be signalled.
+    """
+    path = gateway_pid_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    start = _proc_state_ticks(pid)
+    text = f"{pid}\n" + (f"{start}\n" if start is not None else "")
+    path.write_text(text, encoding="utf-8")
+
+
+def is_process_alive(pid: int, *, expected_start: int | None = None) -> bool:
     if pid <= 0:
         return False
     try:
@@ -31,6 +96,10 @@ def is_process_alive(pid: int) -> bool:
         return False
     except PermissionError:
         return True
+    if expected_start is not None:
+        actual = _proc_state_ticks(pid)
+        if actual is None or actual != expected_start:
+            return False
     return True
 
 
@@ -39,16 +108,18 @@ def read_gateway_pid() -> int | None:
     if not path.exists():
         return None
     try:
-        return int(path.read_text(encoding="utf-8").strip())
-    except (OSError, ValueError):
+        return int(path.read_text(encoding="utf-8").strip().splitlines()[0])
+    except (OSError, ValueError, IndexError):
         return None
 
 
 def cleanup_stale_runtime() -> bool:
     """Remove pid/socket files when the owning process is gone."""
-    pid = read_gateway_pid()
-    if pid and is_process_alive(pid):
-        return False
+    ident = _gateway_identity()
+    if ident:
+        pid, start = ident
+        if is_process_alive(pid, expected_start=start):
+            return False
     removed = False
     for path in (gateway_pid_path(), gateway_socket_path()):
         if path.exists():
@@ -62,10 +133,12 @@ def cleanup_stale_runtime() -> bool:
 
 def is_gateway_running() -> bool:
     cleanup_stale_runtime()
-    pid = read_gateway_pid()
-    if pid and is_process_alive(pid):
-        sock = gateway_socket_path()
-        return sock.exists() and sock.is_socket()
+    ident = _gateway_identity()
+    if ident:
+        pid, start = ident
+        if is_process_alive(pid, expected_start=start):
+            sock = gateway_socket_path()
+            return sock.exists() and sock.is_socket()
     return False
 
 
@@ -85,8 +158,12 @@ def write_gateway_status(state: str, **extra: Any) -> None:
 
 def gateway_status_info() -> dict[str, Any]:
     cleanup_stale_runtime()
-    pid = read_gateway_pid()
-    alive = bool(pid and is_process_alive(pid))
+    ident = _gateway_identity()
+    alive = False
+    pid: int | None = None
+    if ident:
+        pid, start = ident
+        alive = is_process_alive(pid, expected_start=start)
     sock = gateway_socket_path()
     info: dict[str, Any] = {
         "running": alive and sock.is_socket() if sock.exists() else False,
@@ -174,11 +251,12 @@ def spawn_background(config_path: str) -> int:
 
 def stop_gateway(*, timeout: float = 10.0) -> bool:
     """Send SIGTERM to the gateway PID and wait for exit."""
-    pid = read_gateway_pid()
-    if not pid:
+    ident = _gateway_identity()
+    if not ident:
         cleanup_stale_runtime()
         return False
-    if not is_process_alive(pid):
+    pid, start = ident
+    if not is_process_alive(pid, expected_start=start):
         cleanup_stale_runtime()
         write_gateway_status("stopped", reason="stale pid")
         return True
@@ -191,7 +269,7 @@ def stop_gateway(*, timeout: float = 10.0) -> bool:
 
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
-        if not is_process_alive(pid):
+        if not is_process_alive(pid, expected_start=start):
             cleanup_stale_runtime()
             write_gateway_status("stopped", reason="sigterm")
             return True

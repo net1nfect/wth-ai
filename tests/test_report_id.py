@@ -74,7 +74,7 @@ def test_cli_writes_report_id(tmp_path):
     env = {**os.environ, "WTH_HOME": str(tmp_path / "home"), "WTH_SKIP_SETUP": "1",
            "WTH_PLAIN": "1"}
     proc = subprocess.run(
-        [sys.executable, str(REPO / "wth-main.py"), "report", "--bundle", "out/bundle",
+        [sys.executable, str(REPO / "wth-ai-main.py"), "report", "--bundle", "out/bundle",
          "--format", "id"],
         cwd=tmp_path, capture_output=True, text=True, timeout=180, env=env)
     assert proc.returncode == 0, proc.stderr

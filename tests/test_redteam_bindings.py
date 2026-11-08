@@ -1,5 +1,9 @@
 """Binding: tab harus priority (kalau tidak, Input yang memakannya)."""
 
+import pytest
+
+pytest.importorskip("textual")
+
 from wth_ai.cli.tui.redteam.app import WthApp
 
 

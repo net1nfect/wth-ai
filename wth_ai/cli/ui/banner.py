@@ -15,7 +15,7 @@ from rich.text import Text
 
 from wth_ai import __version__
 from wth_ai.cli.ui.renderer import compact_enabled
-from wth_ai.cli.ui.theme import LOGO, SEP, STATUS_OFFLINE, STATUS_ONLINE, THEME, category_icon
+from wth_ai.cli.ui.theme import LOGO, SEP, STATUS_OFFLINE, STATUS_ONLINE, THEME
 
 if TYPE_CHECKING:
     from wth_ai.config import WTHConfig
@@ -48,15 +48,21 @@ def _context_row(*, config: WTHConfig | None, extra: dict[str, Any] | None = Non
         row.append(f"{label} ", style=THEME["muted"])
         row.append(value, style=colour)
 
-    models = getattr(config, "models", None) if config is not None else None
-    planner = getattr(models, "planner", "") if models is not None else ""
+    # P2-1: show the model the router would actually call. `_role_config`
+    # prefers `providers[role]` and falls back to the legacy `models.*` map;
+    # reading `models.planner` alone printed a model that was not in use after
+    # a per-role override.
+    providers = getattr(config, "providers", None) if config is not None else None
+    routed = providers.get("planner") if isinstance(providers, dict) else None
+    if routed is not None:
+        planner = getattr(routed, "model", "") or ""
+    else:
+        models = getattr(config, "models", None) if config is not None else None
+        planner = getattr(models, "planner", "") if models is not None else ""
     if planner:
         _add("model", str(planner).split("/")[-1][:28], THEME["plan"])
 
-    providers = getattr(config, "providers", None) if config is not None else None
-    ptype = ""
-    if isinstance(providers, dict) and "planner" in providers:
-        ptype = str(getattr(providers["planner"], "type", "") or "")
+    ptype = str(getattr(routed, "type", "") or "") if routed is not None else ""
     if ptype:
         _add("provider", ptype, THEME["accent"])
 
@@ -67,11 +73,10 @@ def _context_row(*, config: WTHConfig | None, extra: dict[str, Any] | None = Non
     if extra.get("profile"):
         _add("profile", str(extra["profile"]), THEME["text"])
     if extra.get("tools_total"):
-        # Labelled "recon": the agent tool registry (215 tools the LLM can call)
-        # is a DIFFERENT set from the recon tool registry (346). Two counts both
-        # called "tools" on one screen is not an inconsistency to explain away,
-        # it is an ambiguity to remove.
-        _add("recon", f"{extra.get('tools_installed', 0)}/{extra['tools_total']}", THEME["muted"])
+        # P2-4: `tools` named two different registries. The 346-tool recon
+        # registry (`/tools list`) is `recon-tools`; the 215-tool agent registry
+        # is `agent-tools`. One word must not mean two sets.
+        _add("recon-tools", f"{extra.get('tools_installed', 0)}/{extra['tools_total']}", THEME["muted"])
     return row
 
 

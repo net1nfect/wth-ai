@@ -12,8 +12,6 @@ secrets must never be written to config or logs.
 from __future__ import annotations
 
 import json
-import os
-import stat
 from abc import ABC, abstractmethod
 from pathlib import Path
 

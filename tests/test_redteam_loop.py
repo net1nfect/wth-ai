@@ -16,6 +16,18 @@ class _Exec:
         return self.outcomes.get(finding.id, AttemptOutcome())
 
 
+class _ExecWithContext(_Exec):
+    """Executor yang meninggalkan konteks rantai pada finding."""
+
+    def __init__(self, outcomes, context=None):
+        super().__init__(outcomes)
+        self.context = context or {}
+
+    def attempt(self, finding, *, attempt_no):
+        finding.attestation.update(self.context)
+        return super().attempt(finding, attempt_no=attempt_no)
+
+
 def _f(fid):
     return Finding(id=fid, hypothesis=f"hyp {fid}")
 
@@ -65,3 +77,18 @@ def test_max_steps_marks_budget_hit():
         FindingQueue([_f("F-1"), _f("F-2")]))
     assert result.budget_hit is True
     assert result.attempted == 1
+
+
+def test_chain_context_survives_classify_and_is_mined():
+    """Konteks rantai (credentials) menempel dan menghasilkan chain setelah loop."""
+    exec_ = _ExecWithContext(
+        {"F-1": CONFIRMING, "F-2": CONFIRMING, "F-3": CONFIRMING},
+        context={"credentials": ["userB:pass"]},
+    )
+    queue = FindingQueue([_f("F-1"), _f("F-2"), _f("F-3")])
+    result = RedTeamLoop(executor=exec_, max_attempts=1).run(queue)
+    assert result.confirmed == 3
+    # Setiap finding yang membawa credentials menghasilkan satu chain.
+    assert len(result.chains) == 3
+    assert all(c.root.startswith("F-") for c in result.chains)
+    assert result.chains[0].links[0]["context"]["credentials"] == ["userB:pass"]

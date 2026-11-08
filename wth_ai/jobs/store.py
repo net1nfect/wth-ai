@@ -2,7 +2,7 @@
 
 DB: ~/.wth-ai/data/jobs.sqlite
 Logs: ~/.wth-ai/logs/jobs/<job_id>.log
-Result mirror: ~/.wth-ai/wth-results/<job_id>/result.json
+Result mirror: ~/.wth-ai/wth-ai-results/<job_id>/result.json
 """
 
 from __future__ import annotations
@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Any
 
 from wth_ai.jobs.model import PRIORITY_RANK, Job
-from wth_ai.workspace import secure_file, wth_home
+from wth_ai.workspace import RESULTS_DIR_NAME, secure_file, wth_home
 
 _COLUMNS = (
     "job_id", "type", "status", "priority", "created_at", "updated_at",
@@ -34,7 +34,7 @@ class JobStore:
         self.home = home or wth_home()
         self.db_path = db_path or (self.home / "data" / "jobs.sqlite")
         self.logs_dir = self.home / "logs" / "jobs"
-        self.results_dir = self.home / "wth-results"
+        self.results_dir = self.home / RESULTS_DIR_NAME
         self._init_db()
 
     def _conn(self) -> sqlite3.Connection:

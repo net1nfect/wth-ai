@@ -35,7 +35,7 @@ TEMPLATE = """# {title}
 
 ## Bukti
 
-Tersedia di bundel: `{evidence}` (verifikasi dengan `wth verify <bundle>`).
+Tersedia di bundel: `{evidence}` (verifikasi dengan `wth-ai verify <bundle>`).
 Bukti tidak disalin ke dokumen ini agar hash bundel tetap menjadi rujukan tunggal.
 
 ## Timeline

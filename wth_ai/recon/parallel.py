@@ -34,7 +34,6 @@ import os
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
-from pathlib import Path
 from typing import Any, Callable, Iterable
 
 #: Workers per profile. `budget` stays sequential on purpose: it exists for

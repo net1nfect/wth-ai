@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from textual.widgets import Static
 
+from wth_ai.cli.ui.theme import THEME
+
 
 class SidebarPanel(Static):
     def update_context(
@@ -28,13 +30,16 @@ class SidebarPanel(Static):
         graph_line = f"{graph_nodes} nodes · {graph_coverage:.0f}% tested"
         if top_types:
             graph_line += f"\n  {top_types}"
-        status = "[bold #d29922]● RUNNING[/]" if busy else "[#3fb950]● idle[/]"
+        status = (
+            f"[bold {THEME['warn']}]● RUNNING[/]" if busy
+            else f"[{THEME['accent']}]● idle[/]"
+        )
         self.update(
-            f"[bold #58a6ff]Context[/]\n\n"
+            f"[bold {THEME['brand']}]Context[/]\n\n"
             f"Status: {status}\n"
             f"Phase: [bold]{phase}[/]\n\n"
             f"[bold]Skills[/]\n  {skill_line}\n\n"
-            f"[bold]Tools[/]\n  {tools_installed}/{tools_total} installed\n\n"
+            f"[bold]Agent-tools[/]\n  {tools_installed}/{tools_total} installed\n\n"
             f"[bold]Queue[/]\n  {queue} tasks\n\n"
             f"[bold]Graph[/]\n  {graph_line}\n"
         )

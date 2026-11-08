@@ -300,12 +300,14 @@ def build_picker_bindings(state: "ListPickerState", result: dict) -> Any:
 
     @bindings.add("pageup")
     def _page_up(event):
-        state.move(-window)
+        # P1-5: `window` dulu nama milik `pick_from_list`; sama seperti menu.py,
+        # ambil dari state.
+        state.move(-state.window)
         event.app.invalidate()
 
     @bindings.add("pagedown")
     def _page_down(event):
-        state.move(window)
+        state.move(state.window)
         event.app.invalidate()
 
     @bindings.add("enter")

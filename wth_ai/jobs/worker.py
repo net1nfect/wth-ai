@@ -6,7 +6,6 @@ import json
 import time
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeout
 from datetime import datetime, timezone
-from pathlib import Path
 from typing import Any
 
 from wth_ai.approvals import STATUS_APPROVED, STATUS_DENIED, STATUS_EXPIRED
@@ -23,7 +22,7 @@ from wth_ai.workspace import wth_home
 # actually do: a `recon` job with the default profile plans up to 40 tools and
 # `ReconEngine.tool_timeout` allows 60s *per tool*, so a legitimate scan could
 # run for many minutes. It was marked `failed (timeout)` while its handler
-# thread kept running and writing artifacts into wth-results/<job_id>/ for a
+# thread kept running and writing artifacts into wth-ai-results/<job_id>/ for a
 # job already recorded as failed.
 DEFAULT_JOB_TIMEOUTS: dict[str, int] = {
     "recon": 3600,
@@ -162,7 +161,7 @@ class WorkerEngine:
         # Approval gate on the CLAIMED job. STATUS-based, not presence-based:
         # the old check was `requires_approval and not metadata.get("approval_id")`
         # -- presence of an id, not whether it was approved. `_resume_waiting()`
-        # fails a job on DENY but never clears `approval_id`, so `wth job retry`
+        # fails a job on DENY but never clears `approval_id`, so `wth-ai job retry`
         # on a denied job (retry accepts status failed/stopped/cancelled) put it
         # back in the queue with the id still present, the gate was skipped and
         # the job executed with NO approval at all. Now the stored record itself
@@ -245,7 +244,7 @@ class WorkerEngine:
         # The handler's OWN verdict decides the job's terminal status. Before
         # this, every non-exception return was recorded as `completed`, so a
         # handler returning {"status": "blocked"} (recon on an unauthorized
-        # target) or {"status": "failed"} looked like success in `wth job
+        # target) or {"status": "failed"} looked like success in `wth-ai job
         # list/show`, in Telegram/Discord notifications, and for any query that
         # filters on status -- a failure that reads as a success.
         handler_status = str(result.get("status", "")).lower()

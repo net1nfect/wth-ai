@@ -166,8 +166,8 @@ class _FakeLearning:
             rows += [{"vuln_class": vuln_class, "failure": True}] * int(slot.get("false_positive", 0))
         return rows
 
-    def record_from_finding(self, finding, *, verified: bool):
-        self.recorded.append((str(finding.get("vuln_class", "")), verified))
+    def record_from_finding(self, tech_stack, vuln_class, *, verified: bool):
+        self.recorded.append((str(vuln_class), verified))
 
 
 class _FakeFindingsDB:

@@ -8,7 +8,6 @@ import re
 import shutil
 import sys
 from dataclasses import dataclass
-from typing import Sequence
 
 
 @dataclass(frozen=True)
@@ -182,7 +181,10 @@ def augment_install_spec(tool_id: str, install: dict[str, str]) -> dict[str, str
 def normalize_install_command(method: str, cmd: str, *, use_sudo: bool) -> tuple[list[str] | None, str, bool]:
     """Return (argv, display_cmd, use_shell).
 
-    argv=None means run display_cmd with shell=True.
+    argv=None berarti jalankan display_cmd dengan shell=True. Hanya `scoop`
+    yang butuh itu: di Windows `scoop` adalah skrip PowerShell, bukan binary.
+    Perintah lain dijalankan sebagai argv supaya isi manifest tidak pernah
+    ditafsirkan oleh shell (P2-9).
     """
     cmd = cmd.strip()
     if should_use_sudo(method, use_sudo=use_sudo):
@@ -197,16 +199,11 @@ def normalize_install_command(method: str, cmd: str, *, use_sudo: bool) -> tuple
             base = pip_command() or [sys.executable, "-m", "pip"]
             return base + ["install"] + parts[2:], cmd, False
 
-    if method == "go" or cmd.startswith("go install"):
+    if method == "scoop":
         return None, cmd, True
 
-    if method in {"apt", "dnf", "yum", "pacman", "snap", "brew", "winget", "choco", "scoop", "script"}:
-        return None, cmd, True
-
-    if method in {"npm", "gem", "cargo"}:
-        return None, cmd, True
-
-    return None, cmd, True
+    # Pakai `cmd` yang sudah berawalan `sudo`, bukan menambah prefiks kedua.
+    return cmd.split(), cmd, False
 
 
 def platform_summary() -> str:

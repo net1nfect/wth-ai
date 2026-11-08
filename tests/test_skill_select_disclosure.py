@@ -67,7 +67,7 @@ def test_advisory_has_sections_and_timeline():
 
 def test_advisory_keeps_evidence_reference_not_copy():
     text = build_advisory(_Finding())
-    assert "wth verify" in text
+    assert "wth-ai verify" in text
     assert "evidence/req.txt" in text
 
 

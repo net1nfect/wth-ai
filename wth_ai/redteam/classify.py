@@ -26,3 +26,19 @@ def classify(outcome: AttemptOutcome) -> tuple[AttemptState, dict]:
         LEVEL_REFUTED: AttemptState.REFUTED,
     }.get(assessment.level, AttemptState.UNPROVEN)
     return state, assessment.to_dict()
+
+
+def enforce_scope(findings: list, *, scope_authorized: bool) -> list:
+    """Turunkan CONFIRMED ke CANDIDATE bila tidak ada scope card ber-izin.
+
+    P0-2: bundel bukti sebelumnya menulis `authorized: true` sebagai literal,
+    jadi CONFIRMED yang keluar dari bundel itu tidak pernah menunjuk izin yang
+    benar-benar ada. Veracity menjawab "apakah buktinya cukup"; fungsi ini
+    menjawab "apakah ada izin untuk mengklaimnya".
+    """
+    if scope_authorized:
+        return findings
+    for finding in findings:
+        if finding.state is AttemptState.CONFIRMED:
+            finding.state = AttemptState.CANDIDATE
+    return findings

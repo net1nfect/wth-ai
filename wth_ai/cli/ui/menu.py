@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import sys
 from dataclasses import dataclass, field
-from typing import Any, Callable, Iterable, Sequence
+from typing import Any, Callable, Sequence
 
 try:  # logic above stays importable without prompt_toolkit
     from prompt_toolkit.layout.controls import FormattedTextControl

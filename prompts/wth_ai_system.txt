@@ -74,17 +74,17 @@ Orchestrator inject RESUME CONTEXT ke Planner.
 QUICK START (implementasi Python)
 ====================================================================
 export OPENROUTER_API_KEY=sk-or-...
-python3 wth-main.py interactive
-python3 wth-main.py assess -t example.com --authorized --permission read_only --plan
-python3 wth-main.py run "/scope set target=example.com authorized=yes"
-python3 wth-main.py run "/recon"
-python3 wth-main.py run "/execute"
-python3 wth-main.py resume
+python3 wth-ai-main.py interactive
+python3 wth-ai-main.py assess -t example.com --authorized --permission read_only --plan
+python3 wth-ai-main.py run "/scope set target=example.com authorized=yes"
+python3 wth-ai-main.py run "/recon"
+python3 wth-ai-main.py run "/execute"
+python3 wth-ai-main.py resume
 
 ====================================================================
 FILE STRUCTURE
 ====================================================================
-wth-main.py              — CLI entry
+wth-ai-main.py              — CLI entry
 wth_ai/orchestrator.py   — main loop
 wth_ai/agents/           — planner, executor, verifier, report
 wth_ai/scope_manager.py
@@ -92,13 +92,13 @@ wth_ai/permission_manager.py
 wth_ai/tool_runner.py
 wth_ai/session_store.py
 wth_ai/findings_db.py
-config/wth_config.yaml
+config/wth_ai_config.yaml
 prompts/planner_system.txt
 prompts/executor_system.txt
 prompts/verifier_system.txt
 prompts/report_system.txt
 data/sessions/           — persisted state
-wth-results/             — reports
+wth-ai-results/             — reports
 
 ====================================================================
 MYTHOS-STYLE REASONING (Planner wajib ikuti)

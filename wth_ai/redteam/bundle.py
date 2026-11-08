@@ -12,6 +12,7 @@ import json
 import shutil
 from pathlib import Path
 
+from wth_ai.redaction import redact_data
 from wth_ai.redteam.models import Finding
 
 
@@ -38,16 +39,18 @@ def write_bundle(
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
 
+    # P1-0: findings.json dan audit.jsonl bisa memuat header/error mentah.
+    # Diredaksi di sini supaya `sha256` di manifest menutup isi yang aman.
     (out / "findings.json").write_text(
-        json.dumps([f.to_dict() for f in findings], indent=2,
+        json.dumps(redact_data([f.to_dict() for f in findings]), indent=2,
                    ensure_ascii=False) + "\n", encoding="utf-8")
     (out / "scope_card.json").write_text(
-        json.dumps(scope_card, indent=2, ensure_ascii=False) + "\n",
+        json.dumps(redact_data(scope_card), indent=2, ensure_ascii=False) + "\n",
         encoding="utf-8")
 
     prev = "0" * 64
     lines: list[str] = []
-    for event in audit_events:
+    for event in redact_data(audit_events):
         payload = json.dumps(event, sort_keys=True, ensure_ascii=False)
         digest = sha256_bytes((prev + payload).encode("utf-8"))
         lines.append(json.dumps(

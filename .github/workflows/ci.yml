@@ -19,12 +19,12 @@ jobs:
         run: pytest tests/ -q -p no:cacheprovider --timeout=120
       - name: Offline demo + verifikasi bundel
         run: |
-          python wth-main.py scan --offline-demo --out out
-          python wth-main.py verify out/bundle
+          python wth-ai-main.py scan --offline-demo --out out
+          python wth-ai-main.py verify out/bundle
       - name: Gate (harus exit 2 pada fixture bertemuan high)
         run: |
           set +e
-          python wth-main.py scan -n --offline-demo --fail-on high --out out/ci
+          python wth-ai-main.py scan -n --offline-demo --fail-on high --out out/ci
           code=$?
           set -e
           test "$code" -eq 2

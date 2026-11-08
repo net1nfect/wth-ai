@@ -8,8 +8,9 @@ from urllib.parse import urlparse
 
 
 _SCOPE_PATTERNS: tuple[tuple[re.Pattern[str], int], ...] = (
-    (re.compile(r"^(?:please\s+)?(?:set\s+)?target\s+(.+)$", re.I), 1),
-    (re.compile(r"^scope\s+(\S+)\s+authorized\b", re.I), 1),
+    (re.compile(r"^/?(?:scope\s+set|please\s+|set\s+)?target\s+(.+)$", re.I), 1),
+    (re.compile(r"^/?scope\s+set\s+(.+)$", re.I), 1),
+    (re.compile(r"^/?scope\s+(\S+)\s+authorized\b", re.I), 1),
     (re.compile(r"^(\S+)\s+authorized\b", re.I), 1),
 )
 
@@ -45,6 +46,13 @@ def parse_scope_intent(text: str) -> dict[str, Any] | None:
 
 def _args_from_target(raw: str) -> dict[str, Any]:
     raw = raw.strip().strip('"').strip("'").rstrip(".,;")
+    # P1-6: `target\s+(.+)` menelan sisa baris, jadi "target host authorized"
+    # menghasilkan target `"host authorized"`; bentuk `/target ...` dan
+    # `/scope set ...` tidak dikenali sama sekali. Buang awalan perintah dan
+    # kata kewenangan dulu, baru normalisasi host.
+    raw = re.sub(r"^/?(?:scope\s+set|set\s+scope|scope|target|set\s+target)\s+", "",
+                 raw, flags=re.I)
+    raw = re.sub(r"\s+authorized\b.*$", "", raw, flags=re.I).strip()
     if "://" in raw:
         parsed = urlparse(raw)
         host = (parsed.hostname or "").lower().rstrip(".")

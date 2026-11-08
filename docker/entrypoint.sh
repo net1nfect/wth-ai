@@ -2,7 +2,7 @@
 set -euo pipefail
 
 export WTH_HOME="${WTH_HOME:-/data/wth-ai}"
-mkdir -p "$WTH_HOME"/{config,data,logs,runtime,wth-results,tools/bin}
+mkdir -p "$WTH_HOME"/{config,data,logs,runtime,wth-ai-results,tools/bin}
 
 cd /app
 
@@ -37,4 +37,4 @@ for env, key in mapping.items():
         v.set(key, val)
 " 2>/dev/null || true
 
-exec python3 /app/wth-main.py "$@"
+exec python3 /app/wth-ai-main.py "$@"

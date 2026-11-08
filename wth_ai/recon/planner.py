@@ -8,9 +8,8 @@ disabled tools are excluded with explicit reasons. Unavailable tools are still
 
 from __future__ import annotations
 
-import os
 import ipaddress
-import re
+import os
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse

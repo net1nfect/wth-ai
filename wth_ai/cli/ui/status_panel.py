@@ -30,18 +30,21 @@ def render_status_panel(
     perm = state.permission_mode.value
     llm = "online" if llm_online else "required"
     cov = state.metadata.get("graph_coverage", {})
-    cov_pct = cov.get("coverage_pct", 0) if isinstance(cov, dict) else 0
+    # P2-3: absence of a measurement is not 0%. Only print the number once the
+    # asset graph has actually been walked.
+    cov_pct = cov.get("coverage_pct") if isinstance(cov, dict) else None
     verified = sum(
         1 for f in state.findings if isinstance(f, dict) and f.get("state") == "verified"
     )
 
     line1 = Text.assemble(
-        (f"wth v{__version__}", "bold"),
+        (f"wth-ai v{__version__}", "bold"),
         (f"  ·  target {target}", THEME["text"]),
         (f"  ·  perm {perm}", THEME["muted"]),
         (f"  ·  llm {llm}", THEME["accent"] if llm_online else THEME["error"]),
-        (f"  ·  cov {cov_pct}%", THEME["recon"]),
     )
+    if cov_pct is not None:
+        line1.append(f"  ·  cov {cov_pct}%", style=THEME["recon"])
     line2 = Text.assemble(
         (f"session {session}", THEME["muted"]),
         (f"  ·  phase {agent_phase}", THEME["plan"]),
@@ -71,22 +74,25 @@ def render_status_line(
     llm_dot = STATUS_ONLINE if llm_online else STATUS_OFFLINE
     llm = "online" if llm_online else "required"
     cov = state.metadata.get("graph_coverage", {})
-    cov_pct = cov.get("coverage_pct", 0) if isinstance(cov, dict) else 0
+    # P2-3: absence of a measurement is not 0%. Only print the number once the
+    # asset graph has actually been walked.
+    cov_pct = cov.get("coverage_pct") if isinstance(cov, dict) else None
     verified = sum(
         1 for f in state.findings if isinstance(f, dict) and f.get("state") == "verified"
     )
 
     parts = [
-        f"wth v{__version__}",
+        f"wth-ai v{__version__}",
         f"target {target}",
         f"perm {perm}",
         f"{llm_dot} llm {llm}",
         f"phase {agent_phase}",
         f"used {tool_count}",                      # tools used in this session
         f"agent-tools {tools_installed}/{tools_total}",   # LLM-callable tools
-        f"cov {cov_pct}%",
-        f"session {session}",
     ]
+    if cov_pct is not None:
+        parts.append(f"cov {cov_pct}%")
+    parts.append(f"session {session}")
     if verified:
         parts.append(f"verified {verified}")
     return SEP.join(parts)

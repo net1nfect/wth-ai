@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any, TYPE_CHECKING
+from typing import TYPE_CHECKING
 
 from wth_ai.ctf.packs import ctf_wordlists, suggest_challenge_type
 from wth_ai.engagement.mode import EngagementMode, get_engagement_mode
@@ -10,7 +10,8 @@ from wth_ai.brain.chain_planner import ChainPlanner
 from wth_ai.brain.hypothesis_engine import HypothesisEngine
 from wth_ai.executor.evidence import EvidencePipeline
 from wth_ai.loop.state_machine import EngagementStateMachine, LoopState
-from wth_ai.models import AttackSurface, ExecutorTask, FindingState
+from wth_ai.models import ExecutorTask, FindingState
+from wth_ai.verify_gate import apply_verification
 
 if TYPE_CHECKING:
     from wth_ai.orchestrator import WTHOrchestrator
@@ -136,13 +137,14 @@ class EngagementLoop:
                     else:
                         lines.append("LLM tidak tersedia untuk verifikasi.")
                         continue
-                    verdict = v.get("verdict", "needs_more_evidence")
                     replan = v.get("replan_hint", "")
-                    if verdict == "verified":
-                        orch.findings_db.update_finding_state(finding.id, FindingState.VERIFIED)
+                    # P0-5: gate yang sama dengan orchestrator._verify.
+                    state = apply_verification(orch.findings_db, finding, v,
+                                               orch.evidence_vault,
+                                               actor_role="discoverer")
+                    if state is FindingState.VERIFIED:
                         lines.append(f"  ✓ VERIFIED: {finding.title}")
-                    elif verdict == "false_positive":
-                        orch.findings_db.update_finding_state(finding.id, FindingState.FALSE_POSITIVE)
+                    elif state is FindingState.FALSE_POSITIVE:
                         memory.add_rejection(finding.id, replan or "false positive")
                         lines.append(f"  ✗ FALSE POSITIVE: {finding.title}")
                     else:

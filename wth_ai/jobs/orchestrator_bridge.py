@@ -75,13 +75,40 @@ def build_executor_stack(state: SessionState) -> dict[str, Any]:
 
 def run_executor_job(job: Any, ctx: Any) -> dict[str, Any]:
     """Execute queued tasks from session state (authorized, standard+)."""
+    # P1-6 (audit segar 2026-11-06): otorisasi dibaca dari scope card, bukan dari
+    # metadata job. Versi lama (`meta.get("authorized", True)`) default fail-open,
+    # lalu versi perantara (`meta.get("authorized", False)`) membuat SEMUA job
+    # executor ditolak — tidak ada pemanggil yang menanami `authorized` di metadata
+    # job executor (hanya `recon` yang di-stamp di wth-ai-main.py:1739). Ini satu
+    #-satunya handler yang masih mempercayai metadata job untuk otorisasi, melanggar
+    # invariant P0-1 (authorization harus dari artifact scope card). Tanpa kartu
+    # valid, job berhenti SEBELUM stack dibuat.
+    from wth_ai.scope_card import ScopeCard, ScopeCardError
+    from wth_ai.workspace import wth_home
+
+    try:
+        card = ScopeCard.load(wth_home() / "scope_card.json")
+    except FileNotFoundError:
+        return {"type": "executor", "status": "failed",
+                "error": "scope: tidak ada scope card (jalankan `wth-ai scope` dulu)"}
+    except (ScopeCardError, ValueError, OSError) as exc:
+        return {"type": "executor", "status": "failed",
+                "error": f"scope: scope card tidak valid ({exc})"}
+
     meta = getattr(job, "metadata", {}) or {}
-    if not bool(meta.get("authorized", True)):
-        return {"type": "executor", "status": "failed", "error": "not authorized"}
 
     state = load_session_for_job(job)
     if job.target:
         state.scope.target = job.target
+
+    # Scope diisi dari scope card (P0-1/P1-1), bukan hardcode: target/domain/CIDR
+    # kartu yang menentukan in-scope, dan authorized = card.authorized.
+    in_scope = [*(card.domains or []), *(card.cidr or [])] or [card.target]
+    state.scope.authorized = card.authorized
+    state.scope.in_scope = list(in_scope)
+    state.scope.destructive_allowed = card.destructive
+    if not state.scope.target:
+        state.scope.target = card.target
 
     stack = build_executor_stack(state)
     perm = stack["permission_mgr"]

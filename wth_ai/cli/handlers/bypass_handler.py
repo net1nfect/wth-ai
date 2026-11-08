@@ -18,7 +18,7 @@ from wth_ai.agents import bypass as bypass_mod
 USAGE = """## /bypass — instruksi sesi (opsional)
 
   `/bypass`                     status + daftar profil
-  `/bypass on [profil]`         aktifkan (tanpa nama = prompt bawaan `wth`)
+  `/bypass on [profil]`         aktifkan (tanpa nama = prompt bawaan `wth-ai`)
   `/bypass off`                 matikan
   `/bypass list`                profil yang tersedia
   `/bypass show [profil]`       tampilkan isi prompt

@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 import time
-from pathlib import Path
 from typing import Any
 
 from wth_ai.graph.adapters import normalized_to_asset_graph
@@ -18,7 +17,6 @@ from wth_ai.recon.planner import ReconPlanner
 from wth_ai.recon.registry import ReconToolRegistry
 from wth_ai.recon.runner import SafeToolRunner
 from wth_ai.recon.tools.builtin import BuiltinContext
-from wth_ai.recon.tools.catalog import BUILTIN_TOOLS
 from wth_ai.workspace import wth_home
 
 

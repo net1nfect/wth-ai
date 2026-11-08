@@ -35,7 +35,7 @@ _BARE_HOST_RE = re.compile(
 # `curl http://other.tld/x` was correctly blocked.
 #
 # Deliberately narrow. Scanning EVERY command for hostname-shaped tokens would
-# treat ordinary arguments as targets -- `config/wth_config.yaml` is
+# treat ordinary arguments as targets -- `config/wth_ai_config.yaml` is
 # hostname-shaped (`wth_config` + `yaml`) -- and start blocking normal work.
 _NETWORK_TOOLS = frozenset({
     "nmap", "masscan", "naabu", "rustscan", "zmap", "unicornscan", "hping3",

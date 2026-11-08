@@ -52,9 +52,14 @@ def test_planner_budget_profile():
     ) or len(plan.selected) <= 10
 
 
-def test_handler_recon_integration():
+def test_handler_recon_integration(tmp_path, monkeypatch):
     """Test that handler_recon can use the new engine without crashing."""
     from wth_ai.jobs.handlers import handler_recon
+    from wth_ai.scope_card import ScopeCard
+
+    monkeypatch.setenv("WTH_HOME", str(tmp_path))
+    ScopeCard(target="example.com", domains=["example.com"],
+              authorized=True).write(tmp_path / "scope_card.json")
 
     class FakeJob:
         target = "example.com"

@@ -26,23 +26,11 @@ from typing import Any, Iterable, Sequence
 
 EVIDENCE_RE = re.compile(r"\[(TX|EV):[A-Za-z0-9_-]+\]")
 
-#: Bentuk penugasan yang jelas rahasia. `redact_secrets` global hanya mengenali pola
-#: seperti `sk-...`; terukur: `session=supersecretvalue123` lolos. Karena file ini
-#: ditulis ke disk dan dipakai ulang sebagai "pengetahuan", masking tambahan di sini
-#: bukan kemewahan -- dan klaimnya dibatasi: ini menutup bentuk PENUGASAN, bukan
-#: menjanjikan deteksi semua rahasia.
-SECRET_ASSIGNMENT_RE = re.compile(
-    r"(?i)\b(session|cookie|token|password|passwd|pass|secret|api[-_]?key|authorization|bearer|csrf)"
-    r"(\s*[=:]\s*)(\S{6,})"
-)
-
-
 def mask_secret_assignments(text: str) -> str:
-    """Tutup `kunci=nilai-rahasia` sebelum ditulis ke file skill."""
+    """P1-0: delegasi ke redaktor kanonik (dulu salinan regex lokal)."""
     from wth_ai.redaction import redact_secrets
 
-    masked = SECRET_ASSIGNMENT_RE.sub(r"\1\2***REDACTED***", text or "")
-    return redact_secrets(masked)
+    return redact_secrets(text)
 MAX_EVIDENCE_REFS = 12
 MAX_PITFALLS = 8
 

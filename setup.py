@@ -17,5 +17,5 @@ setup(
         "requests>=2.31",
         "pyyaml>=6.0",
     ],
-    entry_points={"console_scripts": ["wth-ai=wth_ai.cli.entry:main"]},
+    # P1-8 (D3): tanpa console_scripts; lihat catatan di pyproject.toml.
 )

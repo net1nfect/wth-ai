@@ -6,7 +6,6 @@ import json
 import os
 from pathlib import Path
 from typing import Any
-from uuid import uuid4
 
 from wth_ai.models import utc_now
 from wth_ai.terminal.models import TerminalResult

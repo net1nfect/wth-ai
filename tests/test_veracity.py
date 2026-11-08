@@ -79,8 +79,8 @@ def test_lint_accepts_hedged_language():
 
 
 def test_lint_is_not_confused_by_ordinary_paths():
-    """`config/wth_config.yaml` is hostname-shaped; a naive scanner flagged it."""
-    assert veracity.lint_claims("Baca config/wth_config.yaml lalu jalankan test.") == []
+    """`config/wth_ai_config.yaml` is hostname-shaped; a naive scanner flagged it."""
+    assert veracity.lint_claims("Baca config/wth_ai_config.yaml lalu jalankan test.") == []
 
 
 def test_lint_reports_line_numbers_and_phrase():

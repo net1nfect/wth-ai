@@ -9,6 +9,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Callable
 
+from wth_ai.redteam.chain import CHAIN_KEYS, derive_chain
 from wth_ai.redteam.classify import classify
 from wth_ai.redteam.executor import AttemptExecutor
 from wth_ai.redteam.models import AttemptState, Finding
@@ -26,6 +27,9 @@ class LoopResult:
     killed: bool = False
     budget_hit: bool = False
     findings: list[Finding] = field(default_factory=list)
+    #: Rantai temuan yang diturunkan dari temuan CONFIRMED yang memberi
+    #: konteks (credentials/headers/dll) untuk temuan berikutnya.
+    chains: list = field(default_factory=list)
 
 
 def _noop(name: str, data: dict) -> None:
@@ -57,6 +61,8 @@ class RedTeamLoop:
             self._attempt(finding, result)
             self.on_event("redteam.finding", finding.to_dict())
         result.findings = queue.all()
+        confirmed = [f for f in result.findings if f.state is AttemptState.CONFIRMED]
+        result.chains = derive_chain(confirmed)
         return result
 
     def _attempt(self, finding: Finding, result: LoopResult) -> None:
@@ -74,6 +80,12 @@ class RedTeamLoop:
                 finding.transition(AttemptState.UNPROVEN)
                 continue
             state, attestation = classify(outcome)
+            # Pertahankan konteks rantai (credentials/paths/headers/tokens/ids)
+            # yang sudah menempel pada temuan — classify() menimpa attestation
+            # dengan penilaian veracity, dan konteks itu tidak boleh hilang.
+            for key in CHAIN_KEYS:
+                if key in finding.attestation:
+                    attestation.setdefault(key, finding.attestation[key])
             finding.attestation = attestation
             finding.evidence.extend(outcome.request_response)
             finding.transition(state)

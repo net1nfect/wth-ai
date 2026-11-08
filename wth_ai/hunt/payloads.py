@@ -30,8 +30,8 @@ berlaku), dan `wth_ai/skills/autowrite.py` mencatat yang terbukti.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from typing import Any, Iterable, Sequence
+from dataclasses import dataclass
+from typing import Any, Iterable
 
 #: Urutan tingkat dampak. Dipakai untuk menyaring "seberapa jauh boleh".
 BLAST_ORDER = {"self": 0, "single-object": 1, "mass": 2}
@@ -517,7 +517,7 @@ def to_markdown() -> str:
     lines = [
         "# Pustaka payload destruktif (berbatas)",
         "",
-        "Dokumen ini digenerate dari `wth_ai/hunt/payloads.py` (`wth payloads doc`), jadi",
+        "Dokumen ini digenerate dari `wth_ai/hunt/payloads.py` (`wth-ai payloads doc`), jadi",
         "isinya tidak bisa menyimpang dari payload yang benar-benar ada di kode.",
         "",
         "## Cara kerja batasnya",

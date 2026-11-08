@@ -2,14 +2,14 @@
 
 Kenapa modul ini ada
 --------------------
-`wth setup` mengonfigurasi provider; ia mengandaikan paket Python dan workspace
+`wth-ai setup` mengonfigurasi provider; ia mengandaikan paket Python dan workspace
 sudah siap. Kalau yang hilang adalah dependensi atau direktori, pengguna melihat
 traceback `ModuleNotFoundError` di tengah REPL — jauh dari penyebabnya.
 
 Preflight di sini sengaja TIDAK mengubah apa pun kecuali diminta:
 `build_report()` hanya membaca, `install_missing()` memasang, `apply_setup()`
 menulis workspace + smoke test. Pemisahan itu yang membuatnya bisa diuji dan
-dipakai ulang oleh `wth setup --check` tanpa efek samping.
+dipakai ulang oleh `wth-ai setup --check` tanpa efek samping.
 
 Tidak ada `shell=True` di sini: subprocess memakai daftar argv.
 """
@@ -41,7 +41,7 @@ CORE_DEPS: tuple[tuple[str, str], ...] = (
     ("dotenv", "python-dotenv>=1.0"),
     ("prompt_toolkit", "prompt-toolkit>=3.0"),
     ("pydantic", "pydantic>=2.4"),
-    # `wth setup` sendiri memakai pydantic lewat wth_ai.models; tanpa ini
+    # `wth-ai setup` sendiri memakai pydantic lewat wth_ai.models; tanpa ini
     # preflight ramah tapi CLI tetap crash saat pertama kali menyentuhnya.
 )
 
@@ -51,7 +51,6 @@ OPTIONAL_DEPS: tuple[tuple[str, str, tuple[str, ...]], ...] = (
     ("telegram", "python-telegram-bot>=21.0", ("bot",)),
     ("discord", "discord.py>=2.3", ("bot",)),
     ("nodriver", "nodriver>=0.38", ("browser",)),
-    ("aiohttp", "aiohttp>=3.9", ("full",)),
     ("bs4", "beautifulsoup4>=4.12", ("full",)),
     ("lxml", "lxml>=5.0", ("full",)),
 )
@@ -60,7 +59,7 @@ EXTRAS_FOR_FEATURES: dict[str, str] = {
     "tui": "textual>=0.80",
     "bot": "discord.py>=2.3 python-telegram-bot>=21.0",
     "browser": "nodriver>=0.38",
-    "full": "aiohttp>=3.9 beautifulsoup4>=4.12 lxml>=5.0",
+    "full": "beautifulsoup4>=4.12 lxml>=5.0",
 }
 
 
@@ -275,7 +274,7 @@ def format_report(report: PreflightReport) -> str:
         lines.append("Dependensi WAJIB belum terpasang:")
         for dep in report.missing_core:
             lines.append(f"  ✗ {dep.requirement}")
-        lines.append("  pasang: wth setup --install")
+        lines.append("  pasang: wth-ai setup --install")
         lines.append("")
     else:
         lines.append("Dependensi wajib: semua terpasang ✓")
@@ -390,7 +389,7 @@ def _smoke_line() -> str:
         config = WTHConfig.load()
         role = config.providers.get("planner")
         if role is None:
-            return "  smoke: dilewati (belum ada provider — jalankan `wth setup` atau `/connect`)"
+            return "  smoke: dilewati (belum ada provider — jalankan `wth-ai setup` atau `/connect`)"
         report = run_smoke_test(
             config, role.type, model=role.model, completion_timeout=20,
         )

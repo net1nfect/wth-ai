@@ -67,7 +67,6 @@ def build_slash_router(orch: Any) -> SlashRouter:
     from wth_ai.cli.handlers.platform_handler import handle_cron, handle_gateway, handle_memory, handle_mode
     from wth_ai.cli.handlers.recon_handler import handle_recon
     from wth_ai.cli.handlers.setup_handler import (
-        apply_target_from_text,
         handle_model,
         handle_profile,
         handle_provider,

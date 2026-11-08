@@ -13,7 +13,9 @@ Mulai dari sini; tiap dokumen punya satu tugas dan tidak mengulang yang lain.
 | [`MODES.md`](MODES.md) | pengguna TUI | matriks mode × kapabilitas (di-generate dari `wth_ai/modes.py`) |
 | [`COMPARISON.md`](COMPARISON.md) | penilai | perbandingan dengan Strix, hanya baris yang punya bukti |
 | [`AIRGAP.md`](AIRGAP.md) | operator lapangan | pemasangan tertutup, LLM lokal, KB offline, sandbox |
-| [`DOCKER.md`](DOCKER.md) | operator | image & container (legacy, sebagian sudah dipindah ke AIRGAP) |
+| [`DOCKER.md`](DOCKER.md) | operator | image & container compose (service, volume, env) |
+| [`attack/`](attack/destructive-library.md) | pengguna | pustaka payload destruktif (di-generate dari `wth_ai/hunt/payloads.py`) |
+| [`../PLAN.md`](../PLAN.md) | kontributor | catatan keputusan & status tiap perubahan yang mendarat |
 | [`archive/`](archive/README.md) | — | arsip perencanaan lama, bukan rujukan kerja |
 | [`architecture/`](architecture/) | kontributor | catatan arsitektur & interface |
 

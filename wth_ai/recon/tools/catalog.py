@@ -15,8 +15,6 @@ Safety defaults:
 
 from __future__ import annotations
 
-from typing import Any
-
 from wth_ai.recon.model import ToolSpec
 
 CATEGORY_LABELS: dict[str, str] = {

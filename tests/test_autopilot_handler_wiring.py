@@ -63,8 +63,18 @@ def test_permission_manager_takes_a_mode_not_a_config():
         raise AssertionError("mode non-enum seharusnya gagal di mode_sufficient")
 
 
-def test_handler_builds_a_usable_permission_manager_and_scoped_bridge(monkeypatch):
+def test_handler_builds_a_usable_permission_manager_and_scoped_bridge(tmp_path, monkeypatch):
     import wth_ai.jobs.handlers as handlers
+
+    # P1-1: handler wajib punya scope card valid sebelum membuat bridge.
+    monkeypatch.setenv("WTH_HOME", str(tmp_path / "home"))
+    home = tmp_path / "home"
+    home.mkdir(parents=True, exist_ok=True)
+    from wth_ai.scope_card import ScopeCard
+
+    ScopeCard(target="127.0.0.1:9999", domains=["127.0.0.1"], authorized=True).write(
+        home / "scope_card.json"
+    )
 
     captured: dict = {}
 

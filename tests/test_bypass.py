@@ -28,7 +28,7 @@ def bypass_dir(tmp_path, monkeypatch):
 # pemisahan dari AGENTS.md
 # --------------------------------------------------------------------------- #
 def test_packaged_prompt_file_is_the_default_source():
-    """Profil `wth` dibaca dari `prompts/agent/AGENT.md`, bukan konstanta Python."""
+    """Profil `wth-ai` dibaca dari `prompts/agent/AGENT.md`, bukan konstanta Python."""
     path = bypass.packaged_prompt_path()
 
     assert path == REPO / "prompts" / "agent" / "AGENT.md"
@@ -134,8 +134,14 @@ def test_system_block_is_empty_when_bypass_off(bypass_dir):
 def test_system_block_wraps_prompt(bypass_dir):
     block = bypass.system_block("default")
     assert block.startswith("---\n")
-    assert "SESSION INSTRUCTIONS (bypass: wth)" in block
+    assert "SESSION INSTRUCTIONS (bypass: wth-ai)" in block
     assert "SESSION INSTRUCTIONS END" in block
+
+
+def test_legacy_profile_name_still_resolves(bypass_dir):
+    """`bypass: wth` tersimpan di user.yaml instalasi lama harus tetap jalan."""
+    assert bypass.resolve_name("wth") == bypass.BUILTIN_PROFILE
+    assert bypass.load("wth").is_builtin
 
 
 # --------------------------------------------------------------------------- #

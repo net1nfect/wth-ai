@@ -1,6 +1,6 @@
 """Modbus TCP client minimal (stdlib) — hanya fungsi baca.
 
-Dipakai `wth ot read` untuk membaca register/coil pada perangkat di lab atau
+Dipakai `wth-ai ot read` untuk membaca register/coil pada perangkat di lab atau
 target berizin. Tidak ada dependency: MBAP header + PDU dibangun dengan struct.
 
 Yang tidak ada di sini, dengan sengaja:
@@ -14,7 +14,7 @@ import socket
 import struct
 from dataclasses import dataclass
 
-from wth_ai.ot.modbus import (DEFAULT_PORT, KINDS, MAX_COUNT, READ_COILS,
+from wth_ai.ot.modbus import (DEFAULT_PORT, KINDS, READ_COILS,
                               READ_DISCRETE_INPUTS, build_read_request)
 
 MAX_RESPONSE = 4096

@@ -7,20 +7,22 @@ from textual.containers import Vertical
 from textual.screen import ModalScreen
 from textual.widgets import Input, Static
 
+from wth_ai.cli.ui.theme import THEME
+
 
 class SkillsPickerScreen(ModalScreen[str | None]):
-    DEFAULT_CSS = """
-    SkillsPickerScreen {
+    DEFAULT_CSS = f"""
+    SkillsPickerScreen {{
         align: center middle;
-    }
-    #skills-box {
+    }}
+    #skills-box {{
         width: 80;
         height: auto;
         max-height: 22;
-        border: solid #a371f7;
-        background: #161b22;
+        border: solid {THEME['plan']};
+        background: {THEME['surface_alt']};
         padding: 1 2;
-    }
+    }}
     """
 
     def __init__(self, orch, *args, **kwargs) -> None:

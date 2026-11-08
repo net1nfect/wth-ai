@@ -1,4 +1,4 @@
-"""Standalone recon CLI helpers (used by ``wth recon`` and slash handlers)."""
+"""Standalone recon CLI helpers (used by ``wth-ai recon`` and slash handlers)."""
 
 from __future__ import annotations
 
@@ -44,8 +44,9 @@ def run_recon_job(
 ) -> tuple[Any, Any]:
     from wth_ai.jobs.worker import WorkerEngine
 
+    # P0-1: tidak ada lagi `authorized: True` di sini -- handler_recon membaca
+    # scope card sungguhan. Metadata hanya membawa hal yang bukan otorisasi.
     meta: dict[str, Any] = {
-        "authorized": True,
         "realtime": realtime,
         "profile": profile,
     }
@@ -61,7 +62,10 @@ def run_recon_job(
     if j.status == "failed":
         return j, None
     WorkerEngine(mgr).run(drain=True)
-    return j, mgr.get_job(j.job_id)
+    # `j` adalah snapshot sebelum worker berjalan (`queued`); pemanggil butuh
+    # status akhirnya untuk memutuskan exit code.
+    done = mgr.get_job(j.job_id)
+    return (done or j), done
 
 
 def format_job_summary(j: Any, done: Any, *, graph_nodes: int = 0) -> str:

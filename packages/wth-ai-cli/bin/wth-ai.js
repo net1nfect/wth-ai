@@ -3,15 +3,12 @@
 
 const { spawn } = require("child_process");
 const path = require("path");
-const { ensureRuntime, maybeRunSetup, VERSION } = require("../lib/installer");
+const { ensureRuntime, maybeRunSetup } = require("../lib/installer");
 
 async function main() {
   const args = process.argv.slice(2);
 
-  if (args[0] === "--version" || args[0] === "-V") {
-    console.log(`wth-cli v${VERSION}`);
-    process.exit(0);
-  }
+  // `--version` diteruskan ke Python: satu sumber versi (wth_ai.__version__).
 
   let launcher;
   try {

@@ -14,10 +14,12 @@ def _resolve_root() -> Path:
 
 
 def _resolve_home() -> Path:
+    from wth_ai.workspace import init_workspace
+
     home = Path(os.environ.get("WTH_HOME", Path.home() / ".wth-ai"))
-    home.mkdir(parents=True, exist_ok=True)
-    for sub in ("data/sessions", "data/engagements", "logs", "recon", "wth-results", "tools/bin", "runtime", "config"):
-        (home / sub).mkdir(parents=True, exist_ok=True)
+    # Layout + migrasi nama lama tinggal di satu tempat; daftar direktori kedua
+    # di sini pernah menyimpang dari WORKSPACE_DIRS.
+    init_workspace(home)
     tools_bin = home / "tools" / "bin"
     path = os.environ.get("PATH", "")
     if str(tools_bin) not in path.split(os.pathsep):
@@ -38,12 +40,13 @@ def _bootstrap() -> tuple[Path, Path]:
 
 def main() -> None:
     root, home = _bootstrap()
-    entry = root / "wth-main.py"
+    # Salinan wth-ai-main.py hidup di samping entry.py (wth_ai/cli/), baik di
+    # repo maupun di wheel — sehingga `python -m wth_ai.cli.entry` berjalan
+    # mandiri tanpa data repo eksternal.
+    entry = Path(__file__).resolve().parent / "wth-ai-main.py"
     if not entry.is_file():
-        # Instalasi non-editable / wheel tanpa data repo. Pesannya harus
-        # menunjuk ke perbaikannya, bukan traceback runpy yang tidak informatif.
         raise SystemExit(
-            f"WTH-AI tidak menemukan wth-main.py di {root}.\n"
+            f"WTH-AI tidak menemukan wth-ai-main.py di {entry.parent}.\n"
             "Pasang dari sumber dengan installer resmi:\n"
             "  scripts/install.sh\n"
             "atau: pip install -e <repo>"

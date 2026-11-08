@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from typing import Any
 
 from wth_ai.config import WTHConfig
 from wth_ai.executor.evidence import EvidencePipeline

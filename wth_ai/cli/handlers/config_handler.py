@@ -30,7 +30,7 @@ def _config_show(orch: Any) -> str:
         f"- recon_profile: {cfg.agent.recon_profile}",
         f"- permission: {orch.state.permission_mode.value}",
         f"- target: {orch.state.scope.target or 'unset'}",
-        f"- llm: {'online' if orch.client.available() else 'offline'}",
+        f"- llm: {getattr(orch.client, 'llm_status', lambda: 'online' if orch.client.available() else 'offline')()}",
         "",
         "### Models",
     ]

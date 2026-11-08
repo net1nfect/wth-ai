@@ -157,7 +157,7 @@ class ChatAgent(BaseLLMAgent):
 - Normalisasi + asset graph + scoring prioritas target
 - Validasi non-destruktif dengan gate scope + permission (read_only → full_lab)
 - Verifikasi temuan: 7-question gate (tolak false positive) sebelum disebut temuan
-- Report siap triase + diff antar sesi (`wth recon diff`)
+- Report siap triase + diff antar sesi (`wth-ai recon diff`)
 
 **Skills terdeteksi: {total}** (pakai `/skills` untuk lihat)
 

@@ -4,12 +4,12 @@ from __future__ import annotations
 
 import json
 import os
-import re
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
 from wth_ai.models import utc_now
+from wth_ai.redaction import redact_data
 
 
 class EvidenceVault:
@@ -33,16 +33,13 @@ class EvidenceVault:
     def _save(self) -> None:
         self.index_path.write_text(json.dumps(self._items, ensure_ascii=False, indent=2), encoding="utf-8")
 
-    def redact(self, text: str) -> str:
-        patterns = [
-            (r"(?i)(api[_-]?key|token|password|secret|authorization)\s*[:=]\s*\S+", r"\1=***REDACTED***"),
-            (r"Bearer\s+[A-Za-z0-9\-._~+/]+=*", "Bearer ***REDACTED***"),
-            (r"eyJ[A-Za-z0-9_-]+\.eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+", "JWT_***REDACTED***"),
-        ]
-        result = text
-        for pattern, repl in patterns:
-            result = re.sub(pattern, repl, result)
-        return result
+    def redact(self, value: Any) -> Any:
+        """P1-0: delegasi ke redaktor kanonik, rekursif.
+
+        Dulu regex lokal + hanya `isinstance(v, str)` top-level, sehingga
+        `{"headers": {"authorization": ...}}` tersimpan utuh.
+        """
+        return redact_data(value)
 
     def store(
         self,
@@ -53,6 +50,11 @@ class EvidenceVault:
         request: dict[str, Any],
         response: dict[str, Any],
         evidence_schema: dict[str, Any] | None = None,
+        reproductions: int = 0,
+        controls: int = 0,
+        refuted_by_control: bool = False,
+        category: str | None = None,
+        proof_facts: dict[str, Any] | None = None,
     ) -> str:
         eid = f"EV-{uuid4().hex[:10]}"
         entry = {
@@ -61,9 +63,19 @@ class EvidenceVault:
             "chain_step": chain_step,
             "graph_node_id": graph_node_id,
             "timestamp": utc_now(),
-            "request": {k: self.redact(str(v)) if isinstance(v, str) else v for k, v in request.items()},
-            "response": {k: self.redact(str(v)) if isinstance(v, str) else v for k, v in response.items()},
+            "request": self.redact(request),
+            "response": self.redact(response),
             "evidence_schema": evidence_schema or {},
+            # P0-5: bukti yang dibutuhkan `assess_claim` untuk boleh bilang
+            # confirmed. Default 0 = belum ada replikasi/kontrol, jadi verdict
+            # LLM "verified" tidak pernah sendirian mengangkat status.
+            "reproductions": int(reproductions),
+            "controls": int(controls),
+            "refuted_by_control": bool(refuted_by_control),
+            # Item 2: proof profile deterministik (opsional). Disimpan utuh
+            # agar `claim_evidence` bisa meneruskan ke `assess_claim`.
+            "category": category,
+            "proof_facts": proof_facts,
         }
         self._items.append(entry)
         (self.dir / f"{eid}.json").write_text(json.dumps(entry, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -82,6 +94,33 @@ class EvidenceVault:
             )
             ids.append(eid)
         return ids
+
+    def claim_evidence(self, finding_id: str) -> dict[str, Any]:
+        """Ringkas bukti milik satu finding untuk `veracity.assess_claim`.
+
+        P0-5: verdict LLM hanya boleh menurunkan status. Supaya penurunan itu
+        punya pembanding, bukti yang benar-benar tersimpan dihitung di sini --
+        bukan dibaca dari teks model.
+        """
+        items = [e for e in self._items if e["finding_id"] == finding_id]
+        # Item 2: ambil profile paling baru yang tersedia (kalau ada), supaya
+        # `decide_state` bisa meneruskannya ke `assess_claim`.
+        latest_category = None
+        latest_facts = None
+        for e in items:
+            if e.get("category") is not None:
+                latest_category = e["category"]
+                latest_facts = e.get("proof_facts")
+        return {
+            "has_request_response": any(
+                e.get("request") and e.get("response") for e in items
+            ),
+            "reproductions": max((int(e.get("reproductions", 0) or 0) for e in items), default=0),
+            "controls": max((int(e.get("controls", 0) or 0) for e in items), default=0),
+            "refuted_by_control": any(bool(e.get("refuted_by_control")) for e in items),
+            "category": latest_category,
+            "proof_facts": latest_facts,
+        }
 
     def validate_schema(self, finding_id: str, schema: dict[str, Any]) -> tuple[bool, list[str]]:
         """Gate: evidence must match schema requirements."""

@@ -2,9 +2,9 @@
 
 Why this exists (operator report: "after the recon, PageUp does nothing"):
 
-A raw-mode CLI owns the keyboard. `wth` reads every key, so PageUp is delivered to
+A raw-mode CLI owns the keyboard. `wth-ai` reads every key, so PageUp is delivered to
 the APPLICATION, not to the terminal -- the terminal's own scrollback cannot move,
-and after a turn finishes nothing changes because `wth` is still running. That is
+and after a turn finishes nothing changes because `wth-ai` is still running. That is
 true of every full-screen/raw-mode CLI (Codex, Claude Code, less, vim), so the fix
 is not "release the terminal" but "provide the scroll".
 

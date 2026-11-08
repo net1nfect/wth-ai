@@ -39,14 +39,16 @@ class WTHDiscordBot:
         self.client = discord.Client(intents=intents)
         self.tree = app_commands.CommandTree(self.client)
         self._register_handlers()
-        self._register_wth_group()
+        self._register_wth_ai_group()
 
     def _channel_allowed(self, *, guild_id: int | None, channel_id: int | None) -> bool:
         dc = self.config.integrations.discord
+        # P3-2: `channel_id is not None` / `guild_id is not None` made a missing
+        # id skip the check and land on `return True`. Absent id == deny.
         if dc.enabled and dc.allowed_channel_ids:
-            if channel_id is not None and str(channel_id) not in dc.allowed_channel_ids:
+            if str(channel_id) not in dc.allowed_channel_ids:
                 return False
-            if dc.guild_id and guild_id is not None and str(guild_id) != dc.guild_id:
+            if dc.guild_id and str(guild_id) != dc.guild_id:
                 return False
             return True
         return discord_allowed(self.config.bots, guild_id=guild_id, channel_id=channel_id)
@@ -55,8 +57,8 @@ class WTHDiscordBot:
         names = [r.name for r in getattr(getattr(interaction, "user", None), "roles", [])]
         return resolve_discord_role(names, self.config.integrations.discord.role_permissions)
 
-    def _register_wth_group(self) -> None:
-        group = app_commands.Group(name="wth", description="WTH-AI integration commands")
+    def _register_wth_ai_group(self) -> None:
+        group = app_commands.Group(name="wth-ai", description="WTH-AI integration commands")
 
         async def run(interaction: "discord.Interaction", name: str, arg: str | None = None) -> None:
             if not self._channel_allowed(guild_id=interaction.guild_id, channel_id=interaction.channel_id):
@@ -67,10 +69,19 @@ class WTHDiscordBot:
             text = self.commands.handle(name, args, role=role, enforce_role=True)
             await interaction.response.send_message(text[:DISCORD_MAX])
 
+        # P3-2: `group.command()` requires a coroutine function; the old
+        # `lambda ...: run(...)` raised TypeError here, so WTHDiscordBot could
+        # not be constructed at all. Each name needs its own closure, and the
+        # signature must carry no extra parameter or discord.py registers it as
+        # a command option.
+        def _make(cmd: str):
+            async def _handler(interaction: "discord.Interaction") -> None:
+                await run(interaction, cmd)
+
+            return _handler
+
         for cmd in ("status", "jobs", "settings", "help"):
-            group.command(name=cmd, description=f"WTH {cmd}")(
-                lambda interaction, n=cmd: run(interaction, n)
-            )
+            group.command(name=cmd, description=f"WTH {cmd}")(_make(cmd))
 
         @group.command(name="approve", description="Approve a pending request")
         async def _approve(interaction: "discord.Interaction", approval_id: str) -> None:
@@ -151,7 +162,7 @@ class WTHDiscordBot:
         for chunk in _chunk(result):
             if len(chunk) > DISCORD_MAX:
                 buf = io.BytesIO(chunk.encode())
-                await message.reply(file=discord.File(buf, filename="wth-output.txt"))
+                await message.reply(file=discord.File(buf, filename="wth-ai-output.txt"))
             else:
                 await message.reply(chunk[:DISCORD_MAX])
 
@@ -162,7 +173,7 @@ class WTHDiscordBot:
             await interaction.followup.send(c)
         if len(result) > DISCORD_MAX * 2:
             buf = io.BytesIO(result.encode())
-            await interaction.followup.send(file=discord.File(buf, filename="wth-output.txt"))
+            await interaction.followup.send(file=discord.File(buf, filename="wth-ai-output.txt"))
 
     def run(self) -> None:
         ref = self.config.integrations.discord.bot_token_ref

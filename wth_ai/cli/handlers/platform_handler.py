@@ -24,7 +24,7 @@ def handle_gateway(orch: Any, args: list[str]) -> str:
 
         info = gateway_status_info()
         if not info.get("running"):
-            return "Gateway: not running (`wth gateway run --background`)"
+            return "Gateway: not running (`wth-ai gateway run --background`)"
         rpc = info.get("rpc", {})
         sess = rpc.get("sessions", {})
         worker = rpc.get("worker", {})

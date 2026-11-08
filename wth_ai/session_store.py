@@ -8,13 +8,18 @@ from typing import Any
 
 from wth_ai.config import WTHConfig
 from wth_ai.models import SessionState
+from wth_ai.workspace import atomic_write_text, wth_home
 
 
 class SessionStore:
     """JSON file-backed session persistence."""
 
     def __init__(self, config: WTHConfig) -> None:
+        # P1-3: `state_dir` default relatif, jadi path relatif dulu ditulis ke
+        # direktori kerja dan dua WTH_HOME bisa berbagi `latest.json`.
         self.dir = Path(config.session.state_dir)
+        if not self.dir.is_absolute():
+            self.dir = wth_home() / self.dir
         self.dir.mkdir(parents=True, exist_ok=True)
         self.auto_save = config.session.auto_save
 
@@ -24,9 +29,11 @@ class SessionStore:
     def save(self, state: SessionState) -> Path:
         state.touch()
         path = self._path(state.session_id)
-        path.write_text(json.dumps(state.to_dict(), indent=2, ensure_ascii=False), encoding="utf-8")
-        latest = self.dir / "latest.json"
-        latest.write_text(json.dumps({"session_id": state.session_id}, indent=2), encoding="utf-8")
+        # P1-4: tmp+fsync+rename -- sesi lama tidak boleh hilang karena tulis
+        # yang terpotong.
+        atomic_write_text(path, json.dumps(state.to_dict(), indent=2, ensure_ascii=False))
+        atomic_write_text(self.dir / "latest.json",
+                          json.dumps({"session_id": state.session_id}, indent=2))
         return path
 
     def load(self, session_id: str) -> SessionState | None:

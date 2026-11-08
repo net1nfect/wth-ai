@@ -654,8 +654,11 @@ def test_tool_runs_jsonl_entries_all_share_one_schema(tmp_path, monkeypatch):
     monkeypatch.setenv("WTH_HOME", str(tmp_path))
     from wth_ai.recon.engine import ReconEngine
 
-    engine = ReconEngine(results_root=tmp_path / "runs", tool_timeout=5)
-    engine.run("example.com", profile="budget", job_id="JOB-schema", authorized=True)
+    from wth_ai.scope_card import ScopeCard
+
+    card = ScopeCard(target="example.com", domains=["example.com"], authorized=True)
+    engine = ReconEngine(results_root=tmp_path / "runs", tool_timeout=5, scope_card=card)
+    engine.run("example.com", profile="budget", job_id="JOB-schema")
 
     raw = (tmp_path / "runs" / "JOB-schema" / "tool_runs.jsonl").read_text(encoding="utf-8")
     entries = [json.loads(line) for line in raw.splitlines() if line.strip()]

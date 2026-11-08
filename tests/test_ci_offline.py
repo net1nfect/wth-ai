@@ -29,7 +29,7 @@ def test_action_is_composite_with_bundle_output():
 def test_offline_compose_has_internal_network():
     data = yaml.safe_load((REPO / "docker-compose.offline.yaml").read_text())
     assert data["networks"]["lab"]["internal"] is True
-    assert data["services"]["wth"]["environment"]["WTH_OFFLINE"] == "1"
+    assert data["services"]["wth-ai"]["environment"]["WTH_OFFLINE"] == "1"
 
 
 def test_doctor_reports_offline_line(tmp_path, monkeypatch):

@@ -124,35 +124,41 @@ def handler_recon(job: Any, ctx: Any) -> dict[str, Any]:
 
     meta = getattr(job, "metadata", {}) or {}
     profile = job.profile or meta.get("profile") or "recon-only"
-    # Fail-closed, matching `orchestrator_bridge.run_executor_job()`'s
-    # `metadata.get("authorized", False)`. This used to default to True, which
-    # meant ANY caller that forgot to pass the flag got a live scan against an
-    # unconfirmed target -- and the authorization gate in `ReconEngine.run()`
-    # could never fire, because nothing ever sent authorized=False. Callers that
-    # represent explicit operator intent (`wth recon run/quick`, the `/recon`
-    # slash handler, a `recon watch` cron entry, the supervisor's
-    # `job_create_recon`) set it explicitly at that boundary.
-    authorized = bool(meta.get("authorized", False))
     realtime = bool(meta.get("realtime", False))
+
+    # P0-1: otorisasi dibaca dari artefak, bukan dari metadata job. Sebelum ini
+    # setiap pemanggil hardcode `authorized=True`, jadi scope card tidak pernah
+    # diperiksa dan `wth-ai recon run <host apa pun>` langsung memindai. Tanpa kartu
+    # valid, job berhenti SEBELUM engine dibuat.
+    from wth_ai.scope_card import ScopeCard, ScopeCardError
+    from wth_ai.workspace import wth_home
+
+    try:
+        card = ScopeCard.load(wth_home() / "scope_card.json")
+    except FileNotFoundError:
+        return {"type": "recon", "status": "failed",
+                "error": "scope: tidak ada scope card (jalankan `wth-ai scope` dulu)"}
+    except (ScopeCardError, ValueError, OSError) as exc:
+        return {"type": "recon", "status": "failed",
+                "error": f"scope: scope card tidak valid ({exc})"}
 
     manager = getattr(ctx, "_manager", None)
     bus = getattr(manager, "bus", None)
     store = getattr(manager, "store", None)
     baseline = _load_baseline(store, target, job.job_id)
 
-    ctx.log(f"recon start target={target} profile={profile} authorized={authorized}")
-    engine = ReconEngine()
+    ctx.log(f"recon start target={target} profile={profile} scope_card={card.target}")
+    engine = ReconEngine(scope_card=card)
     result = engine.run(
         target,
         profile=profile,
         job_id=job.job_id,
-        authorized=authorized,
         realtime=realtime,
         progress=ctx.progress,
         log=ctx.log,
         bus=bus,
         baseline=baseline,
-        # `wth job stop` can now actually stop a running scan: the engine polls
+        # `wth-ai job stop` can now actually stop a running scan: the engine polls
         # this between tools instead of the handler checking once at entry.
         should_stop=ctx.should_stop,
     )
@@ -241,11 +247,26 @@ def handler_autopilot(job: Any, ctx: Any) -> dict[str, Any]:
     if not target:
         return {"type": "autopilot", "status": "failed", "error": "no target"}
     meta = getattr(job, "metadata", {}) or {}
-    if not bool(meta.get("authorized", False)):
-        return {"type": "autopilot", "status": "blocked",
-                "reason": "authorized flag required (fail-closed)"}
     if ctx.should_stop():
         return {"type": "autopilot", "status": "stopped"}
+
+    # P1-1 (audit 2026-11-06): otorisasi dibaca dari scope card, bukan dari
+    # metadata job. Sebelum ini `handler_autopilot` hanya cek metadata
+    # `authorized=True` (yang ditanami `_enqueue` di cron) lalu paksa-authorize
+    # scope (`set_scope(authorized=True, in_scope=[target])`) tanpa memuat
+    # `scope_card.json` — melanggar invariant P0-1 (authorization harus dari
+    # artifact scope card). Tanpa kartu valid, job berhenti SEBELUM bridge dibuat.
+    from wth_ai.scope_card import ScopeCard, ScopeCardError
+    from wth_ai.workspace import wth_home
+
+    try:
+        card = ScopeCard.load(wth_home() / "scope_card.json")
+    except FileNotFoundError:
+        return {"type": "autopilot", "status": "failed",
+                "error": "scope: tidak ada scope card (jalankan `wth-ai scope` dulu)"}
+    except (ScopeCardError, ValueError, OSError) as exc:
+        return {"type": "autopilot", "status": "failed",
+                "error": f"scope: scope card tidak valid ({exc})"}
 
     ctx.progress(10, 100, "autopilot: menyusun langkah")
     try:
@@ -285,15 +306,23 @@ def handler_autopilot(job: Any, ctx: Any) -> dict[str, Any]:
 
     # Scope bridge diisi SEBELUM bridge dibuat (bukan dimutasi sesudahnya): bridge
     # memakai ScopeManager sendiri, dan tanpa target/in-scope di sana setiap probe
-    # berhenti di gate scope dengan status kosong.
+    # berhenti di gate scope dengan status kosong. Nilai diambil DARI scope card
+    # (P1-1), bukan hardcode — target/domain/CIDR kartu yang menentukan in-scope.
     scope_manager = ScopeManager()
-    scope_manager.set_scope(target=target, authorized=True, in_scope=[target])
+    in_scope = [*(card.domains or []), *(card.cidr or [])] or [card.target]
+    scope_manager.set_scope(
+        target=card.target,
+        authorized=card.authorized,
+        in_scope=in_scope,
+        destructive=card.destructive,
+    )
     bridge = AgentTerminalBridge(config, permission, scope_manager, session_id)
 
     state = SessionState()
-    state.scope.target = target
-    state.scope.in_scope = [target]
-    state.scope.authorized = True
+    state.scope.target = card.target
+    state.scope.in_scope = list(in_scope)
+    state.scope.authorized = card.authorized
+    state.scope.destructive_allowed = card.destructive
     # Opt-in destruktif dari scope yang TERSIMPAN (hasil `/scope set destructive=yes`),
     # bukan dari metadata job -- supaya cron tidak bisa membukanya sendiri.
     try:

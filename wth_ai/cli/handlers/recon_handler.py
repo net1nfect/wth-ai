@@ -77,7 +77,6 @@ def _run_recon_job(orch: Any, target: str, profile: str, *, realtime: bool = Fal
         profile=profile,
         created_by="repl",
         metadata={
-            "authorized": True,
             "realtime": realtime,
             "profile": profile,
             "session_id": orch.state.session_id,
@@ -115,9 +114,9 @@ def _recon_run(orch: Any, args: list[str]) -> str:
     if not ok and orch.state.scope.target:
         return f"Blocked: {msg}"
 
-    if not orch.state.scope.target:
-        orch.scope_mgr.update_from_dict({"target": target, "in_scope": [target], "authorized": True})
-        orch.state.scope = orch.scope_mgr.scope
+    # P0-1: sebelumnya baris ini memberi diri sendiri otorisasi
+    # (`authorized: True`) saat scope kosong. Sekarang otorisasi hanya berasal
+    # dari scope card di disk; tanpa kartu, job ditolak handler.
 
     bus = getattr(orch, "_ui_bus", None)
     if bus:

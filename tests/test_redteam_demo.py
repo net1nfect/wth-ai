@@ -1,5 +1,9 @@
 """Demo TUI jujur: label [demo] dan penutup yang menyatakan bukan hasil nyata."""
 
+import pytest
+
+pytest.importorskip("textual")
+
 from wth_ai.cli.tui.redteam.app import DEMO_DISCLAIMER, DEMO_STEPS
 
 

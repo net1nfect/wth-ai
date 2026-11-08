@@ -5,7 +5,10 @@ from __future__ import annotations
 from typing import Any
 from uuid import uuid4
 
-from wth_ai.models import Finding, FindingState, Hypothesis, utc_now
+from wth_ai.models import (Finding, FindingState, Hypothesis,
+                           InvalidFindingStateTransitionError,
+                           finding_state_transition_allowed,
+                           strict_state_machine, utc_now)
 
 
 class FindingsDB:
@@ -59,6 +62,15 @@ class FindingsDB:
         finding = self.findings[finding_id]
         if isinstance(state, str):
             state = FindingState(state) if state in {s.value for s in FindingState} else finding.state
+        # P0-5: guard lifecycle (WU-116) sebelumnya nol pemanggil, jadi VERIFIED
+        # bisa dibalik jadi HYPOTHESIS tanpa jejak. Di mode ketat transisi ilegal
+        # melempar; di jalur biasa ditolak tanpa menghentikan loop.
+        if not finding_state_transition_allowed(finding.state, state):
+            if strict_state_machine():
+                raise InvalidFindingStateTransitionError(
+                    f"{finding.state.value} -> {state.value} tidak diizinkan"
+                )
+            return finding
         finding.state = state
         finding.updated_at = utc_now()
         for key, value in kwargs.items():

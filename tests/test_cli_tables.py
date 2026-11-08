@@ -129,7 +129,7 @@ def _run(args: list[str], *, env_extra: dict[str, str] | None = None) -> str:
     env.pop("WTH_UNRESTRICTED", None)
     env.update(env_extra or {})
     proc = subprocess.run(
-        [sys.executable, "wth-main.py", *args],
+        [sys.executable, "wth-ai-main.py", *args],
         cwd=REPO, capture_output=True, text=True, timeout=120, env=env,
     )
     return proc.stdout + proc.stderr

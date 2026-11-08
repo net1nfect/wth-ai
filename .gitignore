@@ -38,10 +38,10 @@ config/user.yaml.bak-*
 config/.env.bak-*
 
 # Hasil pemindaian & rekaman engagement
-# CATATAN: `wth-results/` dan `data/engagements/` saat ini DILACAK git (lihat
+# CATATAN: `wth-ai-results/` dan `data/engagements/` saat ini DILACAK git (lihat
 # AGENTS.md §5). Pola di bawah hanya menangkap file baru; yang sudah tercatat
 # tidak terpengaruh sampai pemilik repo memutuskan menghapusnya dari indeks.
-wth-results/
+wth-ai-results/
 /out/
 reports/*.html
 reports/*.pdf
@@ -53,3 +53,9 @@ data/kb/*.db
 # Prompt bypass milik operator: prompt pribadi tidak ikut ter-publish.
 # Profil bawaan tetap dilacak di prompts/agent/AGENT.md.
 bypass/
+
+# Riwayat CLI dan artefak coverage milik operator, bukan isi repo (P2-7).
+data/cli_history
+.coverage
+.coverage.*
+htmlcov/

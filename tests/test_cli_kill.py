@@ -11,7 +11,7 @@ REPO = Path(__file__).resolve().parents[1]
 def test_kill_command_writes_flag(tmp_path):
     env = {**os.environ, "WTH_HOME": str(tmp_path), "WTH_SKIP_SETUP": "1",
            "WTH_PLAIN": "1"}
-    out = subprocess.run([sys.executable, "wth-main.py", "kill"], cwd=REPO,
+    out = subprocess.run([sys.executable, "wth-ai-main.py", "kill"], cwd=REPO,
                          capture_output=True, text=True, timeout=90, env=env)
     assert out.returncode == 0, out.stderr
     assert "kill:" in (out.stdout + out.stderr)

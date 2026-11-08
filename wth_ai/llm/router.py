@@ -222,17 +222,65 @@ class LLMProviderRouter:
         return rc.model, rc.backup_model or rc.model
 
     def available(self) -> bool:
+        # WTH_TEST_MODE tetap lolos: banyak test memanggil jalur ber-LLM tanpa
+        # ingin menyiapkan provider. `llm_status` sendiri TIDAK punya jalan
+        # pintas ini -- status harus bisa diuji apa adanya.
         if os.environ.get("WTH_TEST_MODE") == "1":
             return True
+        return self.llm_status() in {"configured", "online"}
+
+    def llm_status(self, probe: bool = False) -> str:
+        """Empat keadaan, bukan satu boolean (P1-1).
+
+        `blocked`    — tidak ada key dan tidak ada endpoint eksplisit.
+        `configured` — ada kredensial/endpoint, tapi belum dihubungi.
+        `online`     — hanya bila `probe=True` dan provider menjawab.
+        `offline`    — `probe=True` tapi tidak ada yang menjawab.
+
+        `available()` dulu menghitung base URL tebakan `127.0.0.1:20128`
+        sebagai "siap", jadi UI mencetak "llm online" tanpa server apa pun.
+        """
         secrets = self.config.secrets
-        if secrets.openrouter_api_key or os.environ.get("OPENROUTER_API_KEY"):
-            if self._get_or_create_provider("openrouter").available():
-                return True
-        for role in ("planner", "executor", "verifier"):
-            rc = self._role_config(role)
-            if self._get_or_create_provider(rc.type).available():
-                return True
-        return False
+        from wth_ai.vault import is_vault_ref
+
+        # `vault:<name>` yang tidak bisa diurai (vault tidak ada / entri hilang)
+        # bukan kredensial. Sebelum config me-resolve-nya, string "vault:..."
+        # sendiri terhitung sebagai key yang sah.
+        def _key(name: str, env: str) -> bool:
+            value = getattr(secrets, name, "") or ""
+            if is_vault_ref(value):
+                return bool(os.environ.get(env))
+            return bool(value or os.environ.get(env))
+
+        has_key = _key("openrouter_api_key", "OPENROUTER_API_KEY") or any(
+            _key(f"{t}_api_key", f"{t.upper()}_API_KEY")
+            for t in ("openai", "anthropic", "google", "groq", "router9")
+        )
+        role_types = {self._role_config(role).type
+                      for role in ("planner", "executor", "verifier")}
+        # Endpoint eksplisit = operator menyebutkannya sendiri. Base URL
+        # bawaan `127.0.0.1:20128` BUKAN bukti ada server; hanya base URL yang
+        # berbeda dari default yang dihitung.
+        default_router9 = "http://127.0.0.1:20128/v1"
+        explicit_endpoint = any(
+            t == "ollama"
+            or (t == "9router" and bool(secrets.router9_base_url)
+                and secrets.router9_base_url != default_router9)
+            or t in self.config.custom_providers
+            or (t in {"openai", "anthropic", "google", "groq"}
+                and bool(getattr(secrets, f"{t}_api_key", "")))
+            for t in role_types
+        )
+        if not has_key and not explicit_endpoint:
+            return "blocked"
+        if not probe:
+            return "configured"
+        try:
+            rc = self._role_config("planner")
+            ok = self.ping_provider(rc.type, rc.model)
+        except Exception:  # noqa: BLE001 - probe failure IS the answer
+            ok = False
+        return "online" if ok else "offline"
 
     def agentic_available(self) -> bool:
         """Whether supervisor tool-loop can reach an LLM."""

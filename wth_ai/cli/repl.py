@@ -24,11 +24,10 @@ from rich.live import Live
 
 from wth_ai.cli.command_class import classify_command, is_quick_command
 from wth_ai.cli.quit import SessionQuit
-from wth_ai.cli.tui.widgets.slash_completer import SlashCompleter
 from wth_ai.cli.ui.activity_stream import ActivityStream, live_activity_enabled, verbose_enabled
 from wth_ai.cli.ui.animations import animations_enabled
 from wth_ai.cli.ui.banner import render_banner
-from wth_ai.cli.ui.renderer import compact_enabled, render_response
+from wth_ai.cli.ui.renderer import render_response
 from wth_ai.cli.ui.tool_trace import ToolTracePanel
 from wth_ai.cli.ui.theme import HINT_LINE, PROMPT_SYMBOL, SPINNER_FRAMES, THEME
 
@@ -56,7 +55,7 @@ class WTHRepl:
         self,
         handler: Callable[[str], str],
         *,
-        history_path: str = "data/cli_history",
+        history_path: str | None = None,
         banner: str = "",
         status_fn: Callable[[], object] | None = None,
         prompt_fn: Callable[[], str] | None = None,
@@ -75,7 +74,7 @@ class WTHRepl:
         self.activity = ActivityStream(self.console)
         #: Ring buffer of what this session printed. PageUp opens it in the in-app
         #: pager: a raw-mode CLI owns the keyboard, so the TERMINAL cannot scroll
-        #: while `wth` runs -- the app has to provide the scroll itself.
+        #: while `wth-ai` runs -- the app has to provide the scroll itself.
         self._output_buffer: deque[str] = deque(maxlen=4000)
         #: set by the PageUp binding; the run loop opens the pager after the prompt
         self._pager_requested = False
@@ -93,6 +92,11 @@ class WTHRepl:
         self._toolbar_at = 0.0
         from wth_ai.cli.tui.widgets.slash_completer import build_completer
 
+        if history_path is None:
+            # P2-7: default relatif menulis `data/cli_history` ke repo/cwd.
+            # Riwayat operator milik WTH_HOME, bukan pohon kerja.
+            from wth_ai.workspace import wth_home
+            history_path = str(wth_home() / "data" / "cli_history")
         self.session: PromptSession = PromptSession(
             history=FileHistory(history_path),
             key_bindings=self.bindings,
@@ -383,53 +387,6 @@ class WTHRepl:
         self._toolbar_at = now
         return self._toolbar_cache
 
-    def _build_toolbar(self) -> list[tuple[str, str]]:
-        from wth_ai.cli.ui.context_bar import render_context_bar
-        from wth_ai.llm.usage import get_ledger
-        from wth_ai.cli.ui.theme import budget_bar
-
-        # Stable left anchor: the bar identifies itself even when there is no
-        # budget, no target and no orchestrator yet.
-        out: list[tuple[str, str]] = [("class:status-brand", " wth-ai")]
-        state = getattr(self.orch, "state", None) if self.orch else None
-        target = ""
-        if state is not None:
-            scope = getattr(state, "scope", None)
-            target = str(getattr(scope, "target", "") or "")
-        if target:
-            out.append(("class:status-warn", f" ◎ {target}"))
-        perm = ""
-        if state is not None:
-            perm = getattr(getattr(state, "permission_mode", None), "value", "") or ""
-        if perm:
-            out.append(("class:status-plan", f"  {perm}"))
-
-        if self.orch is not None and hasattr(self.orch, "client"):
-            try:
-                ctx = render_context_bar(self.orch)
-            except Exception:  # noqa: BLE001
-                ctx = ""
-            if ctx:
-                out.append(("class:status", f"  {ctx}"))
-
-        # Budget + spend. `check_budget` reports against the SESSION scope, which
-        # is what a running CLI can actually be held to.
-        try:
-            ledger = get_ledger()
-            data = ledger.summary()
-            tokens = data["total_tokens"]
-            budget = data.get("budget", {})
-            if tokens:
-                out.append(("class:status", f"  {tokens} tok"))
-            bar = budget_bar(data.get("session_tokens", 0), budget.get("limit_tokens", 0))
-            if bar:
-                style = "class:status-warn" if budget.get("over") else "class:status-accent"
-                out.append((style, f"  {bar}"))
-        except Exception:  # noqa: BLE001
-            pass
-
-        return out
-
     @staticmethod
     def _completion_menu_open() -> bool:
         """True only while the completion menu is showing.
@@ -686,7 +643,10 @@ class WTHRepl:
         if verbose_enabled(self.config):
             hint += " · verbose on"
         self.console.print(f"[{THEME['muted']}]{hint}[/]")
-        self._print_status()
+        # P2-2: on a tty the toolbar under the input already carries this; the
+        # printed card would show the same model/target/perm twice at startup.
+        if not self.live_status:
+            self._print_status()
         self.console.print()
 
         spinner = itertools.cycle(SPINNER_FRAMES)

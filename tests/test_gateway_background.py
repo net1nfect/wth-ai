@@ -73,6 +73,43 @@ def test_stop_gateway_clears_stale_pid():
     assert read_gateway_pid() is None
 
 
+def test_is_gateway_running_rejects_pid_reuse_with_mismatched_start(monkeypatch):
+    """P2-1: pid file yang identitasnya tidak cocok (start ticks lain) harus
+    dianggap stale, walau pid itu hidup — mencegah SIGKILL proses lain pada
+    pid reuse."""
+    pid_path = gateway_pid_path()
+    pid_path.parent.mkdir(parents=True, exist_ok=True)
+    pid_path.write_text(f"{os.getpid()}\n999999\n", encoding="utf-8")
+    holder = _hold_socket(gateway_socket_path())
+    try:
+        assert is_gateway_running() is False
+        assert not pid_path.exists()
+    finally:
+        holder.close()
+        gateway_socket_path().unlink(missing_ok=True)
+
+
+def test_is_gateway_running_with_matching_identity(monkeypatch):
+    """P2-1: start ticks cocok dengan proses hidup => dianggap gateway."""
+    short_home = Path("/tmp") / f"wth-gw-{os.getpid()}"
+    short_home.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setenv("WTH_HOME", str(short_home))
+    from wth_ai.gateway.background import _proc_state_ticks
+
+    pid = os.getpid()
+    start = _proc_state_ticks(pid)
+    assert start is not None
+    pid_path = gateway_pid_path()
+    pid_path.parent.mkdir(parents=True, exist_ok=True)
+    pid_path.write_text(f"{pid}\n{start}\n", encoding="utf-8")
+    holder = _hold_socket(gateway_socket_path())
+    try:
+        assert is_gateway_running() is True
+    finally:
+        holder.close()
+        gateway_socket_path().unlink(missing_ok=True)
+
+
 def test_stop_gateway_sends_sigterm(monkeypatch):
     pid_path = gateway_pid_path()
     pid_path.parent.mkdir(parents=True, exist_ok=True)
@@ -102,7 +139,7 @@ def test_spawn_background_raises_when_running(monkeypatch):
             from wth_ai.gateway.background import spawn_background
 
             with pytest.raises(RuntimeError, match="already running"):
-                spawn_background("config/wth_config.yaml")
+                spawn_background("config/wth_ai_config.yaml")
 
 
 def test_gateway_cli_stop_and_status_registered():
@@ -111,7 +148,7 @@ def test_gateway_cli_stop_and_status_registered():
 
     from click.testing import CliRunner
 
-    path = Path(__file__).resolve().parents[1] / "wth-main.py"
+    path = Path(__file__).resolve().parents[1] / "wth-ai-main.py"
     spec = importlib.util.spec_from_file_location("wth_main", path)
     mod = importlib.util.module_from_spec(spec)
     assert spec.loader is not None

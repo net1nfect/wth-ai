@@ -46,7 +46,7 @@ class SkillRegistry:
         try:
             from wth_ai.workspace import wth_home
 
-            sources.append(("wth", wth_home() / "skills"))
+            sources.append(("wth-ai", wth_home() / "skills"))
         except Exception:  # noqa: BLE001
             pass
         for source, base in sources:

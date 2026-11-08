@@ -15,7 +15,7 @@ out/bundle/
 Verifikasi:
 
 ```bash
-wth verify out/bundle/
+wth-ai verify out/bundle/
 # verify: OK — out/bundle
 ```
 
@@ -27,7 +27,7 @@ from pathlib import Path
 p = Path("out/bundle/findings.json")
 p.write_text(p.read_text().replace("F-001", "F-999"))
 PY
-wth verify out/bundle/     # exit 1, "berubah: findings.json"
+wth-ai verify out/bundle/     # exit 1, "berubah: findings.json"
 ```
 
 ## Kenapa CONFIRMED sulit dipalsukan
@@ -49,17 +49,17 @@ for event in events:
 ```
 
 Baris pertama selalu `prev_hash = 64 nol`. Memutus rantai di tengah membuat
-hash berikutnya tidak cocok, dan `wth verify` melaporkannya.
+hash berikutnya tidak cocok, dan `wth-ai verify` melaporkannya.
 
 ## Laporan dari bundel yang sama
 
 ```bash
-wth report --bundle out/bundle --format html   # statis, tanpa server
-wth report --bundle out/bundle --format sarif  # 2.1.0, hanya CONFIRMED
-wth report --bundle out/bundle --format json   # findings mentah
-wth report --bundle out/bundle --format id     # Bahasa Indonesia + rujukan
-wth report --bundle out/bundle --format pdf    # satu file, tanpa dependency
-wth disclosure F-001 --bundle out/bundle       # advisory 90 hari
+wth-ai report --bundle out/bundle --format html   # statis, tanpa server
+wth-ai report --bundle out/bundle --format sarif  # 2.1.0, hanya CONFIRMED
+wth-ai report --bundle out/bundle --format json   # findings mentah
+wth-ai report --bundle out/bundle --format id     # Bahasa Indonesia + rujukan
+wth-ai report --bundle out/bundle --format pdf    # satu file, tanpa dependency
+wth-ai disclosure F-001 --bundle out/bundle       # advisory 90 hari
 ```
 
 Semua format dibaca dari `bundle/findings.json` yang sama, jadi angka di PDF,

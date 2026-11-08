@@ -367,7 +367,7 @@ def _model_list(orch: Any, provider: str, *, store_picker: bool = False, needle:
             f"Tidak ada model dari `{provider}`.\n"
             f"  Endpoint yang dipakai: {endpoint or '(base URL belum diset)'}\n"
             "  Kalau itu bukan gateway yang lu maksud, perbaiki base URL-nya "
-            "(`wth setup`, atau `/provider`)."
+            "(`wth-ai setup`, atau `/provider`)."
         )
 
     needle = (needle or "").strip().lower()
@@ -423,7 +423,7 @@ def _model_picker_flow(orch: Any, *, needle: str = "", role: str = "planner") ->
             f"Tidak ada model dari `{provider}`.\n"
             f"  Endpoint yang dipakai: {endpoint or '(base URL belum diset)'}\n"
             "  Kalau itu bukan gateway yang lu maksud, perbaiki base URL-nya "
-            "(`wth setup`, atau `/provider`)."
+            "(`wth-ai setup`, atau `/provider`)."
         )
 
     needle = (needle or "").strip().lower()

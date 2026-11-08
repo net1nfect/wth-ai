@@ -32,7 +32,7 @@ tools:
   user_bin: ~/.wth-ai/tools/bin
 
 prompts_dir: prompts
-results_dir: wth-results
+results_dir: wth-ai-results
 require_openrouter: false
 realtime_only: true
 require_llm: false

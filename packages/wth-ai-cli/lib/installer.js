@@ -43,10 +43,10 @@ async function maybeRunSetup(launcher) {
   const { spawnSync } = require("child_process");
   const setupArgs = launcher.type === "python" ? [launcher.path, "setup"] : ["setup"];
   const cmd = launcher.type === "python" ? "python3" : launcher.path;
-  console.log("[wth] First run — starting setup wizard...");
+  console.log("[wth-ai] First run — starting setup wizard...");
   const r = spawnSync(cmd, setupArgs, { stdio: "inherit", env: process.env });
   if (r.status !== 0) {
-    console.warn("[wth] Setup wizard exited with code", r.status);
+    console.warn("[wth-ai] Setup wizard exited with code", r.status);
   }
 }
 
@@ -91,9 +91,9 @@ function download(url, dest) {
 
 function findWthMainPy() {
   const candidates = [
-    path.join(process.cwd(), "wth-main.py"),
-    path.join(__dirname, "..", "..", "..", "wth-main.py"),
-    process.env.WTH_SOURCE_ROOT ? path.join(process.env.WTH_SOURCE_ROOT, "wth-main.py") : null,
+    path.join(process.cwd(), "wth-ai-main.py"),
+    path.join(__dirname, "..", "..", "..", "wth-ai-main.py"),
+    process.env.WTH_SOURCE_ROOT ? path.join(process.env.WTH_SOURCE_ROOT, "wth-ai-main.py") : null,
   ].filter(Boolean);
   for (const p of candidates) {
     const resolved = path.resolve(p);
@@ -149,7 +149,7 @@ async function ensureRuntime() {
     if (fallback) return fallback;
     throw new Error(
       `Failed to download WTH-AI runtime: ${err.message}\n` +
-        `Use: python3 wth-main.py run '/doctor' or npm i -g ./packages/wth-cli`
+        `Use: python3 wth-ai-main.py run '/doctor' or npm i -g ./packages/wth-ai-cli`
     );
   }
 }

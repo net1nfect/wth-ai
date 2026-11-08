@@ -33,3 +33,21 @@ def test_csv_has_header_and_rows(tmp_path):
         rows = list(csv.reader(fh))
     assert rows[0] == ["id", "severity", "state", "provenance", "hypothesis"]
     assert len(rows) == 3
+
+
+def test_chains_written_when_provided(tmp_path):
+    """B7: rantai muncul sebagai `chains.json` di artefak (bukan hanya memori)."""
+    from wth_ai.redteam.chain import Chain
+
+    chains = [Chain(id="C-001", root="F-001", links=[{"finding": "F-001", "context": {"credentials": "x"}}])]
+    write_findings(tmp_path, _findings(), chains=chains)
+    path = tmp_path / "chains.json"
+    assert path.is_file()
+    data = json.loads(path.read_text())
+    assert data[0]["id"] == "C-001"
+    assert data[0]["root"] == "F-001"
+
+
+def test_no_chains_file_when_none(tmp_path):
+    write_findings(tmp_path, _findings())
+    assert not (tmp_path / "chains.json").exists()

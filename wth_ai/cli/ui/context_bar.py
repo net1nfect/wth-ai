@@ -38,7 +38,10 @@ def render_context_bar(orchestrator: Any) -> str:
     provider = orchestrator.client.provider_for_role("planner")
     ctx_len = provider.get_context_length(model)
     ctx_est = _estimate_tokens(getattr(orchestrator.state, "conversation", None))
-    ctx_bit = f"ctx {ctx_est}" + (f"/{ctx_len}" if ctx_len else "")
+    # P2-3: an empty conversation has nothing to measure. `ctx 0` reads as
+    # "0 tokens used" when the truth is "not measured yet"; omit the field the
+    # way `theme.budget_bar` returns "" for a limit of 0.
+    ctx_bit = f"ctx {ctx_est}" + (f"/{ctx_len}" if ctx_len else "") if ctx_est else ""
 
     usage = orchestrator.state.metadata.get("last_llm_usage", {}) if hasattr(orchestrator, "state") else {}
     usage_bit = ""
@@ -58,5 +61,5 @@ def render_context_bar(orchestrator: Any) -> str:
     ]
     if usage_bit:
         parts.append(usage_bit)
-    return " · ".join(parts)
+    return " · ".join(p for p in parts if p)
 

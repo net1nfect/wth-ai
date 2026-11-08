@@ -3,7 +3,7 @@
   "version": "1.0.0",
   "description": "WTH-AI — Mythos-class bug bounty AI CLI (global launcher)",
   "bin": {
-    "wth": "bin/wth.js"
+    "wth-ai": "bin/wth-ai.js"
   },
   "files": [
     "bin",

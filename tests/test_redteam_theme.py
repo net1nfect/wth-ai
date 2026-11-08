@@ -1,5 +1,9 @@
 """Tema TUI red team dibangun dari THEME bersama, bukan hex lepas."""
 
+import pytest
+
+pytest.importorskip("textual")
+
 from wth_ai.cli.tui.redteam.theme_css import redteam_css
 from wth_ai.cli.ui.theme import THEME
 

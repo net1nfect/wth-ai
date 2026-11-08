@@ -7,7 +7,6 @@ from typing import Any, Callable
 
 import requests
 
-from wth_ai.llm.errors import LLMError
 from wth_ai.llm.providers.base import BaseLLMProvider, raise_for_status
 
 

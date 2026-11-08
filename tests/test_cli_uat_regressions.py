@@ -94,6 +94,26 @@ def test_picker_has_no_reference_to_a_parameter_it_does_not_own():
     assert "on_render" not in body, "referensi ke parameter yang tidak ada di scope fungsi ini"
 
 
+@pytest.mark.parametrize("key,expected", [("pageup", -1), ("pagedown", 1)])
+def test_picker_page_keys_move_the_cursor(key, expected):
+    """P1-5: `_page_up`/`_page_down` memakai `window` yang hanya ada di
+    `pick_from_list`, jadi PageUp/PageDown melempar `NameError`."""
+    from prompt_toolkit.keys import Keys
+
+    from wth_ai.cli.ui.picker import ListPickerState, build_picker_bindings
+
+    state = ListPickerState(items=[f"item-{i}" for i in range(40)], window=8)
+    state.index = 16
+    result: dict = {"value": None}
+    bindings = build_picker_bindings(state, result)
+
+    wanted = Keys.PageUp if key == "pageup" else Keys.PageDown
+    binding = next(b for b in bindings.bindings if wanted in b.keys)
+    binding.handler(_Event(""))
+
+    assert state.selected() == f"item-{16 + 8 * expected}"
+
+
 # --------------------------------------------------------------------------- #
 # 2. setiap handler slash harus terdaftar di registry
 # --------------------------------------------------------------------------- #

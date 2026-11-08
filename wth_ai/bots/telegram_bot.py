@@ -68,7 +68,7 @@ class WTHTelegramBot:
             await update.message.reply_text(chunk)  # type: ignore[union-attr]
         if len(result) > TELEGRAM_MAX:
             buf = io.BytesIO(result.encode())
-            buf.name = "wth-output.txt"
+            buf.name = "wth-ai-output.txt"
             await update.message.reply_document(document=buf)  # type: ignore[union-attr]
 
     async def cmd_start(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -119,11 +119,17 @@ class WTHTelegramBot:
         app.add_handler(CommandHandler("graph", self.cmd_graph))
         app.add_handler(CommandHandler("hunt", self.cmd_hunt))
         # Fase 3 integration commands (shared command service).
+        # P3-2: `CommandHandler` requires a coroutine function; the old
+        # `lambda u, c, n=name: self._svc_cmd(...)` returns a coroutine but is
+        # not one, and a defaulted parameter is not a handler signature.
+        def _make(cmd: str):
+            async def _handler(update, context) -> None:
+                await self._svc_cmd(update, context, cmd)
+
+            return _handler
+
         for name in ("status", "jobs", "approve", "deny", "stop", "report", "settings", "help"):
-            app.add_handler(CommandHandler(
-                name,
-                lambda u, c, n=name: self._svc_cmd(u, c, n),
-            ))
+            app.add_handler(CommandHandler(name, _make(name)))
         app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self.on_message))
         print("WTH-AI Telegram bot starting...")
         app.run_polling()

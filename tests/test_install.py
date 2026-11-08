@@ -439,7 +439,7 @@ def test_install_repairs_venv_without_pip(tmp_path):
     assert check.returncode != 0, "venue harus dimulai tanpa pip"
 
     result = subprocess.run(
-        [bash, str(INSTALL_SH), "--no-setup", "--no-path",
+        [bash, str(INSTALL_SH), "--no-setup", "--no-path", "--skip-deps",
          "--home", str(home), "--bin", str(tmp_path / "bin"), "--source", str(REPO)],
         capture_output=True, text=True,
         env={**os.environ, "HOME": str(tmp_path), "WTH_HOME": str(home)},
@@ -466,7 +466,7 @@ def test_install_rebuilds_broken_venv(tmp_path):
     fake_python.chmod(0o755)
 
     result = subprocess.run(
-        [bash, str(INSTALL_SH), "--no-setup", "--no-path",
+        [bash, str(INSTALL_SH), "--no-setup", "--no-path", "--skip-deps",
          "--home", str(home), "--bin", str(tmp_path / "bin"), "--source", str(REPO)],
         capture_output=True, text=True,
         env={**os.environ, "HOME": str(tmp_path), "WTH_HOME": str(home)},
@@ -551,26 +551,68 @@ def test_shell_path_block_is_idempotent_and_removed(tmp_path):
         "WTH_HOME": str(home / "wth"),
         "WTH_PYTHON": sys.executable,
     }
-    args = [bash, str(INSTALL_SH), "--no-setup", "--bin", str(bin_dir)]
+    # --skip-deps, bukan --dry-run: dry-run MELEWATI penulisan PATH, jadi tidak
+    # bisa menguji idempotensi blok yang justru jadi subjek tes ini. Tanpa
+    # --skip-deps, `pip install -e` menembak ke jaringan sampai timeout.
+    args = [bash, str(INSTALL_SH), "--no-setup", "--skip-deps", "--bin", str(bin_dir)]
 
-    first = subprocess.run(args, capture_output=True, text=True, env=env)
+    first = subprocess.run(args, capture_output=True, text=True, env=env, timeout=120)
     assert first.returncode == 0, first.stderr
     text = rc.read_text(encoding="utf-8")
     assert text.count("# WTH-AI command") == 1
     assert str(bin_dir) in text
     assert "EDITOR=vim" in text
+    # P2-10 / D5: satu nama. `wth` tidak dipasang sama sekali.
+    assert (bin_dir / "wth-ai").exists()
+    assert not (bin_dir / "wth").exists()
 
-    second = subprocess.run(args, capture_output=True, text=True, env=env)
+    second = subprocess.run(args, capture_output=True, text=True, env=env, timeout=120)
     assert second.returncode == 0, second.stderr
     assert rc.read_text(encoding="utf-8").count("# WTH-AI command") == 1
 
     remove = subprocess.run(
         [bash, str(INSTALL_SH), "--uninstall", "--bin", str(bin_dir)],
-        capture_output=True, text=True, env=env,
+        capture_output=True, text=True, env=env, timeout=120,
     )
     assert remove.returncode == 0, remove.stderr
     assert "# WTH-AI command" not in rc.read_text(encoding="utf-8")
     assert "EDITOR=vim" in rc.read_text(encoding="utf-8")
+
+
+def test_installer_drops_the_legacy_wth_symlink_only(tmp_path):
+    """Alias `wth` lama dibersihkan, tapi berkas asing bernama `wth` tidak."""
+    bash = shutil.which("bash")
+    if bash is None:
+        pytest.skip("bash tidak tersedia")
+
+    home = tmp_path / "home"
+    home.mkdir()
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    legacy = bin_dir / "wth"
+    legacy.symlink_to("/nonexistent/old-launcher")
+
+    env = {
+        **os.environ,
+        "HOME": str(home),
+        "SHELL": "/bin/bash",
+        "WTH_HOME": str(home / "wth"),
+        "WTH_PYTHON": sys.executable,
+    }
+    args = [bash, str(INSTALL_SH), "--no-setup", "--skip-deps",
+            "--no-path", "--bin", str(bin_dir)]
+
+    proc = subprocess.run(args, capture_output=True, text=True, env=env, timeout=120)
+    assert proc.returncode == 0, proc.stderr
+    assert (bin_dir / "wth-ai").exists()
+    assert not legacy.exists() and not legacy.is_symlink()
+
+    # Berkas biasa milik tool lain tidak boleh dihapus.
+    foreign = bin_dir / "wth"
+    foreign.write_text("#!/bin/sh\necho milik tool lain\n", encoding="utf-8")
+    proc = subprocess.run(args, capture_output=True, text=True, env=env, timeout=120)
+    assert proc.returncode == 0, proc.stderr
+    assert foreign.exists() and not foreign.is_symlink()
 
 
 def test_uninstall_dry_run_is_safe(tmp_path):
@@ -589,7 +631,16 @@ def test_uninstall_dry_run_is_safe(tmp_path):
     assert (home / "config" / "user.yaml").exists()
 
 
-def test_pyproject_declares_entry_points():
+def test_pyproject_declares_console_script():
+    """P1-8: wheel kini ikut `wth-ai-main.py` (package-data), jadi console script
+    `wth-ai` dideklarasikan dan bisa jalan dari instalasi wheel. Launcher di
+    `scripts/install.sh` tetap ada untuk install dari sumber."""
     text = (REPO / "pyproject.toml").read_text(encoding="utf-8")
-    assert 'wth = "wth_ai.cli.entry:main"' in text
+    assert 'wth-ai = "wth_ai.cli.entry:main"' in text
     assert "requires-python" in text
+
+
+def test_installer_writes_the_launcher_itself():
+    """Instalasi sumber tidak bergantung pada entry point paket."""
+    text = (REPO / "scripts/install.sh").read_text(encoding="utf-8")
+    assert 'exec %s -m wth_ai.cli.entry "$@"' in text

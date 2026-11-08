@@ -31,10 +31,16 @@ from wth_ai.workspace import wth_home
 BYPASS_DIR_ENV = "WTH_BYPASS_DIR"
 DEFAULT_PROFILE = "default"
 DEFAULT_SOURCE = "Unified.md"
-BUILTIN_PROFILE = "wth"
+BUILTIN_PROFILE = "wth-ai"
+#: Ejaan lama, tersimpan di `user.yaml` (`agent.bypass: wth`) atau `WTH_BYPASS`.
+#: Tanpa alias ini profil gagal dimuat dan sesi diam-diam berjalan tanpa bypass.
+LEGACY_BUILTIN = "wth"
 _MAX_CHARS = 24000
 
 _NAME_RE = re.compile(r"^[a-z0-9][a-z0-9._-]{0,63}$")
+
+#: Semua ejaan yang menunjuk profil bawaan.
+_BUILTIN_NAMES = frozenset({"", DEFAULT_PROFILE, BUILTIN_PROFILE, LEGACY_BUILTIN})
 
 #: Prompt bawaan. Diambil dari koleksi jailbreak (`Unified.md`, pola "six
 #: boundaries + misfire recognition"), ditambah lencana MO (means of access) yang
@@ -188,9 +194,9 @@ def profile_slug(name: str) -> str:
 
 
 def resolve_name(value: str) -> str:
-    """Nama profil yang benar-benar dipakai (`default` → `wth`)."""
+    """Nama profil yang benar-benar dipakai (`default` → `wth-ai`)."""
     asked = (value or "").strip()
-    return BUILTIN_PROFILE if asked in {"", DEFAULT_PROFILE, BUILTIN_PROFILE} else asked
+    return BUILTIN_PROFILE if asked in _BUILTIN_NAMES else asked
 
 
 def list_profiles() -> list[str]:
@@ -213,7 +219,7 @@ def load(name: str = DEFAULT_PROFILE) -> BypassPrompt:
     bukan "gagal".
     """
     asked = (name or DEFAULT_PROFILE).strip()
-    if asked in {"", DEFAULT_PROFILE, BUILTIN_PROFILE}:
+    if asked in _BUILTIN_NAMES:
         # Berkas di repo (`prompts/agent/AGENT.md`) adalah sumber yang bisa
         # diedit manusia; BUILTIN_PROMPT adalah cadangan untuk instalasi yang
         # tidak membawa direktori prompts/.

@@ -1,7 +1,7 @@
 """Full interactive Terminal UI for WTH-AI.
 
 `WthTuiApp` hanya di-export kalau textual terpasang. Sebelumnya impor eager di
-sini membuat `wth` (dan `wth setup --check`) gagal total pada instalasi tanpa
+sini membuat `wth-ai` (dan `wth-ai setup --check`) gagal total pada instalasi tanpa
 ekstrak `tui`, padahal TUI adalah fitur opsional — pesan yang benar di situ
 adalah "butuh pip install wth-ai[tui]", bukan ModuleNotFoundError di startup.
 """

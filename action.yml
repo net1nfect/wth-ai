@@ -26,9 +26,9 @@ runs:
         set -euo pipefail
         python -m pip install --quiet -e . || python -m pip install --quiet -r requirements.txt
         if [ -n "${{ inputs.target }}" ]; then
-          python wth-main.py scan --red-team --target "${{ inputs.target }}" \
+          python wth-ai-main.py scan --red-team --target "${{ inputs.target }}" \
             --fail-on "${{ inputs.fail-on }}" --out out
         else
-          python wth-main.py scan --offline-demo --out out
+          python wth-ai-main.py scan --offline-demo --out out
         fi
         echo "bundle=out/bundle" >> "$GITHUB_OUTPUT"

@@ -6,8 +6,7 @@ import json
 import re
 import subprocess
 from dataclasses import dataclass, field
-from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 from wth_ai.models import LiveHost, ParamCandidate
 from wth_ai.tools.registry import ToolRegistry, _which

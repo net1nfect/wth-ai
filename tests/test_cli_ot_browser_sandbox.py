@@ -17,7 +17,7 @@ def _run(args, cwd, extra_env=None):
     env = {**os.environ, "WTH_SKIP_SETUP": "1", "WTH_PLAIN": "1",
            "WTH_HOME": str(cwd / "home")}
     env.update(extra_env or {})
-    return subprocess.run([sys.executable, str(REPO / "wth-main.py"), *args],
+    return subprocess.run([sys.executable, str(REPO / "wth-ai-main.py"), *args],
                           cwd=cwd, capture_output=True, text=True, timeout=180,
                           env=env)
 

@@ -7,28 +7,29 @@ from textual.containers import Vertical
 from textual.screen import ModalScreen
 from textual.widgets import Input, Static
 
+from wth_ai.cli.ui.theme import THEME
 from wth_ai.platform.registry import get_platform_registry
 
 
 class CommandPaletteScreen(ModalScreen[str | None]):
     """Fuzzy slash command picker (Ctrl+P)."""
 
-    DEFAULT_CSS = """
-    CommandPaletteScreen {
+    DEFAULT_CSS = f"""
+    CommandPaletteScreen {{
         align: center middle;
-    }
-    #palette-box {
+    }}
+    #palette-box {{
         width: 80;
         height: auto;
         max-height: 20;
-        border: solid #58a6ff;
-        background: #161b22;
+        border: solid {THEME['brand']};
+        background: {THEME['surface_alt']};
         padding: 1 2;
-    }
-  #palette-results {
+    }}
+  #palette-results {{
         height: auto;
         max-height: 12;
-    }
+    }}
     """
 
     def compose(self) -> ComposeResult:

@@ -5,40 +5,40 @@ ini untuk agen/koding asisten: perintah utama, artefak, dan kontrak exit code.
 
 ## Perintah utama
 
-- `wth scope --target HOST --cidr CIDR --authorized [--mode MODE]`
+- `wth-ai scope --target HOST --cidr CIDR --authorized [--mode MODE]`
   Menulis `$WTH_HOME/scope_card.json`. Tanpa `--authorized` ditolak (exit 2).
-- `wth scan --offline-demo --out DIR [--scan-mode quick|standard|deep]`
+- `wth-ai scan --offline-demo --out DIR [--scan-mode quick|standard|deep]`
   Demo deterministik tanpa jaringan; menulis artefak + bundel bukti.
-- `wth scan -n --fail-on high --out DIR`
+- `wth-ai scan -n --fail-on high --out DIR`
   Headless untuk CI: exit 0 bersih, 2 ada temuan pada/atas ambang.
-- `wth scan --scope-mode diff --diff-base origin/main --target f.py`
+- `wth-ai scan --scope-mode diff --diff-base origin/main --target f.py`
   Hanya target yang filenya berubah; `git diff` gagal => exit 1, bukan scan penuh.
-- `wth scope --spec openapi.json` (atau Postman) — host dari kontrak masuk scope,
+- `wth-ai scope --spec openapi.json` (atau Postman) — host dari kontrak masuk scope,
   endpoint dicatat di `scope_card.json`.
-- `wth report --format id` — laporan Bahasa Indonesia (Ringkasan Pimpinan +
+- `wth-ai report --format id` — laporan Bahasa Indonesia (Ringkasan Pimpinan +
   rujukan regulasi + disclaimer, bukan pendapat hukum).
-- `wth kb build --source DIR` — isi KB dari `nvd/*.json`, `kev.json`, `epss.csv`
-  (tidak mengunduh). `wth kb search Q` tanpa hasil => exit 1.
-- `wth verify DIR/bundle`
+- `wth-ai kb build --source DIR` — isi KB dari `nvd/*.json`, `kev.json`, `epss.csv`
+  (tidak mengunduh). `wth-ai kb search Q` tanpa hasil => exit 1.
+- `wth-ai verify DIR/bundle`
   Menghitung ulang sha256 manifest; satu byte berubah → exit 1.
-- `wth report --bundle DIR/bundle --format html|sarif|json|id|pdf`
+- `wth-ai report --bundle DIR/bundle --format html|sarif|json|id|pdf`
   `id` = laporan Bahasa Indonesia; `pdf` = satu file tanpa dependency baru.
-- `wth kb status` / `wth kb get CVE-YYYY-NNNN`
+- `wth-ai kb status` / `wth-ai kb get CVE-YYYY-NNNN`
   CVE yang tidak ada di DB → exit 2.
-- `wth skill list` / `wth skill install <git-url>`
-- `wth setup [--check|--install] [--with tui,bot,browser,full]`
+- `wth-ai skill list` / `wth-ai skill install <git-url>`
+- `wth-ai setup [--check|--install] [--with tui,bot,browser,full]`
   Preflight (python >= 3.10, venv usable, dependensi, workspace, disk) lalu
   wizard provider. `--provider/--base-url/--api-key/--model` menjalankan setup
   tanpa wizard.
 - `scripts/install.sh [--dry-run|--no-path|--system-deps cetak|jalankan]`
   Installer tanpa sudo: venv di $WTH_HOME/venv, PATH rc idempotent, log di
   $WTH_HOME/logs/install.log. Exit 0 ok, 1 gagal (kelas dicetak), 2 argumen.
-- `wth --bypass[--bypass-profile NAMA]`
+- `wth-ai --bypass[--bypass-profile NAMA]`
   Instruksi sesi tambahan dari `prompts/agent/AGENT.md` atau
   `$WTH_HOME/bypass/<NAMA>.md`. Bawaan mati; label `· bypass: NAMA` muncul di
   meta balasan.
-- `wth kill` — flag `$WTH_HOME/runtime/KILL` (worker berhenti ≤2 detik)
-- `wth interactive --redteam [--mode plan|build|auto|scout|strike|chain|scribe]`
+- `wth-ai kill` — flag `$WTH_HOME/runtime/KILL` (worker berhenti ≤2 detik)
+- `wth-ai interactive --redteam [--mode plan|build|auto|scout|strike|chain|scribe]`
   TUI red team. `python -m wth_ai.cli.tui.redteam --demo` untuk demo.
 
 ## Mode
@@ -72,28 +72,28 @@ out/
 ## Integrasi CI
 
 `action.yml` (composite) menjalankan scan dan mengeluarkan `bundle`;
-`.github/workflows/ci.yml` menjalankan pytest, demo offline, `wth verify`, dan
+`.github/workflows/ci.yml` menjalankan pytest, demo offline, `wth-ai verify`, dan
 gate yang mengharuskan exit 2 pada fixture bertemuan high.
 
 ## OT/ICS
 
-`wth ot plan --host H --unit 1 --block holding:0:10` mencetak rencana baca
+`wth-ai ot plan --host H --unit 1 --block holding:0:10` mencetak rencana baca
 (FC 1–4, `destructive=False`) tanpa membuka koneksi. FC 5/6/15/16 ditolak
 (`DestructiveBlocked`).
 
 ## Sandbox dan recon visual
 
-- `wth sandbox plan ...` mencetak argv; `wth sandbox run --yes ...` menjalankannya
+- `wth-ai sandbox plan ...` mencetak argv; `wth-ai sandbox run --yes ...` menjalankannya
   (argumen sama: cap-drop ALL, no-new-privileges, read-only, network lab).
-- `wth visual cluster DIR --out out/clusters.json` mengelompokkan PNG memakai
+- `wth-ai visual cluster DIR --out out/clusters.json` mengelompokkan PNG memakai
   difference hash 64-bit + toleransi kecerahan. PNG dibaca sendiri (zlib), jadi
   tidak butuh Pillow; PNG 16-bit/interlaced dilewati dengan alasan.
-- `wth browser capture URL --out DIR` memanggil binary `playwright` (bukan
+- `wth-ai browser capture URL --out DIR` memanggil binary `playwright` (bukan
   library). Tidak terpasang => exit 1 dengan hint, bukan traceback.
 
 ## OT/ICS baca nyata
 
-`wth ot read --host H --cidr C --kind holding --address 0 --count 4 --confirm`
+`wth-ai ot read --host H --cidr C --kind holding --address 0 --count 4 --confirm`
 membuka koneksi Modbus TCP (stdlib, tanpa pymodbus) hanya untuk FC 1–4. Wajib
 `--confirm` dan wajib `--cidr` (EgressGuard). Tidak ada jalur tulis di klien.
 
@@ -114,7 +114,7 @@ bila namanya sama. Setiap `call_tool(mode=...)` digerbangi kapabilitas MCP.
 `/connect <base_url> [api_key]` di REPL mendaftarkan endpoint OpenAI-compatible
 (lokal atau gateway) sebagai provider bernama. Base URL dinormalisasi ke satu
 `/v1`; API key masuk vault (`provider_<nama>_api_key`), user.yaml hanya memuat
-`vault:` reference. `--provider` pada `wth setup` tetap untuk tipe bawaan.
+`vault:` reference. `--provider` pada `wth-ai setup` tetap untuk tipe bawaan.
 
 ## Batasan
 

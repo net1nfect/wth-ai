@@ -79,6 +79,8 @@ def assess_claim(
     controls: int = 0,
     tool_backed: bool = False,
     refuted_by_control: bool = False,
+    category: str | None = None,
+    proof_facts: dict | None = None,
 ) -> ClaimAssessment:
     """Grade a claim from its evidence.
 
@@ -96,6 +98,17 @@ def assess_claim(
             ["kontrol negatif menunjukkan perilaku yang sama seperti klaim"],
             ["tidak boleh dilaporkan sebagai temuan"],
         )
+
+    if category is not None or proof_facts is not None:
+        from wth_ai.redteam.proof_profiles import ProofVerdict, evaluate_proof
+
+        verdict = evaluate_proof(category, dict(proof_facts or {}))
+        if verdict is not ProofVerdict.INDEPENDENTLY_VERIFIED:
+            return ClaimAssessment(
+                LEVEL_CANDIDATE,
+                ["bukti dasar lengkap"],
+                [f"proof profile {category!r} menolak ({verdict.value})"],
+            )
 
     if has_request_response:
         reasons.append("ada bukti request/response")

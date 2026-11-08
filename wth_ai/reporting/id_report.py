@@ -136,7 +136,7 @@ def render_id_report(findings, *, run_meta: dict | None = None,
         "",
         "- Verifikasi ulang temuan CONFIRMED di lingkungan staging pemilik aset.",
         "- Terapkan perbaikan pada akar masalah, bukan pada gejala yang terlihat.",
-        "- Jalankan ulang dengan `wth scan -n` untuk memastikan perbaikan bertahan.",
+        "- Jalankan ulang dengan `wth-ai scan -n` untuk memastikan perbaikan bertahan.",
         "",
     ])
 

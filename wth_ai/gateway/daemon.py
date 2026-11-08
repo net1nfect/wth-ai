@@ -2,12 +2,10 @@
 
 from __future__ import annotations
 
-import json
 import os
 import signal
 import threading
 import time
-from pathlib import Path
 from typing import Any
 
 from wth_ai.config import WTHConfig
@@ -16,6 +14,7 @@ from wth_ai.gateway.rpc import GatewayRpcServer, gateway_pid_path, gateway_socke
 from wth_ai.gateway.background import (
     assert_not_running,
     cleanup_stale_runtime,
+    write_gateway_pid,
     write_gateway_status,
 )
 from wth_ai.gateway.router import GatewayRouter
@@ -23,7 +22,21 @@ from wth_ai.gateway.session_cache import SessionCache
 from wth_ai.integrations.manager import IntegrationManager
 from wth_ai.jobs.manager import JobManager
 from wth_ai.jobs.worker import WorkerEngine
-from wth_ai.workspace import init_workspace, wth_home
+from wth_ai.workspace import init_workspace
+
+
+def _session_owner_allowed(cache, session_key: str, peer) -> bool:
+    """P2-2: izinkan mengakses session_key bila caller pemiliknya atau belum ada
+    pemilik. `peer` berisi pid pemanggil (dari SO_PEERCRED); bila tersedia,
+    kami klaim kepemilikan. Bila peer tak tersedia (mis. testing), izinkan —
+    ownership hanya binding di gateway asli yang punya peer cred.
+    """
+    if peer is None:
+        return True
+    pid = peer.get("pid")
+    if pid is None:
+        return True
+    return cache.claim(session_key, int(pid))
 
 
 class GatewayDaemon:
@@ -44,10 +57,14 @@ class GatewayDaemon:
         self._running = False
         self._plugins_loaded = False
 
-    def _dispatch(self, method: str, params: dict[str, Any]) -> Any:
+    def _dispatch(self, method: str, params: dict[str, Any], peer: dict[str, Any] | None = None) -> Any:
         if method == "ping":
             return True
         session_key = str(params.get("session_key", "cli:default"))
+        if method in ("handle_input", "get_status", "new_session"):
+            if not _session_owner_allowed(self.cache, session_key, peer):
+                return {"status": "blocked",
+                        "error": "session_key milik proses lain (P2-2)"}
         if method == "handle_input":
             text = str(params.get("text", ""))
             result = self.router.handle(session_key, text, fresh=bool(params.get("fresh")))
@@ -141,9 +158,7 @@ class GatewayDaemon:
         write_gateway_status("stopped")
 
     def _write_pid(self, pid: int) -> None:
-        path = gateway_pid_path()
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(str(pid), encoding="utf-8")
+        write_gateway_pid(pid)
 
     def _clear_pid(self) -> None:
         gateway_pid_path().unlink(missing_ok=True)

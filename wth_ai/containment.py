@@ -8,9 +8,14 @@ tidak boleh bergantung pada daemon docker.
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import subprocess
 from dataclasses import dataclass, field
+
+#: Digest Docker = `sha256:<64 hex>`. Sintaks ini diverifikasi untuk menolak
+#: typo sejak awal (sebelum `docker run` gagal dengan pesan yang samar).
+_DIGEST_RE = re.compile(r"^[0-9a-fA-F]{64}$")
 
 LAB_NETWORK = "wth-lab-internal"
 #: Tag biasa sebagai default supaya `docker run` jalan tanpa registry internal.
@@ -34,6 +39,13 @@ class SandboxSpec:
         mounts: list[str] = []
         for mount in self.extra_mounts:
             mounts += ["-v", mount]
+        if "@sha256:" in self.image:
+            algo, _, digest = self.image.partition("@sha256:")
+            if not algo or not _DIGEST_RE.fullmatch(digest):
+                raise ValueError(
+                    f"image digest tidak valid: {self.image!r} "
+                    "(harus <image>@sha256:<64 hex>)"
+                )
         return [
             "docker", "run", "--rm", "-i",
             "--network", self.network,
@@ -53,6 +65,42 @@ class SandboxSpec:
 def network_create_args(name: str = LAB_NETWORK) -> list[str]:
     """Network internal: tanpa gateway keluar, tanpa published port."""
     return ["docker", "network", "create", "--internal", name]
+
+
+def resolve_image_digest(
+    image: str, *, run=subprocess.run,
+) -> tuple[bool, str]:
+    """Resolusi tag -> digest untuk `sandbox run --image`.
+
+    B5: pin digest saat `--image` dipakai — konversi tag → digest SEKALI,
+    tolak bila tidak bisa diverifikasi (fail-closed). Kalau image sudah berupa
+    `name@sha256:<hex>`, sintaksnya diverifikasi dan tidak perlu menanyai
+    daemon. Tidak pernah meng-hardcode digest: nilainya datang dari daemon
+    Docker (RepoDigests) atau dari input pengguna.
+
+    Return `(ok, alasan|image_pinned)`.
+    """
+    if "@sha256:" in image:
+        algo, _, digest = image.partition("@sha256:")
+        if not algo or not _DIGEST_RE.fullmatch(digest):
+            return False, f"image digest tidak valid: {image!r} (harus <image>@sha256:<64 hex>)"
+        return True, image
+    if not docker_available():
+        return False, "docker tidak ditemukan di PATH (tidak bisa verifikasi digest)"
+    probe = run(
+        ["docker", "image", "inspect", "--format",
+         "{{index .RepoDigests 0}}", image],
+        capture_output=True, text=True, timeout=30,
+    )
+    if probe.returncode != 0:
+        return False, f"gagal resolve digest untuk {image!r}: {probe.stderr.strip()}"
+    resolved = probe.stdout.strip()
+    if "@sha256:" not in resolved:
+        return False, f"image {image!r} tidak punya digest (Repodigests kosong)"
+    algo, _, digest = resolved.partition("@sha256:")
+    if not algo or not _DIGEST_RE.fullmatch(digest):
+        return False, f"digest terresolve tidak valid: {resolved!r}"
+    return True, resolved
 
 
 def docker_available() -> bool:

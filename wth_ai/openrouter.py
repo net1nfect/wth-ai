@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 import re
-import sys
 from typing import Any, Callable, Iterator
 
 import requests
@@ -76,7 +75,7 @@ class OpenRouterClient:
             response.raise_for_status()
         except requests.Timeout as exc:
             raise OpenRouterError(
-                f"Model lambat atau timeout ({req_timeout}s) — coba lagi atau ganti model di config/wth_config.yaml"
+                f"Model lambat atau timeout ({req_timeout}s) — coba lagi atau ganti model di config/wth_ai_config.yaml"
             ) from exc
         except requests.RequestException as exc:
             raise OpenRouterError(f"OpenRouter request failed: {exc}") from exc

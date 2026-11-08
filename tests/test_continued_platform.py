@@ -39,7 +39,7 @@ def _load_cli():
     import importlib.util
     from pathlib import Path
 
-    path = Path(__file__).resolve().parents[1] / "wth-main.py"
+    path = Path(__file__).resolve().parents[1] / "wth-ai-main.py"
     spec = importlib.util.spec_from_file_location("wth_main", path)
     mod = importlib.util.module_from_spec(spec)
     assert spec.loader is not None

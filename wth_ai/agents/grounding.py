@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
-from typing import Any
 
 CLAIM_PATTERNS = re.compile(
     r"(?i)\b(verified|found\s+(a\s+)?vuln|critical\s+vuln|exploited|confirmed\s+xss|confirmed\s+idor|"

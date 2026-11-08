@@ -185,7 +185,7 @@ curl -fsSL https://raw.githubusercontent.com/net1nfect/wth-ai/big-dix/install.sh
 
 Skrip itu mengambil `scripts/install.sh` (lewat `install.sh` di root), membuat
 venv di `~/.wth-ai/venv`, meng-clone repo ke `~/.wth-ai/src/`, memasang
-paketnya, menaruh `wth`/`wth-ai` di `~/.local/bin`, lalu membuka wizard setup.
+paketnya, menaruh `wth-ai` di `~/.local/bin`, lalu membuka wizard setup.
 
 Varian yang sering dipakai:
 
@@ -234,26 +234,33 @@ kelas kegagalannya (`python_missing`, `venv_missing`, `pep668`, …).
 
 ```bash
 npm install -g @wth-ai/cli
-wth                    # download binary + setup wizard otomatis
-wth-ai setup           # re-run wizard
+wth-ai                    # download binary + setup wizard otomatis
+wth-ai setup              # re-run wizard
 ```
 
 Binary disimpan di `~/.wth-ai/runtime/`. Source code tidak diperlukan.
+
+> **Pasang dari sumber, bukan dari wheel.** Paket ini tidak menerbitkan wheel
+> yang bisa dijalankan: `wth-ai` butuh `wth-ai-main.py` dan `prompts/` di pohon repo,
+> yang tidak ikut ke dalam wheel. Karena itu `pyproject.toml` sengaja tidak
+> mendeklarasikan entry point; launcher `wth-ai` ditulis oleh
+> `scripts/install.sh` saat `pip install -e .`. `pip install wth-ai` dari PyPI
+> tidak didukung.
 
 ### Developer — dari source
 
 ```bash
 git clone <repo> wth-ai && cd wth-ai
 scripts/install.sh --with tui        # venv + paket + workspace + entry point
-wth setup                            # wizard provider & model
+wth-ai setup                            # wizard provider & model
 ```
 
 `scripts/install.sh` tidak memakai sudo. Yang dilakukannya, berurutan: cek
 Python ≥ 3.10 dan `python -m venv` benar-benar bisa dipakai, buat venv di
 `$WTH_HOME/venv`, `pip install -e .`, pasang fitur opsional
-(`--with tui,bot,browser,full`), symlink `wth`/`wth-ai` ke `~/.local/bin`,
+(`--with tui,bot,browser,full`), symlink `wth-ai` ke `~/.local/bin`,
 sambungkan `PATH` ke rc shell (idempotent), buat workspace, lalu verifikasi
-(`wth --version`, `wth setup --check`).
+(`wth-ai --version`, `wth-ai setup --check`).
 
 ```bash
 scripts/install.sh --help                  # semua opsi
@@ -271,9 +278,9 @@ Exit code: `0` terpasang, `1` gagal (kelas kegagalan dicetak), `2` argumen salah
 Wizard hanya untuk terminal interaktif. Untuk skrip/CI:
 
 ```bash
-wth setup --check                      # preflight saja, tidak menulis apa pun
-wth setup --install --with bot         # pasang dependensi yang kurang
-wth setup --provider 9router \
+wth-ai setup --check                      # preflight saja, tidak menulis apa pun
+wth-ai setup --install --with bot         # pasang dependensi yang kurang
+wth-ai setup --provider 9router \
           --base-url http://127.0.0.1:20128/v1 \
           --api-key sk-... --model glm-4.6 --no-smoke
 ```
@@ -289,8 +296,8 @@ REPL — ia mendaftarkan provider baru tanpa menyentuh role yang sudah jalan.
 `AGENTS.md` yang berisi konvensi kerja repo. Bawaannya mati:
 
 ```bash
-wth --bypass                    # profil `wth` (prompts/agent/AGENT.md)
-wth --bypass glm-zcode-5.3-agents
+wth-ai --bypass                    # profil `wth-ai` (prompts/agent/AGENT.md)
+wth-ai --bypass glm-zcode-5.3-agents
 ```
 
 Di dalam REPL: `/bypass`, `/bypass on <profil>`, `/bypass off`, `/bypass list`,
@@ -310,7 +317,7 @@ Wizard meminta:
 Config tersimpan di `~/.wth-ai/config/user.yaml` dan secret di
 `~/.wth-ai/vault.enc`; config hanya memegang referensi `vault:<nama>`.
 
-### Exit code `wth setup`
+### Exit code `wth-ai setup`
 
 | Code | Arti |
 |---|---|
@@ -320,23 +327,43 @@ Config tersimpan di `~/.wth-ai/config/user.yaml` dan secret di
 
 ### Jalankan
 
+Satu nama: `wth-ai`, dipasang oleh `scripts/install.sh`. Alias lama `wth`
+sudah dihapus; skrip yang masih memanggil `wth` harus diganti.
+
+**Migrasi otomatis.** Instalasi atau `wth-ai` pertama kali setelah upgrade
+me-rename `~/.wth-ai/wth-results/` → `~/.wth-ai/wth-ai-results/` dan
+`config/wth_config.yaml` → `config/wth_ai_config.yaml` sekali, idempoten.
+Direktori baru tidak ditimpa; config lama tetap dibaca lewat alias internal.
+Backup manual tidak diperlukan — operasi rename aman dan atomic.
+
 ```bash
-wth-ai                  # REPL interaktif
-wth-ai run "/doctor"    # one-shot command
-wth-ai bot discord      # Discord daemon
-wth-ai bot telegram     # Telegram daemon
+wth-ai                     # REPL interaktif
+wth-ai run "/doctor"       # one-shot command
+wth-ai bot discord         # Discord daemon
+wth-ai bot telegram        # Telegram daemon
 ```
+
+Grup slash Discord bernama `/wth-ai` (sebelumnya `/wth`); Discord tidak punya
+alias perintah, jadi guild lama harus memakai nama baru setelah sync.
 
 ---
 
 ## Permission Modes
 
-| Mode | Command | Terminal access |
-|------|---------|-----------------|
-| `read_only` | `/permission read_only` | curl, httpx, HEAD/GET, static tools |
-| `standard` | `/permission standard` | + nuclei, ffuf, arjun, **run_shell** testing |
-| `elevated` | `/permission elevated` | + sqlmap, dalfox (butuh `/approve`) |
-| `full_lab` | `/permission full_lab` | Lab/CTF only — tetap ada denylist |
+| Mode | `/permission …` | Confirmation | Capability ceiling |
+|------|-----------------|--------------|--------------------|
+| `plan` | `/permission plan` | asks | recon + probe, no PoC — nothing is changed |
+| `read-only` | `/permission read-only` | asks | passive recon + read-only tools |
+| `ask` | `/permission ask` | **asks** (default) | standard testing tools, risky actions confirmed |
+| `auto` | `/permission auto` | **none** — approval off | standard, still capped |
+| `full-lab` | `/permission full-lab` | asks | `full_lab` tool level, capability still capped |
+| `yolo` | `/permission yolo` | **none** | unrestricted; target must still be authorized |
+
+`auto` and `yolo` run without asking. Neither lifts target authorization or the
+scope allowlist — no preset turns those off.
+
+Old spellings still resolve: `read_only` → `read-only`, `standard` → `ask`,
+`elevated` → `auto` (so `elevated` does **not** ask for confirmation).
 
 Agent **tidak bisa bypass** permission — semua command lewat `PermissionManager.check_command()`.
 
@@ -346,7 +373,7 @@ Agent **tidak bisa bypass** permission — semua command lewat `PermissionManage
 
 ```bash
 wth-ai
-/permission standard
+/permission ask
 /scope set target=app.example.com authorized=yes accounts=alice@x.com:pass1,bob@x.com:pass2
 /recon
 # → target › app.example.com
@@ -468,31 +495,46 @@ Status bar menampilkan: `hyp 12 · chains 3 · cov 15% · verified 1`
 
 ## Perintah Utama
 
-### Perintah CLI (`wth ...`)
+### Perintah CLI (`wth-ai ...`)
+
+`wth-ai --help` mendaftar **40** perintah top-level (152 subperintah). Tabel ini
+contoh yang paling sering dipakai, bukan daftar lengkap.
 
 | Command | Fungsi |
 |---------|--------|
-| `wth scope --target H --cidr C --authorized` | Tulis scope card (izin tertulis) |
-| `wth scan --offline-demo --out out` | Loop red team deterministik + bundel bukti |
-| `wth scan -n --fail-on high` | Mode CI: exit 0/1/2 |
-| `wth verify out/bundle` | Verifikasi hash bundel bukti |
-| `wth report --format html\|sarif\|json\|id\|pdf` | Laporan dari bundel |
-| `wth disclosure F-001 --bundle out/bundle` | Advisory pengungkapan |
-| `wth recon run\|quick\|watch\|diff\|plan` | Recon platform + tool registry |
-| `wth job create/list/...` | Job system (recon, hunt, report) |
-| `wth kb build\|status\|get\|search` | Knowledge base CVE lokal |
-| `wth ot plan\|read` | Modbus read-only (FC 1–4) |
-| `wth sandbox plan\|run` | Container lab (cap-drop, read-only) |
-| `wth browser capture URL` | Screenshot via Playwright CLI |
-| `wth visual cluster DIR` | Klaster screenshot (dhash) |
-| `wth interactive --redteam` | TUI mode agen |
-| `wth setup [--check\|--install]` | Preflight, pasang dependensi, wizard provider |
-| `wth setup --provider 9router --base-url ... --api-key ... --model ...` | Setup tanpa wizard (CI/skrip) |
-| `wth --bypass[ -profile NAMA]` | Aktifkan instruksi sesi dari `prompts/agent/AGENT.md` |
-| `wth kill` | Hentikan worker ≤2 detik |
-| `wth doctor` | Health check (runtime, registry, red team layer) |
+| `wth-ai scope --target H --cidr C --authorized` | Tulis scope card (izin tertulis) |
+| `wth-ai scan --offline-demo --out out` | Loop red team deterministik + bundel bukti |
+| `wth-ai scan -n --fail-on high` | Mode CI: exit 0/1/2 |
+| `wth-ai verify out/bundle` | Verifikasi hash bundel bukti |
+| `wth-ai report --format html\|sarif\|json\|id\|pdf` | Laporan dari bundel |
+| `wth-ai disclosure F-001 --bundle out/bundle` | Advisory pengungkapan |
+| `wth-ai recon run\|quick\|watch\|diff\|plan` | Recon platform + tool registry |
+| `wth-ai job create/list/...` | Job system (recon, hunt, report) |
+| `wth-ai kb build\|status\|get\|search` | Knowledge base CVE lokal |
+| `wth-ai ot plan\|read` | Modbus read-only (FC 1–4) |
+| `wth-ai sandbox plan\|run` | Container lab (cap-drop, read-only) |
+| `wth-ai browser capture URL` | Screenshot via Playwright CLI |
+| `wth-ai visual cluster DIR` | Klaster screenshot (dhash) |
+| `wth-ai interactive --redteam` | TUI mode agen |
+| `wth-ai setup [--check\|--install]` | Preflight, pasang dependensi, wizard provider |
+| `wth-ai setup --provider 9router --base-url ... --api-key ... --model ...` | Setup tanpa wizard (CI/skrip) |
+| `wth-ai --bypass[ -profile NAMA]` | Aktifkan instruksi sesi dari `prompts/agent/AGENT.md` |
+| `wth-ai kill` | Hentikan worker ≤2 detik |
+| `wth-ai doctor` | Health check (runtime, registry, red team layer) |
 
 ### Slash command (di dalam REPL)
+
+**58** perintah terdaftar (`/help` menampilkan semuanya). Berikut yang paling
+sering dipakai:
+
+**58** perintah terdaftar (`/help` menampilkan semuanya). Berikut yang paling
+sering dipakai:
+
+**58** perintah terdaftar (`/help` menampilkan semuanya). Berikut yang paling
+sering dipakai:
+
+**58** perintah terdaftar (`/help` menampilkan semuanya). Berikut yang paling
+sering dipakai:
 
 | Command | Fungsi |
 |---------|--------|
@@ -526,12 +568,12 @@ Status bar menampilkan: `hyp 12 · chains 3 · cov 15% · verified 1`
 | LLM offline | Set `OPENROUTER_API_KEY` |
 | Recon blocked | `/scope set authorized=yes` |
 | IDOR blocked | Tambah `accounts=userA:pass,userB:pass` |
-| Command blocked | `/permission standard` atau lebih tinggi |
+| Command blocked | `/permission ask` atau lebih tinggi |
 | Tool missing | `/doctor` lalu `/tools install all` |
 | pip PEP 668 | pakai `scripts/install.sh` (venv terisolasi) — jangan `pip install` ke sistem |
-| `No module named 'textual'` | TUI opsional: `scripts/install.sh --with tui` atau `wth setup --install --with tui` |
-| `wth: command not found` | tambahkan `~/.local/bin` ke PATH, atau pakai `--bin /usr/local/bin` |
-| `wth-main.py` tidak ditemukan | pasang dari sumber: `scripts/install.sh` (entry point butuh repo, bukan wheel polos) |
+| `No module named 'textual'` | TUI opsional: `scripts/install.sh --with tui` atau `wth-ai setup --install --with tui` |
+| `wth-ai: command not found` | tambahkan `~/.local/bin` ke PATH, atau pakai `--bin /usr/local/bin` |
+| `wth-ai-main.py` tidak ditemukan | pasang dari sumber: `scripts/install.sh` (entry point butuh repo, bukan wheel polos) |
 
 ---
 
@@ -549,10 +591,10 @@ Status bar menampilkan: `hyp 12 · chains 3 · cov 15% · verified 1`
 ```
 install.sh          # bootstrap satu baris (curl | bash)
 scripts/install.sh  # installer: venv, pip, symlink, workspace
-wth-main.py         # entry point CLI (semua perintah Click)
+wth-ai-main.py      # entry point CLI (semua perintah Click)
 wth_ai/
   modes.py          # 7 mode agen; `auto` = superset
-  install.py        # preflight (deps/python/workspace), dipakai `wth setup`
+  install.py        # preflight (deps/python/workspace), dipakai `wth-ai setup`
   scope_manager.py  # matcher CIDR/host untuk scope
   scope_card.py     # rekaman izin (ikut ke bundel bukti)
   netguard.py       # EgressGuard: allowlist keluar + audit
@@ -570,7 +612,7 @@ wth_ai/
   cli/tui/redteam/  # TUI mode agen
   tools/doctor.py   # health check
 prompts/agent/AGENT.md  # prompt bawaan `--bypass` (bukan konvensi repo)
-core/, executor/, agents/, reporting/ (root)   # legacy, jangan digabung
+recon/              # rencana recon hasil `wth-ai recon plan`
 AGENTS.md           # konvensi kerja untuk agen
 CLAUDE.md           # pointer ke AGENTS.md
 llms.txt            # ringkasan mesin-baca
@@ -622,22 +664,22 @@ Untuk agen dan operator baru. Versi mesin-baca: [`llms.txt`](llms.txt).
 
 | Perintah | Yang ditulis |
 |---|---|
-| `wth scope --target H --cidr C --authorized [--spec openapi.json]` | `$WTH_HOME/scope_card.json` |
-| `wth scan --offline-demo --out out` | `out/run.json`, `out/findings.sarif`, `out/vulnerabilities/`, `out/bundle/` |
-| `wth scan -n --fail-on high` | exit 0 bersih / 1 error / 2 ada temuan |
-| `wth scan --scope-mode diff --diff-base origin/main` | hanya file PR yang jadi target |
-| `wth verify out/bundle` | hitung ulang sha256; satu byte berubah → exit 1 |
-| `wth report --format html\|sarif\|json\|id\|pdf` | laporan dari bundel |
-| `wth disclosure F-001 --bundle out/bundle` | `out/disclosure/F-001.md` |
-| `wth kb build --source DIR` / `wth kb search Q` | KB CVE lokal (FTS5) |
-| `wth ot plan --host H --block holding:0:10` | rencana baca Modbus (tanpa koneksi) |
-| `wth sandbox plan --workspace-file notes.txt` | argv `docker run` (mount ro, tidak dijalankan) |
-| `wth visual cluster shots/` | klaster screenshot (perceptual hash, tanpa Pillow) |
-| `wth ot read --host H --cidr C --confirm` | baca register Modbus (read-only, guard egress) |
-| `wth browser capture URL` | screenshot via Playwright CLI (opsional) |
-| `wth sandbox run --yes -- CMD` | jalankan container lab (tanpa `--yes` hanya cetak argv) |
-| `wth interactive --redteam --mode plan` | TUI mode agen |
-| `wth kill` | flag `$WTH_HOME/runtime/KILL` (worker berhenti ≤2 detik) |
+| `wth-ai scope --target H --cidr C --authorized [--spec openapi.json]` | `$WTH_HOME/scope_card.json` |
+| `wth-ai scan --offline-demo --out out` | `out/run.json`, `out/findings.sarif`, `out/vulnerabilities/`, `out/bundle/` |
+| `wth-ai scan -n --fail-on high` | exit 0 bersih / 1 error / 2 ada temuan |
+| `wth-ai scan --scope-mode diff --diff-base origin/main` | hanya file PR yang jadi target |
+| `wth-ai verify out/bundle` | hitung ulang sha256; satu byte berubah → exit 1 |
+| `wth-ai report --format html\|sarif\|json\|id\|pdf` | laporan dari bundel |
+| `wth-ai disclosure F-001 --bundle out/bundle` | `out/disclosure/F-001.md` |
+| `wth-ai kb build --source DIR` / `wth-ai kb search Q` | KB CVE lokal (FTS5) |
+| `wth-ai ot plan --host H --block holding:0:10` | rencana baca Modbus (tanpa koneksi) |
+| `wth-ai sandbox plan --workspace-file notes.txt` | argv `docker run` (mount ro, tidak dijalankan) |
+| `wth-ai visual cluster shots/` | klaster screenshot (perceptual hash, tanpa Pillow) |
+| `wth-ai ot read --host H --cidr C --confirm` | baca register Modbus (read-only, guard egress) |
+| `wth-ai browser capture URL` | screenshot via Playwright CLI (opsional) |
+| `wth-ai sandbox run --yes -- CMD` | jalankan container lab (tanpa `--yes` hanya cetak argv) |
+| `wth-ai interactive --redteam --mode plan` | TUI mode agen |
+| `wth-ai kill` | flag `$WTH_HOME/runtime/KILL` (worker berhenti ≤2 detik) |
 
 Artefak bukti: `docs/EVIDENCE.md`. Demo 5 menit: `docs/DEMO.md`.
 Cara kerja mode & kapabilitas: `docs/MODES.md`. Pemasangan tertutup: `docs/AIRGAP.md`.

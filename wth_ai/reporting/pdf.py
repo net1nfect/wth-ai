@@ -6,7 +6,7 @@ dependency hanya untuk satu format akan menggeser neraca instalasi untuk semua
 orang — dan laporan ini isinya teks.
 
 Yang dihasilkan: `out/report.pdf` dengan ringkasan, tabel temuan sederhana, dan
-hash root bundel supaya pembaca bisa mencocokkan dengan `wth verify`.
+hash root bundel supaya pembaca bisa mencocokkan dengan `wth-ai verify`.
 """
 
 from __future__ import annotations

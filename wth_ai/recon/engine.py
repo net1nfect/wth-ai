@@ -5,14 +5,13 @@ Pipeline:
     scoring -> diff -> report -> events
 
 All recon is authorized-only, recon-only and non-destructive. The engine writes
-a full artifact tree under ``$WTH_HOME/wth-results/<job_id>/`` and reports
+a full artifact tree under ``$WTH_HOME/wth-ai-results/<job_id>/`` and reports
 progress 0..100 through an optional callback (wired to the job worker).
 """
 
 from __future__ import annotations
 
 import json
-import os
 import re
 import time
 from datetime import datetime, timezone
@@ -28,7 +27,7 @@ from wth_ai.recon.adaptive import (
     sort_specs_by_adaptive,
 )
 from wth_ai.recon.diff import diff_results
-from wth_ai.recon.model import ToolRun, ToolSpec
+from wth_ai.recon.model import ToolRun
 from wth_ai.recon.http import is_private_literal as _is_private_literal
 from wth_ai.recon.normalizer import ReconNormalizer
 from wth_ai.recon.planner import ReconPlanner, detect_target_type
@@ -37,7 +36,7 @@ from wth_ai.recon.parallel import run_specs_parallel
 from wth_ai.recon.runner import SafeToolRunner, write_runlog_entry
 from wth_ai.recon.tools.builtin import BuiltinContext, run_builtin
 from wth_ai.recon.tools.catalog import BUILTIN_TOOLS
-from wth_ai.workspace import wth_home
+from wth_ai.workspace import RESULTS_DIR_NAME, wth_home
 
 # builtin key -> catalog tool name (reverse of BUILTIN_TOOLS)
 _KEY_TO_NAME = {v: k for k, v in BUILTIN_TOOLS.items()}
@@ -62,20 +61,52 @@ class ReconEngine:
         *,
         results_root: Path | None = None,
         tool_timeout: int = 60,
+        scope_card: Any = None,
     ) -> None:
         self.registry = registry or ReconToolRegistry()
         self.planner = ReconPlanner(self.registry)
-        self.results_root = results_root or (wth_home() / "wth-results")
+        self.results_root = results_root or (wth_home() / RESULTS_DIR_NAME)
         self.tool_timeout = tool_timeout
+        # P0-1: tanpa kartu tidak ada aksi. Engine tetap bisa dibuat tanpa kartu
+        # (jalur lama/test), tetapi `run()` menolak sebelum satu pun request.
+        self.scope_card = scope_card
 
     # ----------------------------------------------------------------- #
+    def _scope_refusal(self, target: str, authorized: bool | None) -> str | None:
+        """Alasan penolakan, atau None bila target boleh dipindai."""
+        if authorized is False:
+            return "authorized=no (recon-only requires authorization)"
+        card = self.scope_card
+        if card is None:
+            return "scope: tidak ada scope card (jalankan `wth-ai scope` dulu)"
+        if not getattr(card, "authorized", False):
+            return "scope: scope card tidak authorized"
+        from wth_ai.scope_manager import ScopeManager
+
+        manager = ScopeManager()
+        manager.set_scope(
+            target=card.target,
+            authorized=True,
+            in_scope=[*getattr(card, "cidr", []), *getattr(card, "domains", [])],
+        )
+        ok, reason = manager.is_in_scope(target)
+        return None if ok else f"scope: target di luar scope card ({reason})"
+
+    def _egress_guard(self) -> Any:
+        from wth_ai.netguard import EgressGuard
+
+        card = self.scope_card
+        return EgressGuard.from_patterns(
+            [*getattr(card, "cidr", []), *getattr(card, "domains", [])]
+        )
+
     def run(
         self,
         target: str,
         *,
         profile: str = "recon-only",
         job_id: str | None = None,
-        authorized: bool = True,
+        authorized: bool | None = None,
         realtime: bool = False,
         progress: Callable[[int, int, str], None] | None = None,
         log: Callable[[str], None] | None = None,
@@ -87,6 +118,46 @@ class ReconEngine:
         log = log or NoOp
 
         job_id = job_id or f"recon-{_slug(target)}-{int(time.time())}"
+
+        # 1) policy / scope ------------------------------------------------
+        progress(5, 100, "scope/policy")
+        refusal = self._scope_refusal(target, authorized)
+        if refusal is not None:
+            out_dir = self.results_root / job_id
+            out_dir.mkdir(parents=True, exist_ok=True)
+            log(f"recon blocked: {refusal}")
+            result = {
+                "type": "recon", "target": target, "status": "blocked",
+                "reason": refusal, "output_dir": str(out_dir),
+            }
+            (out_dir / "recon_summary.json").write_text(json.dumps(result, indent=2), encoding="utf-8")
+            return result
+
+        # Lapis kedua: allowlist egress untuk semua fetch selama run, dilepas
+        # di finally supaya tidak bocor ke job berikutnya di proses yang sama.
+        rhttp.set_egress_guard(self._egress_guard())
+        try:
+            return self._run_locked(
+                target, profile=profile, job_id=job_id, realtime=realtime,
+                progress=progress, log=log, bus=bus, baseline=baseline,
+                should_stop=should_stop,
+            )
+        finally:
+            rhttp.set_egress_guard(None)
+
+    def _run_locked(
+        self,
+        target: str,
+        *,
+        profile: str,
+        job_id: str,
+        realtime: bool,
+        progress: Callable[[int, int, str], None],
+        log: Callable[[str], None],
+        bus: Any,
+        baseline: dict[str, Any] | None,
+        should_stop: Callable[[], bool] | None,
+    ) -> dict[str, Any]:
         out_dir = self.results_root / job_id
         out_dir.mkdir(parents=True, exist_ok=True)
         raw_dir = out_dir / "raw"
@@ -94,20 +165,7 @@ class ReconEngine:
         (out_dir / "screenshots").mkdir(exist_ok=True)
         runlog_path = out_dir / "tool_runs.jsonl"
 
-        # 1) policy / scope ------------------------------------------------
-        progress(5, 100, "scope/policy")
         ttype = detect_target_type(target)
-        if not authorized:
-            from wth_ai.engagement.mode import scope_authorization_required
-            if scope_authorization_required():
-                log("recon blocked: target not authorized")
-                result = {
-                    "type": "recon", "target": target, "status": "blocked",
-                    "reason": "authorized=no (recon-only requires authorization)",
-                    "output_dir": str(out_dir),
-                }
-                (out_dir / "recon_summary.json").write_text(json.dumps(result, indent=2), encoding="utf-8")
-                return result
         if ttype == "local" and profile != "local":
             log(f"note: local target '{target}' — forcing profile=local")
             profile = "local"
@@ -152,7 +210,7 @@ class ReconEngine:
         )
         stage_marks = {"http": 35, "dns": 20, "tls": 50, "crawler": 65, "params": 75, "cloud": 85}
         # Cooperative cancellation. Without this the engine ran every planned
-        # tool to completion regardless of `wth job stop`: the handler checked
+        # tool to completion regardless of `wth-ai job stop`: the handler checked
         # ctx.should_stop() once at entry and never again, so a stop only
         # changed the DB row while the scan kept hitting the target (and kept
         # writing artifacts) until it finished on its own. Checked between

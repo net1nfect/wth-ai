@@ -24,6 +24,7 @@ from wth_ai.cli.tui.widgets.header import HeaderBar
 from wth_ai.cli.tui.widgets.input_bar import InputBar, Submitted
 from wth_ai.cli.tui.widgets.sidebar import SidebarPanel
 from wth_ai.cli.tui.widgets.transcript import TranscriptPanel
+from wth_ai.cli.ui.theme import THEME
 from wth_ai.cli.ui.tool_trace import ToolTracePanel
 from wth_ai.cli.tui.theme_css import TUI_CSS
 from wth_ai.platform.registry import get_platform_registry
@@ -51,7 +52,11 @@ class WthTuiApp(App[None]):
         Binding("ctrl+5", "focus_tab_config", "Config", show=False),
         Binding("ctrl+p", "command_palette", "Palette", show=False),
         Binding("ctrl+slash", "slash_help", "Help", show=False),
-        Binding("ctrl+k", "skills_picker", "Skills", show=False),
+        # P2-5: `ctrl+k` fired the kill switch in the redteam TUI and opened the
+        # skills picker here -- one key, two meanings, and the second one stops
+        # the engagement. Skills moves to `ctrl+s`, which the redteam TUI already
+        # uses for the same thing, so `ctrl+k` means kill everywhere.
+        Binding("ctrl+s", "skills_picker", "Skills", show=False),
         Binding("ctrl+l", "clear_transcript", "Clear", show=False),
         Binding("ctrl+t", "toggle_activity", "Activity", show=False),
         Binding("ctrl+c", "interrupt_turn", "Interrupt", show=False),
@@ -136,7 +141,7 @@ class WthTuiApp(App[None]):
         llm_ok = getattr(self.orch.client, "agentic_available", self.orch.client.available)()
         if not llm_ok:
             transcript.append_system(
-                "⚠ LLM offline — `wth setup` untuk API key. Slash commands tetap jalan."
+                "⚠ LLM offline — `wth-ai setup` untuk API key. Slash commands tetap jalan."
             )
         self.query_one("#input-bar", InputBar).focus()
 
@@ -341,6 +346,12 @@ class WthTuiApp(App[None]):
         llm_ok = getattr(self.orch.client, "agentic_available", self.orch.client.available)()
         header = self._header()
         if not self._busy:
+            # P2-1: same source as the REPL status line -- the router, not the
+            # legacy config field, so all three surfaces name one model.
+            try:
+                model, _ = self.orch.client.model_for_role("planner")
+            except Exception:  # noqa: BLE001
+                model = ""
             header.update_status(
                 version=__version__,
                 target=self.orch.state.scope.target or "unset",
@@ -348,6 +359,7 @@ class WthTuiApp(App[None]):
                 llm="online" if llm_ok else "offline",
                 phase=str(phase),
                 mode=mode_label,
+                model=str(model or ""),
             )
         skills = self.orch.state.metadata.get("active_skills", [])
         cov = self.orch.asset_graph.coverage()
@@ -373,7 +385,7 @@ class WthTuiApp(App[None]):
         hyps = self.orch.state.hypotheses or []
         last_job = self.orch.state.metadata.get("last_recon", {}).get("job_id", "-")
         lines = [
-            "[bold #58a6ff]Findings[/]",
+            f"[bold {THEME['brand']}]Findings[/]",
             f"Total: {len(findings)} · Hypotheses: {len(hyps)}",
             f"Last recon: {last_job}",
             "",
@@ -390,7 +402,7 @@ class WthTuiApp(App[None]):
     def _refresh_tools_tab(self, ts: dict) -> None:
         reg = self.orch.tool_registry
         lines = [
-            "[bold #58a6ff]Tool Registry[/]",
+            f"[bold {THEME['brand']}]Tool Registry[/]",
             f"Installed: {ts.get('installed', 0)}/{ts.get('total', 0)}",
             "",
         ]
@@ -413,7 +425,7 @@ class WthTuiApp(App[None]):
         ui = self.orch.config.ui
         scope = self.orch.state.scope
         lines = [
-            "[bold #58a6ff]Session Config[/]",
+            f"[bold {THEME['brand']}]Session Config[/]",
             f"Target: [bold]{scope.target or 'unset'}[/]",
             f"Permission: {self.orch.state.permission_mode.value}",
             f"Engagement: {mode_label}",

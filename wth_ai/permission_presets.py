@@ -66,6 +66,11 @@ PRESETS: dict[str, Preset] = {
         "auto", PermissionMode.ELEVATED_APPROVAL, False, True, True,
         "Jalan sendiri: konfirmasi dimatikan, tapi capability masih dibatasi.",
     ),
+    "full-lab": Preset(
+        "full-lab", PermissionMode.FULL_LAB, False, False, True,
+        "Lab sekali pakai: tool level full_lab, tapi capability tetap dibatasi "
+        "dan konfirmasi tetap menyala.",
+    ),
     "yolo": Preset(
         "yolo", PermissionMode.UNRESTRICTED, True, True, True,
         "Tanpa konfirmasi + capability maksimal. Target tetap harus authorized.",
@@ -79,7 +84,9 @@ ALIASES: dict[str, str] = {
     "ask": "ask", "default": "ask", "safe": "ask", "normal": "ask",
     "auto": "auto", "autopilot": "auto", "accept": "auto", "auto-accept": "auto",
     "yolo": "yolo", "unrestricted": "yolo", "danger": "yolo", "full": "yolo",
-    "full_lab": "yolo", "full-lab": "yolo", "standard": "ask", "elevated": "auto",
+    # P0-3: `full_lab` dulu memetakan ke `yolo`, jadi nama yang terdengar
+    # seperti "lab lokal" justru menaikkan capability dan mematikan approval.
+    "full_lab": "full-lab", "standard": "ask", "elevated": "auto",
 }
 
 
@@ -93,6 +100,20 @@ def resolve_preset(name: str) -> Preset:
         valid = ", ".join(sorted(PRESETS))
         raise ValueError(f"mode '{name}' tidak dikenal. Pilihan: {valid}")
     return preset
+
+
+def default_mode(config=None) -> PermissionMode:
+    """Preset config -> `PermissionMode` awal sesi (P0-3: satu sumber default).
+
+    Sebelum ini `SessionState.permission_mode` selalu `READ_ONLY_RECON` dan
+    `config.default_permission` tidak pernah dibaca. Nilai tak dikenal jatuh
+    ke `READ_ONLY_RECON`: salah ketik di YAML tidak boleh menggagalkan start-up.
+    """
+    name = getattr(config, "default_permission", "") if config is not None else ""
+    try:
+        return resolve_preset(str(name)).permission
+    except ValueError:
+        return PermissionMode.READ_ONLY_RECON
 
 
 def apply_preset(name: str, *, permission_mgr=None, config=None) -> Preset:

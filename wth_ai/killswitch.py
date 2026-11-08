@@ -5,7 +5,7 @@ Dua jalur karena satu proses tidak bisa melihat registry proses lain:
 * :meth:`KillSwitch.activate` — SIGTERM ke process group, SIGKILL setelah
   grace, untuk worker yang hidup di proses ini (TUI, loop).
 * :func:`request_kill` — menulis flag file yang dipoll :func:`requested` oleh
-  worker di proses lain (`wth worker run`), sehingga `wth kill` tetap bekerja
+  worker di proses lain (`wth-ai worker run`), sehingga `wth-ai kill` tetap bekerja
   tanpa IPC.
 """
 

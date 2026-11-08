@@ -29,7 +29,7 @@ import re
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Iterable, Mapping, Sequence
+from typing import Any, Iterable, Mapping
 
 from wth_ai.hunt.payloads import BLAST_ORDER, Payload
 

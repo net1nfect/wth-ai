@@ -49,6 +49,16 @@ def tmp_home(tmp_path, monkeypatch):
 
 
 @pytest.fixture
+def scope_card(tmp_home):
+    """Kartu izin nyata — P0-1: tanpa kartu, tidak ada recon sama sekali."""
+    from wth_ai.scope_card import ScopeCard
+
+    card = ScopeCard(target="example.com", domains=["example.com"], authorized=True)
+    card.write(tmp_home / "scope_card.json")
+    return card
+
+
+@pytest.fixture
 def offline(monkeypatch):
     """Patch every network entrypoint so the engine runs fully offline."""
 
@@ -143,6 +153,26 @@ def test_planner_includes_high_risk_after_enable(tmp_home):
     assert pl._eligible("masscan", "high-quality", None)[0] is False
     reg.enable("masscan")
     assert pl._eligible("masscan", "high-quality", None)[0] is True
+
+
+def test_planner_eligible_under_unrestricted_mode_does_not_crash(tmp_home):
+    """P2-9 / audit segar: `_eligible` membaca `os.environ` tetapi `planner.py`
+    tidak meng-import `os` — mode unrestricted (is_unrestricted() True) memicu
+    NameError untuk tool yang dikenal. Harus jalan tanpa crash."""
+    from wth_ai.engagement.mode import set_unrestricted
+    from wth_ai.recon.registry import ReconToolRegistry
+
+    reg = ReconToolRegistry()
+    pl = ReconPlanner(reg)
+    known = next((t for t in reg.tools if not t.startswith("_")), "portscan")
+    set_unrestricted(True)
+    try:
+        ok, reason = pl._eligible(known, "high-quality", None)
+    finally:
+        set_unrestricted(False)
+    # tool itu dikenali (spec ada), jadi harus mengembalikan keputusan, bukan crash
+    assert isinstance(ok, bool)
+    assert isinstance(reason, str)
 
 
 def test_target_type_detection(tmp_home):
@@ -440,10 +470,10 @@ def test_diff_detects_new_url():
 # --------------------------------------------------------------------------- #
 # Engine end-to-end (offline)
 # --------------------------------------------------------------------------- #
-def test_engine_creates_artifacts(tmp_home, offline):
+def test_engine_creates_artifacts(tmp_home, offline, scope_card):
     from wth_ai.recon import ReconEngine
 
-    eng = ReconEngine()
+    eng = ReconEngine(scope_card=scope_card)
     res = eng.run("example.com", profile="recon-only", job_id="JOB-eng1")
     assert res["status"] == "completed"
     out = Path(res["output_dir"])
@@ -453,21 +483,21 @@ def test_engine_creates_artifacts(tmp_home, offline):
     assert (out / "normalized" / "asset_graph.json").exists()
 
 
-def test_engine_progress_monotonic(tmp_home, offline):
+def test_engine_progress_monotonic(tmp_home, offline, scope_card):
     from wth_ai.recon import ReconEngine
 
     marks = []
-    eng = ReconEngine()
+    eng = ReconEngine(scope_card=scope_card)
     eng.run("example.com", profile="recon-only", job_id="JOB-prog",
             progress=lambda c, t, m: marks.append(c))
     assert marks[0] == 5 and marks[-1] == 100
     assert marks == sorted(marks)
 
 
-def test_engine_blocks_unauthorized(tmp_home, offline):
+def test_engine_blocks_unauthorized(tmp_home, offline, scope_card):
     from wth_ai.recon import ReconEngine
 
-    res = ReconEngine().run("example.com", job_id="JOB-blk", authorized=False)
+    res = ReconEngine(scope_card=scope_card).run("example.com", job_id="JOB-blk", authorized=False)
     assert res["status"] == "blocked"
 
 
@@ -482,7 +512,7 @@ def _manager(tmp_home):
     return JobManager()
 
 
-def test_recon_job_handler_completed(tmp_home, offline):
+def test_recon_job_handler_completed(tmp_home, offline, scope_card):
     from wth_ai.jobs.worker import WorkerEngine
 
     mgr = _manager(tmp_home)
@@ -496,7 +526,7 @@ def test_recon_job_handler_completed(tmp_home, offline):
     assert (Path(mgr.store.results_dir) / job.job_id / "recon_report.md").exists()
 
 
-def test_job_events_progress_and_report(tmp_home, offline):
+def test_job_events_progress_and_report(tmp_home, offline, scope_card):
     from wth_ai.jobs.worker import WorkerEngine
 
     mgr = _manager(tmp_home)
@@ -509,7 +539,7 @@ def test_job_events_progress_and_report(tmp_home, offline):
     assert "recon.report_ready" in seen
 
 
-def test_diff_via_two_jobs(tmp_home, offline, monkeypatch):
+def test_diff_via_two_jobs(tmp_home, offline, monkeypatch, scope_card):
     """Second run with an extra URL should be diffed against the first."""
     from wth_ai.jobs.worker import WorkerEngine
 
@@ -553,7 +583,7 @@ def test_parse_interval_floor():
 # --------------------------------------------------------------------------- #
 # Secret hygiene
 # --------------------------------------------------------------------------- #
-def test_no_plaintext_secret_anywhere(tmp_home, offline):
+def test_no_plaintext_secret_anywhere(tmp_home, offline, scope_card):
     """The planted AWS key must never appear verbatim in any artifact."""
     from wth_ai.jobs.worker import WorkerEngine
 

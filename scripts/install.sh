@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# Installer WTH-AI — venv terisolasi, entry point `wth`, workspace ~/.wth-ai.
+# Installer WTH-AI — venv terisolasi, entry point `wth-ai`, workspace ~/.wth-ai.
 #
 # Kenapa skrip dan bukan sekadar `pip install .`:
-#   * `wth` perlu di PATH tanpa mengotori Python sistem.
+#   * `wth-ai` perlu di PATH tanpa mengotori Python sistem.
 #   * workspace (~/.wth-ai) punya permission khusus (vault 600, dir 700).
 #   * install harus bisa diulang (upgrade) dan dibatalkan (--uninstall).
 #   * installer harus memberi tahu APA yang kurang, bukan gagal dengan traceback.
@@ -32,6 +32,7 @@ DO_SETUP=auto
 DO_UNINSTALL=0
 PURGE=0
 DRY_RUN=0
+SKIP_DEPS=0
 YES=0
 USE_VENV=1
 VERBOSE=0
@@ -91,7 +92,7 @@ Pemakaian:
 
 Opsi:
   --home DIR        workspace WTH_HOME          (default: \$WTH_HOME atau ~/.wth-ai)
-  --bin DIR         direktori command 'wth'     (default: ~/.local/bin)
+  --bin DIR         direktori command 'wth-ai'  (default: ~/.local/bin)
   --source DIR      sumber repo/paket           (default: induk skrip ini)
   --repo OWNER/NAME sumber GitHub bila tidak ada checkout lokal
   --ref BRANCH      branch/tag untuk --repo     (default: big-dix)
@@ -104,6 +105,8 @@ Opsi:
                    yang kurang, mis. python3-venv. 'jalankan' memakai sudo dan
                    HANYA dijalankan bila Anda memintanya.
   --dry-run         cetak perintah, tidak mengubah apa pun
+  --skip-deps       lewati `pip install` (venv + launcher + PATH tetap
+                   dipasang). Untuk uji instalasi tanpa jaringan.
   --verbose         tampilkan output setiap perintah (default: hanya saat gagal)
   --yes             jangan minta konfirmasi (dipakai --purge)
   --uninstall       hapus venv + command + baris PATH (workspace tetap)
@@ -143,6 +146,7 @@ while [[ $# -gt 0 ]]; do
     --system-deps=*) SYSTEM_DEPS="${1#*=}"; shift ;;
     --install-system-deps) SYSTEM_DEPS=run; shift ;;
     --dry-run)     DRY_RUN=1; shift ;;
+    --skip-deps)   SKIP_DEPS=1; shift ;;
     --verbose)     VERBOSE=1; shift ;;
     --yes|-y)      YES=1; shift ;;
     --uninstall)   DO_UNINSTALL=1; shift ;;
@@ -349,13 +353,17 @@ remove_shell_path() {
 
 if [[ "$DO_UNINSTALL" == "1" ]]; then
   step "Uninstall WTH-AI"
-  for name in wth wth-ai; do
-    target="$BIN_DIR/$name"
-    if [[ -L "$target" || -e "$target" ]]; then
-      log "  hapus $target"
-      run rm -f "$target"
-    fi
-  done
+  target="$BIN_DIR/wth-ai"
+  if [[ -L "$target" || -e "$target" ]]; then
+    log "  hapus $target"
+    run rm -f "$target"
+  fi
+  # Alias lama hanya bila symlink; berkas biasa bisa milik tool lain.
+  legacy="$BIN_DIR/wth"
+  if [[ -L "$legacy" ]]; then
+    log "  hapus alias lama $legacy"
+    run rm -f "$legacy"
+  fi
   if [[ -d "$VENV" ]]; then
     log "  hapus venv $VENV"
     run rm -rf "$VENV"
@@ -529,8 +537,11 @@ fi
 # 5. paket
 # --------------------------------------------------------------------------- #
 step "Pasang paket"
-run "${PIP[@]}" install "${PIP_USER[@]}" "${PIP_EXTRA[@]}" -e "$SRC_DIR" \
-  || fail "pip install -e $SRC_DIR gagal (lihat log)" deps_install_failed
+if [[ "$SKIP_DEPS" == "1" ]]; then
+  skip "dilewati (--skip-deps): dependensi sudah tersedia"
+else
+  run "${PIP[@]}" install "${PIP_USER[@]}" "${PIP_EXTRA[@]}" -e "$SRC_DIR" \
+    || fail "pip install -e $SRC_DIR gagal (lihat log)" deps_install_failed
 
 if [[ -n "$FEATURES" ]]; then
   IFS=',' read -r -a feature_list <<< "$FEATURES"
@@ -541,7 +552,7 @@ if [[ -n "$FEATURES" ]]; then
       "tui")     req="textual>=0.80" ;;
       "bot")     req="discord.py>=2.3 python-telegram-bot>=21.0" ;;
       "browser") req="nodriver>=0.38" ;;
-      "full")    req="aiohttp>=3.9 beautifulsoup4>=4.12 lxml>=5.0 textual>=0.80" ;;
+      "full")    req="beautifulsoup4>=4.12 lxml>=5.0 textual>=0.80" ;;
       *)         fail "fitur tidak dikenal: $feature (pilih: tui,bot,browser,full)" bad_feature ;;
     esac
     log "fitur $feature: $req"
@@ -550,6 +561,7 @@ if [[ -n "$FEATURES" ]]; then
       || fail "gagal memasang fitur $feature" deps_install_failed
   done
 fi
+fi
 
 # --------------------------------------------------------------------------- #
 # 6. command
@@ -557,27 +569,35 @@ fi
 step "Command"
 # Entry point di venv selalu ada setelah pip install -e; --no-venv bergantung
 # pada direktori scripts milik interpreter pengguna yang mungkin belum di PATH.
+# P1-8 (D3): paket tidak lagi mendeklarasikan `[project.scripts]` (wheel tanpa
+# data repo tidak fungsional), jadi installer menulis launcher-nya sendiri.
 if [[ "$USE_VENV" == "1" ]]; then
-  ENTRY="$VENV/bin/wth"
+  if [[ "$DRY_RUN" != "1" && ! -x "$VENV/bin/wth-ai" ]]; then
+    printf '#!/bin/sh\nexec %s -m wth_ai.cli.entry "$@"\n' "$VENV/bin/python" > "$VENV/bin/wth-ai" \
+      || fail "tidak bisa menulis launcher $VENV/bin/wth-ai" entry_missing
+    chmod +x "$VENV/bin/wth-ai" || fail "tidak bisa chmod $VENV/bin/wth-ai" entry_missing
+  fi
+  ENTRY="$VENV/bin/wth-ai"
   [[ "$DRY_RUN" == "1" || -x "$ENTRY" ]] || fail "entry point tidak dibuat: $ENTRY" entry_missing
 else
-  ENTRY="$(command -v wth || true)"
-  [[ -n "$ENTRY" || "$DRY_RUN" == "1" ]] || fail "entry point 'wth' tidak ada di PATH" entry_missing
+  ENTRY="$(command -v wth-ai || true)"
+  [[ -n "$ENTRY" || "$DRY_RUN" == "1" ]] || fail "entry point 'wth-ai' tidak ada di PATH" entry_missing
 fi
 
 run mkdir -p "$BIN_DIR" || fail "tidak bisa membuat $BIN_DIR" filesystem_error
-for name in wth wth-ai; do
-  source_path="$VENV/bin/$name"
-  [[ "$USE_VENV" == "1" ]] || source_path="$(command -v "$name" || true)"
-  [[ -n "$source_path" ]] || continue
-  if [[ -e "$BIN_DIR/$name" && ! -L "$BIN_DIR/$name" ]]; then
-    # Jangan menimpa biner asing tanpa jejak.
-    warn "$BIN_DIR/$name sudah ada dan bukan symlink; dilewati"
-    continue
-  fi
-  run ln -sf "$source_path" "$BIN_DIR/$name" || fail "gagal symlink $BIN_DIR/$name" filesystem_error
-done
-ok "$BIN_DIR/wth -> $VENV/bin/wth"
+if [[ -e "$BIN_DIR/wth-ai" && ! -L "$BIN_DIR/wth-ai" ]]; then
+  # Jangan menimpa biner asing tanpa jejak.
+  warn "$BIN_DIR/wth-ai sudah ada dan bukan symlink; dilewati"
+else
+  run ln -sf "$ENTRY" "$BIN_DIR/wth-ai" || fail "gagal symlink $BIN_DIR/wth-ai" filesystem_error
+  ok "$BIN_DIR/wth-ai -> $ENTRY"
+fi
+# Alias lama: hanya symlink yang dibuang; berkas biasa bernama `wth` bisa milik
+# tool lain dan tidak boleh disentuh.
+legacy="$BIN_DIR/wth"
+if [[ -L "$legacy" ]]; then
+  run rm -f "$legacy" && log "  hapus alias lama $legacy"
+fi
 
 # --------------------------------------------------------------------------- #
 # 7. PATH (idempotent, sadar login/non-login shell)
@@ -666,6 +686,10 @@ ok "$WTH_HOME"
 step "Verifikasi"
 if [[ "$DRY_RUN" == "1" ]]; then
   skip "(dry-run) lewati eksekusi --version dan setup --check"
+elif [[ "$SKIP_DEPS" == "1" ]]; then
+  # --skip-deps tidak memasang dependensi apa pun, jadi `--version` di venv
+  # baru pasti gagal (click belum ada). Itu bukan kegagalan instalasi.
+  skip "(skip-deps) lewati eksekusi --version dan setup --check"
 else
   if version_out="$("$PY" -m wth_ai.cli.entry --version 2>&1)"; then
     printf '%s\n' "$version_out" >>"$LOG_FILE"
@@ -677,7 +701,7 @@ else
   if run "$PY" -m wth_ai.cli.entry setup --check; then
     ok "preflight bersih"
   else
-    warn "preflight melaporkan masalah — jalankan: wth setup --check"
+    warn "preflight melaporkan masalah — jalankan: wth-ai setup --check"
   fi
 fi
 
@@ -688,7 +712,7 @@ step "Selesai"
 printf '  %-9s %s\n' "paket" "$SRC_DIR"
 [[ "$USE_VENV" == "1" ]] && printf '  %-9s %s\n' "venv" "$VENV"
 printf '  %-9s %s\n' "WTH_HOME" "$WTH_HOME"
-printf '  %-9s %s\n' "command" "$BIN_DIR/wth"
+printf '  %-9s %s\n' "command" "$BIN_DIR/wth-ai"
 printf '  %-9s %s\n' "log" "$LOG_FILE"
 
 if [[ "$DO_SETUP" == "1" ]]; then
@@ -697,10 +721,10 @@ if [[ "$DO_SETUP" == "1" ]]; then
     exec "$ENTRY" setup
   else
     printf '\n  Langkah berikutnya:\n'
-    printf '    wth setup            # wizard provider + model\n'
-    printf '    wth setup --check    # hanya preflight\n'
-    printf '    wth                  # buka REPL\n'
+    printf '    wth-ai setup            # wizard provider + model\n'
+    printf '    wth-ai setup --check    # hanya preflight\n'
+    printf '    wth-ai                  # buka REPL\n'
   fi
 else
-  printf '\n  Wizard dilewati (--no-setup). Jalankan: wth setup\n'
+  printf '\n  Wizard dilewati (--no-setup). Jalankan: wth-ai setup\n'
 fi

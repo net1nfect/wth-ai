@@ -70,6 +70,19 @@ class HuntMemoryLearning:
                 ),
             )
 
+    def all_records(self) -> list[dict[str, Any]]:
+        """Semua record outcome sebagai dict (API yang dipakai `eval/act.py`).
+
+        P1-3 (audit 2026-11-06): `collect_class_counts` memakai
+        `learning.all_records()` yang sebelumnya tidak ada di
+        `HuntMemoryLearning` — `rows` selalu kosong sehingga `verified` selalu 0.
+        """
+        with sqlite3.connect(self.db_path) as conn:
+            rows = conn.execute(
+                "SELECT vuln_class, success FROM outcomes ORDER BY id"
+            ).fetchall()
+        return [{"vuln_class": r[0], "success": bool(r[1])} for r in rows]
+
     def success_rate(self, tech_stack: str | dict[str, Any], vuln_class: str) -> float:
         tech_key = tech_stack_key(tech_stack)
         with sqlite3.connect(self.db_path) as conn:

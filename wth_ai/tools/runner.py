@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from wth_ai.config import WTHConfig
-from wth_ai.models import ExecutorResult, ExecutorTask, PermissionMode
+from wth_ai.models import PermissionMode
 from wth_ai.permission_manager import PermissionManager
 from wth_ai.scope_manager import ScopeManager
 from wth_ai.tool_runner import ToolRunner
@@ -50,7 +50,7 @@ class ManifestToolRunner(ToolRunner):
     # which handed a model-authored `args` string straight to /bin/sh: a `;` or
     # `$(...)` in the arguments ran as a second command, outside every gate
     # except the substring denylist. `run_command` tokenizes and never spawns a
-    # shell, matching `ToolRunner._run_command` (the path `wth doctor` checks).
+    # shell, matching `ToolRunner._run_command` (the path `wth-ai doctor` checks).
     from wth_ai.shell_runner import run_command
 
     try:
