@@ -233,8 +233,14 @@ gagal saat slice proxy dikeluarkan dari pemanggilan. Penyebabnya `run_smoke_test
 role; bila config role sudah terisi oleh test lain, provider dibuat sungguhan dan
 `requests.get(f"{base_url}/models", timeout=30)` menunggu jaringan sampai
 `pytest-timeout` memotong (traceback: `socket.py:725: self._sock.recv_into(b)`,
-`openai_compat.py:155`). Perbaikannya terpisah: test harus mematikan role model
-(netralkan `router` role) atau `run_smoke_test` perlu mode tanpa jaringan.
+`openai_compat.py:155`).
+
+**Perbaikan (commit `ef2267d`):** kedua test kini mengarahkan semua `ROLE_NAMES` ke
+provider palsu (`config.providers[role] = ProviderRoleConfig(type="openrouter",
+model="fake/model-a")`) sebelum `run_smoke_test`, jadi langkah `role_models_valid`
+benar-benar dinilai tetapi tidak pernah membuat provider nyata. Bukti: prefix
+`tests/test_*.py` sampai `test_provider.py` (urutan yang tadinya gagal) →
+`998 passed`; filenya sendiri `19 passed`.
 
 ---
 
