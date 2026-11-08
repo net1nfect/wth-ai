@@ -1,0 +1,22 @@
+{
+  "name": "idor_orders",
+  "findings": [
+    {
+      "id": "F-001",
+      "hypothesis": "IDOR GET /api/v1/orders/1 milik user lain",
+      "vuln_class": "idor",
+      "path": "/api/v1/orders/1",
+      "severity": "high"
+    }
+  ],
+  "responses": {
+    "/api/v1/orders/1": {
+      "status": 200,
+      "body": "{\"id\":1,\"owner\":\"other\"}"
+    },
+    "/api/v1/orders/2": {
+      "status": 403,
+      "body": "{\"error\":\"forbidden\"}"
+    }
+  }
+}

@@ -1,0 +1,8 @@
+{
+  "findings": [
+    {
+      "vuln_class": "auth",
+      "path": "/api/me"
+    }
+  ]
+}

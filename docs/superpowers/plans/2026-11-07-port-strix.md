@@ -300,6 +300,12 @@ benar-benar dinilai tetapi tidak pernah membuat provider nyata. Bukti: prefix
 
 ---
 
+> Status 2026-11-08: **Phase 4 selesai** (Task 11 `41c516c`, Task 12 `7314259`).
+> Batas slice Phase 4 = dua commit itu; pengiriman tetap satu PR per fase
+> sesuai aturan di atas, jadi Phase 5 di bawah ini adalah slice berikutnya.
+
+---
+
 ## Phase 5 — Benchmark lokal
 
 ### Task 13: Harness benchmark offline
@@ -311,11 +317,29 @@ benar-benar dinilai tetapi tidak pernah membuat provider nyata. Bukti: prefix
 
 **Interfaces:** `run_task(task_dir: Path) -> BenchResult(task, passed, findings, duration_s, ground_truth_hits)`, `score(results) -> dict[str, float]` (precision/recall terhadap `ground_truth.json`). Semua task memakai server palsu lokal; tanpa internet.
 
-- [ ] **Step 1: Test gagal** — task fixture dengan satu temuan benar → recall 1.0; temuan salah → precision < 1.0; task tanpa `ground_truth.json` → error jelas.
-- [ ] **Step 2: Jalankan, pastikan gagal.**
-- [ ] **Step 3: Implementasi** — `wth-ai bench --tasks DIR --out DIR`, keluar 0/1.
-- [ ] **Step 4: Jalankan, pastikan lulus** + `pytest tests -q -k bench`.
-- [ ] **Step 5: Commit** — `feat: harness benchmark offline dengan skor precision/recall`.
+- [x] **Step 1: Test gagal** — task fixture dengan satu temuan benar → recall 1.0; temuan salah → precision < 1.0; task tanpa `ground_truth.json` → error jelas.
+- [x] **Step 2: Jalankan, pastikan gagal.**
+- [x] **Step 3: Implementasi** — `wth-ai bench --tasks DIR --out DIR`, keluar 0/1.
+- [x] **Step 4: Jalankan, pastikan lulus** + `pytest tests -q -k bench`.
+- [x] **Step 5: Commit** — `feat: harness benchmark offline dengan skor precision/recall`.
+
+**Catatan implementasi (beda dari rencana, sengaja):**
+- **Tiga task, semuanya HTTP.** Rencana menyebut task Modbus holding read; itu
+  butuh server Modbus palsu + klien OT, dan harness ini menguji *pipeline bukti*,
+  bukan protokol. Task ketiga diganti `verbose_errors` (info leak) supaya ketiga
+  task tetap nyata dan deterministik. Modbus tetap punya test sendiri di
+  `tests/test_ot_*.py`.
+- **Bukti minimum = rute hidup.** Hypothesis dihitung sebagai temuan hanya bila
+  `GET path` mengembalikan <400; harness tidak mengklaim dampak. Klasifikasi
+  tetap urusan `veracity`/`verify_gate` di alur sungguhan.
+- **Server di 127.0.0.1 port ephemeral**, dimatikan (`shutdown`+`server_close`)
+  sebelum `run_task` kembali — dibuktikan test yang gagal connect sesudahnya.
+- **Skor agregat dihitung dari jumlah**, bukan rata-rata per task: task kecil
+  tidak boleh berbobot sama dengan task besar.
+- **Verifikasi:** `pytest tests/test_bench_harness.py -q` → 6 passed;
+  `pytest tests -q -k "bench or cli_scope or cli_identity"` → 15 passed;
+  `wth-ai bench --tasks wth_ai/bench/tasks --out /tmp/benchout` → 3/3 lulus,
+  precision 1.0, recall 1.0, exit 0.
 
 ---
 

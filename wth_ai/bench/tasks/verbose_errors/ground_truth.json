@@ -1,0 +1,8 @@
+{
+  "findings": [
+    {
+      "vuln_class": "info_leak",
+      "path": "/api/report"
+    }
+  ]
+}

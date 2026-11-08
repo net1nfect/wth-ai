@@ -462,6 +462,34 @@ def scan_cmd(red_team: bool, offline_demo: bool, scan_mode: str, max_attempts: i
                                    scope_authorized=scope_authorized))
 
 
+@cli.command("bench")
+@click.option("--tasks", "tasks_dir", required=True,
+              help="Direktori berisi task benchmark (satu subdir per task).")
+@click.option("--out", default="out", show_default=True)
+def bench_cmd(tasks_dir: str, out: str) -> None:
+    """Jalankan benchmark offline; exit 0 bila semua task lulus, 1 bila tidak."""
+    from wth_ai.bench.harness import BenchError, run_all
+
+    try:
+        results, totals = run_all(_user_path(tasks_dir))
+    except BenchError as exc:
+        raise click.ClickException(str(exc)) from exc
+
+    out_dir = _user_path(out)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    (out_dir / "bench.json").write_text(
+        json.dumps({"totals": totals, "tasks": [r.to_dict() for r in results]},
+                   indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+
+    for r in results:
+        click.echo(f"{'lulus' if r.passed else 'gagal'}: {r.task} · "
+                   f"hit {r.ground_truth_hits}/{r.truth_total} · "
+                   f"temuan {len(r.findings)} · {r.duration_s:.2f}s")
+    click.echo(f"bench: precision {totals['precision']} · recall {totals['recall']} · "
+               f"{totals['passed']}/{totals['tasks']} lulus → {out_dir / 'bench.json'}")
+    raise SystemExit(0 if totals["passed"] == totals["tasks"] else 1)
+
+
 @cli.command("disclosure")
 @click.argument("finding_id")
 @click.option("--bundle", default="out/bundle", show_default=True)

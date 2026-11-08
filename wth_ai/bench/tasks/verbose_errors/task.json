@@ -1,0 +1,18 @@
+{
+  "name": "verbose_errors",
+  "findings": [
+    {
+      "id": "F-003",
+      "hypothesis": "Stack trace terbuka di /api/report",
+      "vuln_class": "info_leak",
+      "path": "/api/report",
+      "severity": "medium"
+    }
+  ],
+  "responses": {
+    "/api/report": {
+      "status": 200,
+      "body": "{\"error\":\"Traceback ... /srv/app/report.py line 42\"}"
+    }
+  }
+}

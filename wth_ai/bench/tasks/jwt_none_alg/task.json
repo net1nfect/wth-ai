@@ -1,0 +1,22 @@
+{
+  "name": "jwt_none_alg",
+  "findings": [
+    {
+      "id": "F-002",
+      "hypothesis": "JWT alg=none diterima di /api/me",
+      "vuln_class": "auth",
+      "path": "/api/me",
+      "severity": "critical"
+    }
+  ],
+  "responses": {
+    "/api/me": {
+      "status": 200,
+      "body": "{\"user\":\"admin\",\"alg\":\"none\"}"
+    },
+    "/api/login": {
+      "status": 200,
+      "body": "{\"token\":\"...\"}"
+    }
+  }
+}

@@ -1,0 +1,8 @@
+{
+  "findings": [
+    {
+      "vuln_class": "idor",
+      "path": "/api/v1/orders/1"
+    }
+  ]
+}
