@@ -103,6 +103,21 @@ def test_no_mutation_routes(server: ViewServer) -> None:
 def test_unknown_path_is_404(server: ViewServer) -> None:
     assert _get(server, "/etc/passwd", token=TOKEN)[0] == 404
 
+def test_index_links_carry_the_real_token(server: ViewServer) -> None:
+    """Link JSON/manifest di halaman index harus bisa dipakai apa adanya.
+
+    Item 8: halaman menulis `token=TOKEN` sebagai teks harfiah, jadi link
+    selalu dijawab 403 walaupun token operator benar.
+    """
+    status, body = _get(server, "/", token=TOKEN)
+    assert status == 200
+    assert "token=TOKEN" not in body, "token literal bocor ke HTML"
+    assert f"token={TOKEN}" in body
+
+    # Link yang benar-benar ada di halaman harus berfungsi tanpa header token.
+    assert _get(server, f"/findings?token={TOKEN}")[0] == 200
+    assert _get(server, f"/manifest?token={TOKEN}")[0] == 200
+
 def test_start_is_audited(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("WTH_HOME", str(tmp_path / "home"))
     srv = serve(_bundle(tmp_path), port=0, token=TOKEN)

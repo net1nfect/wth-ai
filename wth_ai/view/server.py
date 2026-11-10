@@ -23,7 +23,7 @@ import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, quote, urlparse
 
 from wth_ai.audit import audit_log
 
@@ -121,8 +121,8 @@ class ViewServer:
             "<!doctype html><meta charset='utf-8'>"
             "<title>WTH-AI bundle (read-only)</title>"
             f"<h1>Bundel bukti</h1><p>root_hash: <code>{html.escape(str(manifest.get('root_hash', '-')))}</code></p>"
-            f"<p>{len(findings)} temuan · <a href='/findings?token=TOKEN'>JSON</a> · "
-            f"<a href='/manifest?token=TOKEN'>manifest</a></p>"
+            f"<p>{len(findings)} temuan · <a href='/findings?token={html.escape(quote(self.token, safe=''))}'>JSON</a> · "
+            f"<a href='/manifest?token={html.escape(quote(self.token, safe=''))}'>manifest</a></p>"
             "<table><thead><tr><th>id</th><th>state</th><th>severity</th>"
             f"<th>hypothesis</th></tr></thead><tbody>{rows}</tbody></table>"
         )
