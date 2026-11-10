@@ -193,9 +193,69 @@ class JobStore:
 
     # --- queue helpers ---
 
+    #: Urutan antrean di SQL, diturunkan dari PRIORITY_RANK. Kalau model berubah,
+    #: `_priority_case()` dan test_jobs_starvation ikut menyesuaikan.
+    _PRIORITY_ORDER_SQL = (
+        "CASE priority WHEN 'high' THEN 0 WHEN 'normal' THEN 1 ELSE 2 END, "
+        "created_at ASC"
+    )
+
+    def claim_next(self) -> Job | None:
+        """Klaim job queued berikutnya secara atomik.
+
+        `BEGIN IMMEDIATE` mengambil write-lock SEBELUM SELECT, jadi dua worker
+        tidak bisa sama-sama membaca baris queued yang sama: yang kedua menunggu
+        sampai yang pertama commit, lalu melihat status sudah 'running'.
+
+        `UPDATE ... RETURNING` sengaja tidak dipakai. Sintaks itu butuh SQLite
+        >= 3.35, sedangkan repo mendukung Python >= 3.10 yang bisa terpasang di
+        distro dengan SQLite lebih lama; transaksi eksplisit portabel dan
+        memberi jaminan yang sama.
+        """
+        stamp = _now()
+        conn = self._conn()
+        # Autocommit: transaksi dikelola manual supaya BEGIN IMMEDIATE tidak
+        # bertabrakan dengan BEGIN implisit milik modul sqlite3.
+        conn.isolation_level = None
+        try:
+            conn.execute("BEGIN IMMEDIATE")
+            row = conn.execute(
+                f"SELECT job_id FROM jobs WHERE status = 'queued' "
+                f"ORDER BY {self._PRIORITY_ORDER_SQL} LIMIT 1"
+            ).fetchone()
+            if row is None:
+                conn.rollback()
+                return None
+            job_id = row["job_id"]
+            cur = conn.execute(
+                "UPDATE jobs SET status = 'running', started_at = ?, updated_at = ? "
+                "WHERE job_id = ? AND status = 'queued'",
+                (stamp, stamp, job_id),
+            )
+            if cur.rowcount == 0:
+                conn.rollback()
+                return None
+            claimed = conn.execute(
+                "SELECT * FROM jobs WHERE job_id = ?", (job_id,)
+            ).fetchone()
+            conn.commit()
+        except sqlite3.Error:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
+        return self._row_to_job(claimed) if claimed else None
+
     def next_queued(self) -> Job | None:
-        jobs = self.list_jobs(status="queued", limit=1000)
-        if not jobs:
-            return None
-        jobs.sort(key=lambda j: (PRIORITY_RANK.get(j.priority, 1), j.created_at))
-        return jobs[0]
+        """Job queued berikutnya tanpa mengubah status (read-only).
+
+        Urutan dilakukan di SQL: memuat 1000 baris terbaru lalu menyortir di
+        Python menyembunyikan job lama saat antrean lebih panjang dari jendela.
+        """
+        with self._conn() as conn:
+            row = conn.execute(
+                f"SELECT * FROM jobs WHERE status = 'queued' "
+                f"ORDER BY {self._PRIORITY_ORDER_SQL} LIMIT 1"
+            ).fetchone()
+        return self._row_to_job(row) if row else None
+

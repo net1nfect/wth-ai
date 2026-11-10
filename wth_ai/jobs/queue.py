@@ -19,11 +19,8 @@ class JobQueue:
         return self.store.update_status(job.job_id, "queued") or existing
 
     def dequeue(self) -> Job | None:
-        """Return the next queued job and mark it running."""
-        job = self.store.next_queued()
-        if job is None:
-            return None
-        return self.store.update_status(job.job_id, "running")
+        """Return the next queued job and mark it running (atomik)."""
+        return self.store.claim_next()
 
     def peek(self) -> Job | None:
         return self.store.next_queued()
