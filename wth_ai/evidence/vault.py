@@ -10,6 +10,7 @@ from uuid import uuid4
 
 from wth_ai.models import utc_now
 from wth_ai.redaction import redact_data
+from wth_ai.workspace import atomic_write_text
 
 
 class EvidenceVault:
@@ -26,12 +27,57 @@ class EvidenceVault:
         if not self.index_path.exists():
             return []
         try:
-            return json.loads(self.index_path.read_text(encoding="utf-8"))
+            data = json.loads(self.index_path.read_text(encoding="utf-8"))
         except json.JSONDecodeError:
-            return []
+            return self._recover_index()
+        if not isinstance(data, list):
+            return self._recover_index()
+        return data
+
+    def _recover_index(self) -> list[dict[str, Any]]:
+        """Bangun ulang indeks dari file `EV-*.json`, bukan mengembalikan [].
+
+        Indeks yang rusak dulu membuat `_items = []`; `store()` berikutnya lalu
+        menulis indeks baru berisi satu item dan semua file bukti lama jadi
+        yatim -- data hilang tanpa error. Sekarang indeks dikarantina dan
+        entry dibaca dari sumber primernya.
+        """
+        try:
+            os.replace(self.index_path, self.index_path.with_suffix(".json.corrupt"))
+        except OSError:
+            pass
+        recovered: list[dict[str, Any]] = []
+        for path in sorted(self.dir.glob("EV-*.json")):
+            # Jangan ikuti symlink: pemulihan membaca direktori yang bisa ditulis
+            # proses lain, dan indeks yang dipulihkan ikut dipakai laporan.
+            if path.is_symlink():
+                continue
+            try:
+                entry = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                continue
+            if isinstance(entry, dict) and entry.get("id"):
+                recovered.append(entry)
+        if recovered:
+            self._items = recovered
+            self._save()
+            try:
+                from wth_ai.audit import audit_log
+
+                audit_log(
+                    "vault_index_recovered",
+                    path=str(self.index_path),
+                    recovered=len(recovered),
+                )
+            except Exception:  # noqa: BLE001 - audit tidak boleh memblokir pemulihan
+                pass
+        return recovered
 
     def _save(self) -> None:
-        self.index_path.write_text(json.dumps(self._items, ensure_ascii=False, indent=2), encoding="utf-8")
+        atomic_write_text(
+            self.index_path,
+            json.dumps(self._items, ensure_ascii=False, indent=2),
+        )
 
     def redact(self, value: Any) -> Any:
         """P1-0: delegasi ke redaktor kanonik, rekursif.
@@ -78,7 +124,10 @@ class EvidenceVault:
             "proof_facts": proof_facts,
         }
         self._items.append(entry)
-        (self.dir / f"{eid}.json").write_text(json.dumps(entry, ensure_ascii=False, indent=2), encoding="utf-8")
+        atomic_write_text(
+            self.dir / f"{eid}.json",
+            json.dumps(entry, ensure_ascii=False, indent=2),
+        )
         self._save()
         return eid
 
