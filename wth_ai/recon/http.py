@@ -135,7 +135,9 @@ def host_of(target: str) -> str:
     return (urlparse(t).hostname or "").lower().rstrip(".")
 
 
-def _record_exchange(result: HttpResponse, *, headers: dict[str, str]) -> None:
+def _record_exchange(
+    result: HttpResponse, *, headers: dict[str, str], method: str = "GET"
+) -> None:
     """Catat transaksi ke jurnal proxy; kegagalan tulis tidak boleh memutus recon."""
     from uuid import uuid4
 
@@ -144,7 +146,7 @@ def _record_exchange(result: HttpResponse, *, headers: dict[str, str]) -> None:
     try:
         append_exchange(
             tx_id=f"TX-{uuid4().hex[:10]}",
-            request={"method": "GET", "url": result.url, "headers": headers},
+            request={"method": method, "url": result.url, "headers": headers},
             response={"status": result.status, "headers": result.headers, "body": result.text},
         )
     except OSError:
@@ -223,6 +225,17 @@ def fetch(
             if hop_block:
                 resp.close()
                 return HttpResponse(url=nxt, error=f"redirect blocked: {hop_block}")
+            # Guard egress juga berlaku per hop. Tanpa ini, URL in-scope yang 30x
+            # ke host di luar allowlist tetap diikuti dan audit.log tidak
+            # mencatat EGRESS_DENIED (invarian AGENTS.md §3 nomor 5).
+            if _EGRESS_GUARD is not None:
+                from wth_ai.netguard import EgressDenied
+
+                try:
+                    _EGRESS_GUARD.check(host_of(nxt))  # type: ignore[attr-defined]
+                except EgressDenied as exc:
+                    resp.close()
+                    return HttpResponse(url=nxt, error=f"redirect blocked: {exc}")
             resp.close()
             resp = requests.request(
                 method, nxt, timeout=timeout, headers=req_headers,
@@ -251,7 +264,7 @@ def fetch(
             elapsed_ms=elapsed,
             cookies=cookies,
         )
-        _record_exchange(result, headers=req_headers)
+        _record_exchange(result, headers=req_headers, method=method)
         return result
     except Exception as exc:  # noqa: BLE001 — network failures are expected
         return HttpResponse(url=url, error=str(exc))
