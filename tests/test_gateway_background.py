@@ -148,7 +148,7 @@ def test_gateway_cli_stop_and_status_registered():
 
     from click.testing import CliRunner
 
-    path = Path(__file__).resolve().parents[1] / "wth-ai-main.py"
+    path = Path(__file__).resolve().parents[1] / "wth_ai" / "cli" / "wth-ai-main.py"
     spec = importlib.util.spec_from_file_location("wth_main", path)
     mod = importlib.util.module_from_spec(spec)
     assert spec.loader is not None

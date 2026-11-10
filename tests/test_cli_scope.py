@@ -59,8 +59,23 @@ def _command_names(path: Path) -> set[str]:
     return set(re.findall(r'@cli\.command\("([^"]+)"\)', path.read_text(encoding="utf-8")))
 
 
-def test_kedua_launcher_mengekspos_perintah_yang_sama() -> None:
-    """CLI ada di dua file; perintah baru harus masuk keduanya, atau di sini gagal."""
+def test_launcher_root_hanya_shim() -> None:
+    """Root `wth-ai-main.py` tidak boleh berisi perintah: sumbernya satu.
+
+    Sebelumnya kedua file sama-sama mendefinisikan CLI, dan salinannya
+    menyimpang (root kehilangan `resolve_image_digest` dan `chains=`).
+    """
     root = _command_names(REPO / "wth-ai-main.py")
+    assert root == set(), f"root masih mendefinisikan perintah: {sorted(root)}"
+
     packaged = _command_names(REPO / "wth_ai" / "cli" / "wth-ai-main.py")
-    assert root == packaged
+    assert packaged, "sumber CLI tidak mendefinisikan perintah apa pun"
+
+
+def test_shim_menjalankan_sumber_yang_sama(tmp_path) -> None:
+    """`python wth-ai-main.py --version` melewati shim dan mencetak versi produk."""
+    from wth_ai import __version__
+
+    proc = _run(["--version"], tmp_path)
+    assert proc.returncode == 0, proc.stderr
+    assert __version__ in proc.stdout

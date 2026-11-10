@@ -13,10 +13,17 @@ def test_refuses_without_authorization(tmp_path):
         card.write(tmp_path / "scope_card.json")
 
 
-def test_refuses_without_any_scope(tmp_path):
+def test_target_only_card_derives_single_host_scope(tmp_path):
+    """Target tunggal kini diturunkan jadi scope /32, bukan ditolak.
+
+    Lihat tests/test_scope_card_target_fallback.py: bentuk
+    `scope --target H --authorized` didokumentasikan di AGENTS.md §4 dan memang
+    tidak menambah izin apa pun di luar host itu.
+    """
     card = ScopeCard(target="172.28.0.10", authorized=True)
-    with pytest.raises(ScopeCardError):
-        card.write(tmp_path / "scope_card.json")
+    card.write(tmp_path / "scope_card.json")
+    assert card.cidr == ["172.28.0.10/32"]
+    assert card.target == "172.28.0.10"
 
 
 def test_writes_atomically_and_reloads(tmp_path):

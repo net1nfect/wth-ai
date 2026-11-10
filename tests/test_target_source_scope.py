@@ -61,7 +61,9 @@ def test_source_card_roundtrip(tmp_path: Path) -> None:
     assert ScopeCard.load(path).kind == "source"
 
 
-def test_network_card_still_requires_cidr_or_domain() -> None:
+def test_network_card_derives_scope_from_target_only() -> None:
+    """Target saja cukup: host direkam sebagai domain, bukan ditolak."""
     card = ScopeCard(target="example.com", authorized=True)
-    with pytest.raises(ScopeCardError, match="CIDR atau domain"):
-        card.validate()
+    card.validate()
+    assert card.domains == ["example.com"]
+    assert card.cidr == []

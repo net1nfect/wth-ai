@@ -44,10 +44,35 @@ class ScopeCard:
             self._validate_source()
             return
         if not self.cidr and not self.domains:
-            raise ScopeCardError("butuh minimal satu CIDR atau domain")
+            # `wth-ai scope --target H --authorized` adalah bentuk yang
+            # didokumentasikan; target tunggal bukan izin yang lebih luas,
+            # jadi scope diturunkan dari target alih-alih menolak perintahnya.
+            self._derive_scope_from_target()
         for entry in [*self.cidr, *self.domains]:
             if not str(entry).strip():
                 raise ScopeCardError("entri scope kosong")
+
+    def _derive_scope_from_target(self) -> None:
+        """Turunkan CIDR/domain dari `target` bila operator tidak mengisi apa pun.
+
+        Hanya berjalan ketika `cidr` dan `domains` sama-sama kosong. Nilai
+        eksplisit selalu menang, sehingga target di luar CIDR yang dicantumkan
+        TIDAK pernah memperluas scope secara diam-diam.
+        """
+        import ipaddress
+        from urllib.parse import urlparse
+
+        raw = self.target.strip()
+        parsed = urlparse(raw if "://" in raw else f"//{raw}", scheme="http")
+        host = (parsed.hostname or raw.split("/")[0].split(":")[0]).lower().rstrip(".")
+        if not host:
+            raise ScopeCardError(f"target tidak berisi host yang bisa dipakai: {raw}")
+        try:
+            address = ipaddress.ip_address(host)
+        except ValueError:
+            self.domains = [host]
+            return
+        self.cidr = [f"{address}/{address.max_prefixlen}"]
 
     def _validate_source(self) -> None:
         """Target source harus path absolut ke direktori yang benar-benar ada.

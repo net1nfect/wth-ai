@@ -13,7 +13,24 @@ import click
 from dotenv import load_dotenv
 from rich.console import Console
 
-_ROOT = Path(__file__).resolve().parent
+def _detect_root(start: Path) -> Path:
+    """Root repo, bukan direktori tempat file ini kebetulan disalin.
+
+    File ini hidup di `wth_ai/cli/` saat dipakai sebagai produk. Memakai
+    `Path(__file__).parent` apa adanya membuat `os.chdir` mendarat di
+    `wth_ai/cli/`, sehingga path relatif operator (`--out out/`,
+    `--bundle out/bundle`) dan default config (`config/…`) menunjuk tempat yang
+    salah. Naik ke atas sampai ketemu penanda root repo.
+    """
+    for candidate in (start, *start.parents):
+        if (candidate / "pyproject.toml").is_file() or (
+            candidate / "wth_ai" / "__init__.py"
+        ).is_file():
+            return candidate
+    return start
+
+
+_ROOT = _detect_root(Path(__file__).resolve().parent)
 #: Direktori tempat operator memanggil `wth-ai` — disimpan SEBELUM `os.chdir`, karena
 #: semua path relatif yang operator berikan (`--out out/`, `--bundle out/bundle`)
 #: harus diartikan relatif ke sana, bukan ke root repo.
@@ -314,8 +331,45 @@ def scope_cmd(target: str, cidrs: tuple[str, ...], domains: tuple[str, ...],
         click.echo(f"scope: DITOLAK — {exc}")
         raise SystemExit(2) from exc
     extra = f" · spec={len(specs)} ({len(endpoints)} endpoint)" if specs else ""
-    click.echo(f"scope: {target} · cidr={','.join(cidrs) or '-'} · "
+    # Laporkan scope yang TERSIMPAN di kartu, bukan argumen mentah: target tunggal
+    # kini diturunkan menjadi CIDR /32 atau domain, dan pesan lama akan berbohong.
+    saved = ",".join(card.cidr) or ",".join(card.domains) or "-"
+    click.echo(f"scope: {target} · cidr={saved} · "
                f"authorized=yes · mode={mode} · {path}{extra}")
+
+
+def _require_targets_in_scope(targets: list[str]) -> None:
+    """Tolak lebih awal bila target berada di luar scope card.
+
+    Sebelumnya kartu baru dimuat SETELAH `run_offline_demo()` selesai, jadi
+    target di luar scope tetap menjalankan seluruh pipeline dan baru berakhir
+    di `enforce_scope` — yang hanya menurunkan status temuan, bukan menghentikan
+    aksi. Gate ini di jalur yang sama dengan izin, bukan menggantikannya.
+    """
+    if not targets:
+        return
+    from wth_ai.scope_card import ScopeCard, ScopeCardError
+    from wth_ai.scope_manager import ScopeManager
+    from wth_ai.workspace import wth_home
+
+    try:
+        card = ScopeCard.load(wth_home() / "scope_card.json")
+    except (FileNotFoundError, ScopeCardError, ValueError, OSError):
+        # Tanpa kartu, `enforce_scope` tetap menurunkan CONFIRMED -> CANDIDATE.
+        # Tidak ada izin yang bisa dipetakan, jadi tidak ada yang ditegakkan.
+        return
+
+    manager = ScopeManager()
+    manager.set_scope(
+        target=card.target,
+        in_scope=[*(card.cidr or []), *(card.domains or [])],
+        authorized=card.authorized,
+    )
+    unauthorized = [t for t in targets if not manager.is_in_scope(t)[0]]
+    if unauthorized:
+        raise click.ClickException(
+            "target di luar scope card: " + ", ".join(unauthorized)
+        )
 
 
 @cli.command("scan")
@@ -385,6 +439,8 @@ def scan_cmd(red_team: bool, offline_demo: bool, scan_mode: str, max_attempts: i
         resolved_targets = select(changed, resolved_targets) if resolved_targets else []
         click.echo(f"scope: diff terhadap {diff_base} · {len(changed)} file berubah"
                    f" · {len(resolved_targets)} target")
+
+    _require_targets_in_scope(resolved_targets)
 
     result = run_offline_demo(
         max_attempts=max_attempts or mode.max_attempts,
