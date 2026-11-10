@@ -95,17 +95,50 @@ def verify_bundle(path: Path) -> tuple[bool, list[str]]:
     except ValueError as exc:
         return False, [f"manifest.json tidak bisa dibaca: {exc}"]
 
-    for entry in manifest.get("files", []):
-        target = root / entry["path"]
-        if not target.is_file():
-            problems.append(f"hilang: {entry['path']}")
+    files = manifest.get("files", [])
+    if not isinstance(files, list):
+        return False, ["manifest.json: 'files' bukan list"]
+
+    listed: set[str] = set()
+    for entry in files:
+        if not isinstance(entry, dict):
+            problems.append("entri manifest bukan objek")
             continue
-        if sha256_file(target) != entry["sha256"]:
-            problems.append(f"berubah: {entry['path']}")
+        rel = entry.get("path")
+        expected_sha = entry.get("sha256")
+        if not isinstance(rel, str) or not rel:
+            problems.append("entri manifest tanpa path")
+            continue
+        listed.add(rel)
+        if not isinstance(expected_sha, str) or not expected_sha:
+            problems.append(f"entri manifest tanpa sha256: {rel}")
+            continue
+        target = root / rel
+        if not target.is_file():
+            problems.append(f"hilang: {rel}")
+            continue
+        if sha256_file(target) != expected_sha:
+            problems.append(f"berubah: {rel}")
+
+    # File tambahan tidak tercatat di manifest. Tanpa pemeriksaan ini siapa pun
+    # bisa menaruh `findings.json` palsu atau artefak lain di bundel dan
+    # `verify_bundle` tetap bilang OK.
+    #
+    # `root_hash.txt` memang di luar manifest: isinya diturunkan dari daftar
+    # `files`, jadi memasukkannya ke daftar itu menciptakan siklus hash. Ia
+    # dicek terpisah di bawah.
+    unlisted_ok = {"manifest.json", "root_hash.txt"}
+    for present in sorted(root.rglob("*")):
+        if not present.is_file() or present.is_symlink():
+            continue
+        rel = present.relative_to(root).as_posix()
+        if rel in unlisted_ok or rel in listed:
+            continue
+        problems.append(f"tidak tercatat: {rel}")
 
     expected = manifest.get("root_hash", "")
     recomputed = sha256_bytes(
-        json.dumps(manifest.get("files", []), sort_keys=True).encode("utf-8"))
+        json.dumps(files, sort_keys=True).encode("utf-8"))
     if recomputed != expected:
         problems.append("root_hash manifest tidak konsisten")
     root_file = root / "root_hash.txt"
