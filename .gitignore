@@ -34,3 +34,23 @@ recon/
 # File sampah lokal
 /2000
 *.cookies
+
+# Tooling / cache lokal
+.mypy_cache/
+.pytest_cache/
+.pyre/
+.pyright/
+.coverage
+htmlcov/
+*.egg-info/
+.ruff_cache/
+
+# Runtime state user
+data/**/*.db
+data/cli_history
+logs/**/*.json
+logs/**/*.txt
+wth-results/
+reports/
+.deepseek/
+.opencode/

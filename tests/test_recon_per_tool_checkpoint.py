@@ -167,3 +167,37 @@ def test_no_checkpoint_callback_still_runs(tmp_path):
     )
     assert result["checkpoint"]["finished_tools"] == []
     assert result["checkpoint"]["resume_rejected"] == ""
+
+
+def test_checkpoint_failure_never_fails_a_tool(tmp_path, monkeypatch):
+    """Regresi: `on_start`/`on_result` memanggil penandaan checkpoint. Defeknya
+    ada di KONSTRUKSI envelope, bukan di tulis: `CheckpointEnvelope(...)`
+    menjalankan validasi `engine_state`, dan kalau itu melempar exception di
+    luar guard, exception keluar lewat `on_start` -> `_one` -> tool yang SEHAT
+    dilaporkan `failed`. Checkpoint adalah best-effort: kegagalannya harus
+    berhenti di log, bukan menurunkan hasil tool."""
+    logs: list[str] = []
+
+    import wth_ai.jobs.checkpoint as cp_module
+
+    def boom(**kw):
+        raise CheckpointValidationError("validasi gagal saat konstruksi")
+
+    # Konstruksi envelope (bukan callback) yang gagal — titik defek sebenarnya.
+    monkeypatch.setattr(cp_module, "CheckpointEnvelope", boom)
+
+    engine = _engine(tmp_path)
+    engine.planner.plan = lambda *a, **k: ReconPlan(target=TARGET, profile="recon-only")
+    # Paksa jalur builtin-fingerprint supaya `_mark_inflight`/`_mark_done`
+    # benar-benar dieksekusi dengan konstruksi yang gagal.
+    engine._run_fingerprint = lambda ctx, raw_dir, runlog: ToolRun(  # noqa: SLF001
+        tool="builtin-fingerprint", status="success",
+        normalized_items=[{"kind": "url", "url": "https://example.com/"}],
+    )
+    result = engine.run(
+        TARGET, authorized=True, checkpoint=lambda env: None,
+        log=logs.append, should_stop=lambda: True,
+    )
+    # Tool sehat tetap sehat, bukan korban checkpoint yang gagal.
+    assert result["summary"]["tool_runs"].get("success", 0) >= 1, result["summary"]
+    assert any("gagal ditulis" in line for line in logs), logs

@@ -209,23 +209,28 @@ class ReconEngine:
         def _save_recon_checkpoint(cursor: int = 0) -> None:
             if checkpoint is None:
                 return
-            env = CheckpointEnvelope(
-                engine="recon", target=target, cursor=cursor,
-                engine_state={
-                    "profile": profile,
-                    "tools": tool_state,
-                    "finished": sorted(
-                        name for name, rec in tool_state.items()
-                        if rec.get("outcome") == StepOutcome.COMPLETED.value
-                    ),
-                },
-            )
-            from datetime import datetime, timezone
-
-            env.saved_at = datetime.now(timezone.utc).isoformat()
             try:
+                env = CheckpointEnvelope(
+                    engine="recon", target=target, cursor=cursor,
+                    engine_state={
+                        "profile": profile,
+                        "tools": tool_state,
+                        "finished": sorted(
+                            name for name, rec in tool_state.items()
+                            if rec.get("outcome") == StepOutcome.COMPLETED.value
+                        ),
+                    },
+                )
+                from datetime import datetime, timezone
+
+                env.saved_at = datetime.now(timezone.utc).isoformat()
                 checkpoint(env)
             except Exception as exc:  # noqa: BLE001 - checkpoint failure tidak boleh membunuh scan
+                # Kegagalan di sini mencakup JUGA kegagalan validasi envelope
+                # (bukan hanya kegagalan tulis). Tanpa guard ini, `_mark_inflight`
+                # melewatkan exception ke `on_start` -> `_one` -> tool dilaporkan
+                # `failed` padahal tool-nya sehat. Checkpoint adalah best-effort:
+                # kegagalannya dilaporkan, bukan diturunkan ke hasil tool.
                 log(f"recovery: checkpoint recon gagal ditulis ({type(exc).__name__}: {exc})")
 
         def _should_skip_tool(name: str) -> bool:
