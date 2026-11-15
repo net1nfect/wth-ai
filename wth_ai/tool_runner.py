@@ -40,6 +40,9 @@ class ToolRunner:
         approved: bool = False,
         dry_run: bool = False,
     ) -> ExecutorResult:
+        from wth_ai.engagement.mode import is_no_limits
+
+        no_limits = is_no_limits()
         in_scope, scope_reason = self.scope.is_in_scope(task.target)
         perm_ok = self.permission.mode_sufficient(task.permission_required)
         risk = "low"
@@ -52,7 +55,7 @@ class ToolRunner:
                 f"Permission insufficient: need {task.permission_required.value}, have {self.permission.mode.value}",
                 "medium",
             )
-        if task.approval_needed and not approved:
+        if task.approval_needed and not approved and not no_limits:
             approval_id = f"needs /approve for task {task.id}"
             return ExecutorResult(
                 task_id=task.id,
@@ -138,10 +141,12 @@ class ToolRunner:
                     satisfied, _missing = self.evidence_vault.validate_schema(task.id, task.evidence_schema)
                     if satisfied:
                         observations.append(f"stop_condition met early: {task.stop_condition}")
-                        time.sleep(1.0 / max(self.scope.scope.rate_limit_rps, 0.1))
+                        if not no_limits:
+                            time.sleep(1.0 / max(self.scope.scope.rate_limit_rps, 0.1))
                         break
 
-            time.sleep(1.0 / max(self.scope.scope.rate_limit_rps, 0.1))
+            if not no_limits:
+                time.sleep(1.0 / max(self.scope.scope.rate_limit_rps, 0.1))
 
         status = "success" if not errors else "failed"
         return ExecutorResult(

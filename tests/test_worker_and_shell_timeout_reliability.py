@@ -148,3 +148,35 @@ def test_worker_normal_fast_handler_still_completes_successfully():
         mgr.create_job("custom")
         result = worker.run_once()
         assert result["status"] == "completed"
+
+
+def test_timed_out_handler_receives_cooperative_stop_signal():
+    """Orphan handler thread tidak boleh terus bekerja setelah timeout.
+
+    Python tidak bisa membunuh thread, jadi satu-satunya mekanisme aman adalah
+    sinyal kooperatif: `ctx.should_stop()` harus true segera setelah worker
+    menandai job timeout. Sebelum ini, status job sudah `failed` tetapi thread
+    handler tetap melakukan probe/tool call di latar belakang.
+    """
+    import threading
+
+    with temp_home():
+        mgr = JobManager(WTHConfig(), bus=EventBus())
+        worker = WorkerEngine(mgr, timeout=1)
+        observed = threading.Event()
+
+        def _polling_handler(job, ctx):
+            for _ in range(500):
+                if ctx.should_stop():
+                    observed.set()
+                    return {"status": "stopped"}
+                time.sleep(0.01)
+            return {"status": "failed", "error": "never saw stop"}
+
+        worker.register("custom", _polling_handler)
+        mgr.create_job("custom")
+        result = worker.run_once()
+
+        assert result["status"] == "failed"
+        assert result["error"] == "timeout"
+        assert observed.wait(3), "handler thread tidak menerima sinyal stop setelah timeout"

@@ -34,6 +34,7 @@ from wth_ai.executor.vuln.auth import AuthVulnExecutor
 from wth_ai.executor.vuln.idor import IdorExecutor
 from wth_ai.executor.vuln.race import RaceExecutor
 from wth_ai.executor.vuln.ssrf import SsrfExecutor
+from wth_ai.oob import get_oob_service, reset_oob_service
 
 
 def _task(url: str, goal: str = "probe") -> ExecutorTask:
@@ -360,3 +361,50 @@ def test_no_evidence_means_low_risk_not_a_finding():
         assert idor["risk"] == "low", "objek yang isinya sama bukan IDOR"
     finally:
         srv.stop()
+
+
+class _BlindSsrfServer(_Server):
+    """Target tidak memantulkan isi internal, tetapi benar-benar fetch URL kita."""
+
+    def handle_get(self, h, path: str) -> None:
+        import requests as _rq
+        from urllib.parse import parse_qs, urlparse
+
+        parsed = urlparse(path)
+        if parsed.path == "/":
+            h._send(200, "ok")
+            return
+        if parsed.path == "/fetch":
+            url = (parse_qs(parsed.query).get("url") or [""])[0]
+            if "127.0.0.1:1/" in url:
+                h._send(500, "fetch error")
+                return
+            try:
+                r = _rq.get(url, timeout=5)
+                h._send(200, r.text)
+            except Exception:  # noqa: BLE001
+                h._send(500, "fetch error")
+            return
+        h._send(404, "not found")
+
+
+def test_ssrf_blind_callback_is_proven_by_oob_hit(tmp_path, monkeypatch):
+    """Tanpa pantulan isi, hit listener kita adalah bukti yang tidak bisa dipalsukan."""
+    monkeypatch.setenv("WTH_HOME", str(tmp_path / "home"))
+    reset_oob_service()
+    svc = get_oob_service()
+    svc.start(port=0)
+    srv = _BlindSsrfServer()
+    try:
+        state = _state(srv.base)
+        result = SsrfExecutor(state).execute(_task(f"{srv.base}/fetch?url=x", "ssrf"))
+        data = result.to_dict()
+        assert data["status"] == "success", data
+        assert data["risk"] == "high", data
+        joined = " ".join(data["evidence"])
+        assert "TERBUKTI (OOB)" in joined, data
+        assert "hit" in joined.lower(), data
+        assert len(state.metadata.get("request_pairs", [])) >= 3
+    finally:
+        srv.stop()
+        reset_oob_service()

@@ -125,6 +125,8 @@ class SkillRegistry:
             "kubernetes", "android", "ios", "ctf", "pwn", "reverse", "crypto",
             "forensics", "business logic", "race", "upload", "smuggling", "waf",
             "llm", "prompt injection", "web3", "defi", "active directory",
+            "malware", "implant", "loader", "dropper", "stager", "shellcode",
+            "beacon", "c2", "evasion", "packer",
         ]
         return [k for k in keywords if k in text]
 

@@ -57,6 +57,8 @@ class FindingsDB:
             root_cause=data.get("root_cause", data.get("root_cause_hypothesis", "")),
             remediation=data.get("remediation", data.get("remediation_idea", "")),
             cwe=data.get("cwe", data.get("CWE/OWASP category", "")),
+            vuln_class=str(data.get("vuln_class") or data.get("type") or ""),
+            task_id=str(data.get("task_id") or ""),
         )
         self.findings[fid] = finding
         return finding

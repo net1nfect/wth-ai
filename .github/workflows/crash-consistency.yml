@@ -1,0 +1,41 @@
+name: crash-consistency
+
+# Gate khusus kontrak crash-consistency & recovery.
+#
+# Kenapa job terpisah, bukan sekadar bagian dari `pytest tests/`: suite ini
+# menguji JANJI keselamatan (langkah destruktif tidak diulang otomatis,
+# checkpoint tidak hilang, resume tidak menurunkan status). Regresinya tidak
+# muncul sebagai crash — hasilnya tetap hijau untuk test lain, dan yang
+# hilang justru jaminan yang tidak terlihat. Job terpisah membuat kegagalan
+# bernama jelas: "crash-consistency gagal", bukan "satu test di antara 1800".
+
+on:
+  push:
+    branches: [main, master, develop, agentic]
+  pull_request:
+
+jobs:
+  crash-simulation:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -r requirements.txt && pip install -e .
+      - name: Simulasi crash end-to-end (ckpt nyata, resume berulang)
+        run: |
+          pytest -q --tb=short \
+            tests/test_crash_simulation_e2e.py \
+            tests/test_crash_consistency_fault_injection.py
+      - name: Kontrak verifikasi destruktif
+        run: pytest -q --tb=short tests/test_destructive_verify.py
+      - name: CAS checkpoint & kebijakan TTL
+        run: |
+          pytest -q --tb=short \
+            tests/test_checkpoint_cas.py \
+            tests/test_checkpoint_ttl.py
+      - name: Checkpoint per-tool recon
+        run: pytest -q --tb=short tests/test_recon_per_tool_checkpoint.py
+      - name: Metadata risiko saran proaktif
+        run: pytest -q --tb=short tests/test_proactive_risk_metadata.py

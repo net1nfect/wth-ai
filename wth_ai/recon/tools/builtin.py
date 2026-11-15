@@ -115,7 +115,13 @@ def _builtin_robots(ctx: BuiltinContext) -> list[dict[str, Any]]:
 
 
 def _builtin_crawler(ctx: BuiltinContext) -> list[dict[str, Any]]:
-    return crawler.run(ctx.base_url, max_pages=8)
+    try:
+        from wth_ai.engagement.mode import is_no_limits
+
+        pages = 100 if is_no_limits() else 8
+    except Exception:  # noqa: BLE001
+        pages = 8
+    return crawler.run(ctx.base_url, max_pages=pages)
 
 
 def _builtin_js(ctx: BuiltinContext) -> list[dict[str, Any]]:

@@ -99,10 +99,15 @@ class EvidencePipeline:
             return "medium"
         return "info"
 
-    def to_findings_candidates(self, evidence: list[Evidence]) -> list[dict[str, Any]]:
+    def to_findings_candidates(
+        self, evidence: list[Evidence], *, task_id: str = ""
+    ) -> list[dict[str, Any]]:
+        from wth_ai.verify.deterministic import normalize_class
+
         candidates = []
         for ev in evidence:
             if ev.severity_hint in {"critical", "high", "medium"} or ev.evidence_type.endswith("_signal"):
+                raw_class = ev.evidence_type[:-7] if ev.evidence_type.endswith("_signal") else ""
                 candidates.append({
                     "id": f"FIND-{uuid4().hex[:8]}",
                     "title": f"{ev.evidence_type} via {ev.source_tool}",
@@ -112,5 +117,7 @@ class EvidencePipeline:
                     "description": ev.content,
                     "evidence": [ev.content],
                     "state": "candidate",
+                    "vuln_class": normalize_class(raw_class) if raw_class else "",
+                    "task_id": task_id,
                 })
         return candidates

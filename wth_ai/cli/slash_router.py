@@ -114,8 +114,10 @@ def build_slash_router(orch: Any) -> SlashRouter:
     from wth_ai.cli.handlers.effort_handler import handle_effort
     from wth_ai.cli.handlers.platform_handler import handle_cron, handle_gateway, handle_memory, handle_mode
     from wth_ai.cli.handlers.recon_handler import handle_recon
+    from wth_ai.cli.handlers.attachment_handler import handle_attach
     from wth_ai.cli.handlers.setup_handler import (
         apply_target_from_text,
+        handle_authorize,
         handle_model,
         handle_profile,
         handle_provider,
@@ -222,6 +224,8 @@ def build_slash_router(orch: Any) -> SlashRouter:
         "/status": _status,
         "/sessions": lambda _a: orch._list_sessions(),
         "/target": lambda a: handle_target(orch, a),
+        "/authorize": lambda a: handle_authorize(orch, a),
+        "/attach": lambda a: handle_attach(orch, a),
         "/scope": _scope,
         "/permission": orch._handle_permission,
         "/effort": lambda a: handle_effort(orch, a),
@@ -232,7 +236,10 @@ def build_slash_router(orch: Any) -> SlashRouter:
         "/usage": orch._handle_usage,
         "/next": orch._handle_next,
         "/payloads": orch._handle_payloads,
+        "/malware": orch._handle_malware,
         "/autopilot": orch._handle_autopilot,
+        "/adaptive": orch._handle_adaptive,
+        "/autonomy": orch._handle_autonomy,
         "/eval act": orch._handle_eval_act,
         "/yolo": lambda args: orch._handle_permission(["yolo"]),
         "/model": lambda a: handle_model(orch, a),

@@ -29,6 +29,7 @@ def _isolate_safety_env(monkeypatch):
     monkeypatch.setenv("WTH_UNRESTRICTED", "0")
     monkeypatch.setenv("WTH_AUTO_APPROVE", "0")
     monkeypatch.setenv("WTH_REQUIRE_AUTHORIZED", "1")
+    monkeypatch.setenv("WTH_NO_LIMITS", "0")
     yield
 
 
@@ -42,14 +43,15 @@ def test_every_preset_resolves_to_itself():
 
 def test_unknown_mode_lists_the_valid_ones():
     with pytest.raises(ValueError) as excinfo:
-        resolve_preset("godmode")
+        resolve_preset("godmodee")
     assert "plan" in str(excinfo.value) and "yolo" in str(excinfo.value)
 
 
 @pytest.mark.parametrize(
     "spelling,expected",
     [
-        ("unrestricted", "yolo"), ("danger", "yolo"), ("full_lab", "yolo"), ("full-lab", "yolo"),
+        ("unrestricted", "godmode"), ("danger", "godmode"), ("god", "godmode"),
+        ("no-limits", "godmode"), ("full_lab", "yolo"), ("full-lab", "yolo"),
         ("standard", "ask"), ("default", "ask"), ("safe", "ask"),
         ("elevated", "auto"), ("auto-accept", "auto"), ("autopilot", "auto"),
         ("read_only", "read-only"), ("ro", "read-only"), ("dry-run", "plan"),
@@ -82,20 +84,20 @@ def test_ask_keeps_approvals_on(monkeypatch):
     assert not auto_approve_enabled()
 
 
-def test_no_preset_ever_lowers_scope_authorization(monkeypatch):
-    """The invariant that keeps `yolo` from becoming 'hit any host'.
-
-    Target authorization is not friction about how to test -- it is the record
-    of what the operator said they may test. If this test ever fails, the
-    distinction has been lost.
-    """
+def test_only_godmode_lowers_scope_authorization(monkeypatch):
+    """`yolo` keeps the authorization record; `godmode` deliberately drops it."""
     monkeypatch.setenv("WTH_REQUIRE_AUTHORIZED", "1")
     from wth_ai.engagement.mode import scope_authorization_required
 
     for preset in PRESETS.values():
-        assert preset.scope_authorization_required is True, preset.name
+        if preset.name == "godmode":
+            assert preset.scope_authorization_required is False, preset.name
+        else:
+            assert preset.scope_authorization_required is True, preset.name
     apply_preset("yolo")
     assert scope_authorization_required() is True
+    apply_preset("godmode")
+    assert scope_authorization_required() is False
 
 
 def test_apply_preset_sets_the_permission_manager_too():
@@ -325,5 +327,22 @@ def test_permission_set_tool_rejects_junk(monkeypatch):
 
     ctx = _ctx(PermissionMode.READ_ONLY_RECON)
     ctx.state = SimpleNamespace(permission_mode=PermissionMode.READ_ONLY_RECON)
-    out = dispatch_supervisor_tool(ctx, "permission_set", {"mode": "godmode"}, approved=True)
+    out = dispatch_supervisor_tool(ctx, "permission_set", {"mode": "godmodee"}, approved=True)
     assert "Invalid mode" in out
+
+
+def test_permission_set_tool_applies_godmode(monkeypatch):
+    from wth_ai.agents.supervisor_dispatch import dispatch_supervisor_tool
+    from wth_ai.engagement.mode import auto_approve_enabled, is_no_limits, scope_authorization_required
+
+    ctx = _ctx(PermissionMode.READ_ONLY_RECON)
+    ctx.state = SimpleNamespace(permission_mode=PermissionMode.READ_ONLY_RECON)
+
+    out = dispatch_supervisor_tool(ctx, "permission_set", {"mode": "godmode"}, approved=True)
+    assert "godmode" in out
+    assert ctx.permission_mgr.mode is PermissionMode.UNRESTRICTED
+    assert is_no_limits() and auto_approve_enabled() and not scope_authorization_required()
+
+    # Switching back must not leak godmode's open scope dimension.
+    dispatch_supervisor_tool(ctx, "permission_set", {"mode": "yolo"}, approved=True)
+    assert not is_no_limits() and scope_authorization_required()

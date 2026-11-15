@@ -116,6 +116,9 @@ class ExecuteRpcServer:
             return {"status": "blocked", "error": f"High-risk pattern in code: {hr}"}
         if lang != "python":
             return {"status": "blocked", "error": f"unsupported lang: {lang}"}
+        from wth_ai.engagement.mode import is_no_limits
+
+        no_limits = is_no_limits()
         with tempfile.TemporaryDirectory(prefix="wth-exec-") as tmp:
             script = Path(tmp) / "run.py"
             script.write_text(code, encoding="utf-8")
@@ -128,14 +131,15 @@ class ExecuteRpcServer:
                 stderr=subprocess.PIPE,
                 text=True,
                 cwd=tmp,
-                env={"PATH": os.environ.get("PATH", ""), "HOME": tmp},
+                env=dict(os.environ) if no_limits else {"PATH": os.environ.get("PATH", ""), "HOME": tmp},
                 shell=False,
                 start_new_session=(os.name != "nt"),
             )
             action_id = get_running_actions().register(proc.pid, label="rpc:code-exec")
             try:
                 try:
-                    stdout_raw, stderr_raw = proc.communicate(timeout=int(req.get("timeout", 30)))
+                    timeout = int(req.get("timeout", 30))
+                    stdout_raw, stderr_raw = proc.communicate(timeout=None if no_limits else timeout)
                 except subprocess.TimeoutExpired:
                     kill_process_tree(proc)
                     proc.communicate()

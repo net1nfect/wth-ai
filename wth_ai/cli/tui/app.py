@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import shlex
 from typing import Any
 
 from textual.app import App, ComposeResult
@@ -12,16 +13,19 @@ from textual.widgets import Static, TabbedContent, TabPane
 
 from wth_ai import __version__
 from wth_ai.cli.quit import SessionQuit
+from wth_ai.cli.ui.theme import THEME
 from wth_ai.cli.tui.bus import UiEventBus
 from wth_ai.cli.tui.command_class import should_reset_activity_feed
 from wth_ai.cli.tui.event_bridge import unwire_platform_events, wire_platform_events
 from wth_ai.cli.tui.screens.help import SlashHelpScreen
+from wth_ai.cli.tui.screens.model_picker import ModelPickerScreen
 from wth_ai.cli.tui.screens.palette import CommandPaletteScreen
 from wth_ai.cli.tui.screens.skills_picker import SkillsPickerScreen
 from wth_ai.cli.tui.widgets.activity import ActivityPanel
 from wth_ai.cli.tui.widgets.footer import FooterBar
 from wth_ai.cli.tui.widgets.header import HeaderBar
-from wth_ai.cli.tui.widgets.input_bar import InputBar, Submitted
+from wth_ai.cli.tui.widgets.input_bar import AttachmentRequested, InputBar, Submitted
+from wth_ai.cli.tui.widgets.ops import OpsPanel
 from wth_ai.cli.tui.widgets.sidebar import SidebarPanel
 from wth_ai.cli.tui.widgets.transcript import TranscriptPanel
 from wth_ai.cli.ui.tool_trace import ToolTracePanel
@@ -49,10 +53,12 @@ class WthTuiApp(App[None]):
         Binding("ctrl+3", "focus_tab_findings", "Findings", show=False),
         Binding("ctrl+4", "focus_tab_tools", "Tools", show=False),
         Binding("ctrl+5", "focus_tab_config", "Config", show=False),
+        Binding("ctrl+6", "focus_tab_ops", "Ops", show=False),
         Binding("ctrl+p", "command_palette", "Palette", show=False),
         Binding("ctrl+slash", "slash_help", "Help", show=False),
         Binding("ctrl+k", "skills_picker", "Skills", show=False),
         Binding("ctrl+l", "clear_transcript", "Clear", show=False),
+        Binding("ctrl+o", "attach_prompt", "Lampiran", show=False),
         Binding("ctrl+t", "toggle_activity", "Activity", show=False),
         Binding("ctrl+c", "interrupt_turn", "Interrupt", show=False),
         Binding("ctrl+d", "quit", "Quit", show=False),
@@ -63,7 +69,9 @@ class WthTuiApp(App[None]):
         self.orch = orchestrator
         self.bus = UiEventBus()
         self._stream_buf = ""
-        self._show_activity = True
+        # The lower activity row duplicated the Activity tab and consumed ~12
+        # rows on every screen. Hidden by default; Ctrl+T brings it back.
+        self._show_activity = False
         self._interrupt = False
         self._busy = False
         self._platform_handler = None
@@ -110,9 +118,12 @@ class WthTuiApp(App[None]):
                 yield Static("Loading tools…", id="tools-pane", markup=True)
             with TabPane("Config", id="tab-config"):
                 yield Static("Loading config…", id="config-pane", markup=True)
+            with TabPane("Ops", id="tab-ops"):
+                yield OpsPanel(id="ops-pane", markup=True)
         with Horizontal(classes="lower-row"):
             yield ActivityPanel(id="activity-panel", markup=True)
             yield SidebarPanel(id="sidebar-panel")
+        yield Static("", id="attachment-line")
         yield Static("", id="hint-line")
         yield FooterBar(id="footer")
         yield InputBar(id="input-bar")
@@ -127,18 +138,24 @@ class WthTuiApp(App[None]):
         self._platform_handler = wire_platform_events(self.bus)
         from wth_ai.cli.ui.job_activity_bridge import wire_job_activity
         self._job_activity_handler = wire_job_activity(self.orch)
+        self.query_one(".lower-row").display = self._show_activity
+        self.query_one("#attachment-line", Static).display = False
+        self.query_one("#hint-line", Static).display = False
         self._refresh_chrome()
         transcript = self.query_one("#transcript", TranscriptPanel)
         transcript.append_system(
-            "WTH-AI TUI — slash: /recon /hunt /skills · natural language for chat"
+            "WTH-AI TUI — /recon /hunt /adaptive /autonomy /malware · natural language for chat"
         )
-        transcript.append_system("Ctrl+P palette · Ctrl+/ help · Activity updates in real-time")
+        transcript.append_system(
+            "Ctrl+P palette · Ctrl+/ help · Ctrl+T activity · Ctrl+6 Ops · /attach file"
+        )
         llm_ok = getattr(self.orch.client, "agentic_available", self.orch.client.available)()
         if not llm_ok:
             transcript.append_system(
                 "⚠ LLM offline — `wth setup` untuk API key. Slash commands tetap jalan."
             )
         self.query_one("#input-bar", InputBar).focus()
+        self._refresh_attachments()
 
     def _header(self) -> HeaderBar:
         return self.query_one("#header", HeaderBar)
@@ -225,6 +242,14 @@ class WthTuiApp(App[None]):
         def on_activity_log(msg: str) -> None:
             _both("activity_log", msg)
 
+        def on_adaptive_update(**payload: object) -> None:
+            _both("activity_log", f"adaptive: {payload.get('strategy') or payload.get('signal') or 'update'}")
+            self._refresh_ops_tab()
+
+        def on_adaptive_done(**payload: object) -> None:
+            _both("activity_log", f"adaptive done: bypass={payload.get('bypassed')}")
+            self._refresh_ops_tab()
+
         for event, handler in [
             ("tool_start", on_tool_start),
             ("tool_end", on_tool_end),
@@ -245,6 +270,10 @@ class WthTuiApp(App[None]):
             ("llm_end", on_llm_end),
             ("subprocess_line", on_subprocess_line),
             ("activity_log", on_activity_log),
+            ("adaptive_strategy", on_adaptive_update),
+            ("adaptive_result", on_adaptive_update),
+            ("adaptive_win", on_adaptive_update),
+            ("adaptive_done", on_adaptive_done),
         ]:
             self.bus.on(event, handler)
 
@@ -256,12 +285,14 @@ class WthTuiApp(App[None]):
         # Keep input enabled so focus/tabs stay usable; block submit in on_submitted.
         input_bar.disabled = False
         if busy:
-            input_bar.placeholder = "⏳ running — ctrl+c interrupt · ctrl+1..5 switch tabs"
+            input_bar.placeholder = "⏳ running — ctrl+c interrupt · ctrl+1..6 switch tabs"
         else:
-            input_bar.placeholder = "› /recon example.com  or  natural language… (Alt+Enter newline)"
+            input_bar.placeholder = (
+                "› /recon example.com · tempel path file/foto untuk lampiran · Shift+Enter baris baru"
+            )
         footer = self.query_one("#footer", FooterBar)
         if busy:
-            footer.update(" ⏳ running · ctrl+1..5 tabs · ctrl+c interrupt · activity updates live ")
+            footer.update(" ⏳ running · ctrl+c interrupt · ctrl+t activity · live updates ")
             if self._spinner_timer is None:
                 self._spinner_timer = self.set_interval(0.1, self._tick_spinner)
             if self._chrome_timer is None:
@@ -280,6 +311,12 @@ class WthTuiApp(App[None]):
     def _tick_spinner(self) -> None:
         if self._busy:
             self._header().tick_spinner()
+
+    def on_text_area_changed(self, event: Any) -> None:
+        """Live slash-command hint while typing (not only after submit)."""
+        widget = getattr(event, "text_area", None)
+        if widget is not None and getattr(widget, "id", "") == "input-bar":
+            self._update_hint(widget.text)
 
     def on_tabbed_content_tab_activated(self, event: TabbedContent.TabActivated) -> None:
         """Remember tab the user picked — never override while busy."""
@@ -337,7 +374,10 @@ class WthTuiApp(App[None]):
         ts = self.orch.tool_registry.summary()
         ctx = getattr(self.orch, "_supervisor_ctx", None)
         phase = getattr(ctx, "current_phase", "idle") if ctx else "idle"
-        mode_label = get_engagement_mode().value.replace("_", "-")
+        from wth_ai.engagement.mode import safety_status
+
+        safety = safety_status(self.orch.config)
+        mode_label = "godmode" if safety.get("no_limits") else get_engagement_mode().value.replace("_", "-")
         llm_ok = getattr(self.orch.client, "agentic_available", self.orch.client.available)()
         header = self._header()
         if not self._busy:
@@ -365,6 +405,7 @@ class WthTuiApp(App[None]):
         self._refresh_findings_tab()
         self._refresh_tools_tab(ts)
         self._refresh_config_tab(mode_label, llm_ok)
+        self._refresh_ops_tab()
         if self._busy:
             self._restore_tab()
 
@@ -373,7 +414,7 @@ class WthTuiApp(App[None]):
         hyps = self.orch.state.hypotheses or []
         last_job = self.orch.state.metadata.get("last_recon", {}).get("job_id", "-")
         lines = [
-            "[bold #58a6ff]Findings[/]",
+            f"[bold {THEME['brand']}]Findings[/]",
             f"Total: {len(findings)} · Hypotheses: {len(hyps)}",
             f"Last recon: {last_job}",
             "",
@@ -390,7 +431,7 @@ class WthTuiApp(App[None]):
     def _refresh_tools_tab(self, ts: dict) -> None:
         reg = self.orch.tool_registry
         lines = [
-            "[bold #58a6ff]Tool Registry[/]",
+            f"[bold {THEME['brand']}]Tool Registry[/]",
             f"Installed: {ts.get('installed', 0)}/{ts.get('total', 0)}",
             "",
         ]
@@ -409,11 +450,17 @@ class WthTuiApp(App[None]):
         lines.append("\n[dim]/tools list · /tools install · /doctor[/]")
         self.query_one("#tools-pane", Static).update("\n".join(lines))
 
+    def _refresh_ops_tab(self) -> None:
+        try:
+            self.query_one("#ops-pane", OpsPanel).update_from(self.orch)
+        except Exception:
+            pass
+
     def _refresh_config_tab(self, mode_label: str, llm_ok: bool) -> None:
         ui = self.orch.config.ui
         scope = self.orch.state.scope
         lines = [
-            "[bold #58a6ff]Session Config[/]",
+            f"[bold {THEME['brand']}]Session Config[/]",
             f"Target: [bold]{scope.target or 'unset'}[/]",
             f"Permission: {self.orch.state.permission_mode.value}",
             f"Engagement: {mode_label}",
@@ -431,6 +478,10 @@ class WthTuiApp(App[None]):
 
     async def on_submitted(self, message: Submitted) -> None:
         text = message.value
+        if self._is_model_picker_command(text):
+            if not self._busy:
+                await self._open_model_picker()
+            return
         if _is_quit_command(text):
             self.bus.emit("user", text=text)
             if self._busy:
@@ -476,8 +527,101 @@ class WthTuiApp(App[None]):
         elif not response:
             self.bus.emit("response", markdown="")
         self._update_hint(text)
+        self._refresh_attachments()
         self._refresh_chrome()
         self._restore_tab()
+
+    @staticmethod
+    def _is_model_picker_command(text: str) -> bool:
+        parts = text.strip().lower().split()
+        return parts in (["/model"], ["/model", "pick"], ["/model", "pilih"])
+
+    async def _open_model_picker(self) -> None:
+        """Load the provider catalog off-thread, then open a native Textual modal."""
+        role = "planner"
+        role_cfg = self.orch.config.providers.get(role)
+        provider_type = getattr(role_cfg, "type", "") or "openrouter"
+        current = getattr(role_cfg, "model", "") or getattr(self.orch.config.models, role, "")
+        self._set_busy(True)
+        self.bus.emit("thinking", label=f"memuat model {provider_type}")
+        try:
+            models = await asyncio.to_thread(self.orch.client.list_models, provider_type)
+        except Exception as exc:
+            self._set_busy(False)
+            self.bus.emit("response", markdown=f"Tidak bisa list model `{provider_type}`: {exc}")
+            return
+        self._set_busy(False)
+        if not models:
+            endpoint = ""
+            try:
+                endpoint = getattr(
+                    self.orch.client.provider_for_role(role), "base_url", ""
+                ) or ""
+            except Exception:
+                endpoint = ""
+            self.bus.emit(
+                "response",
+                markdown=(
+                    f"Tidak ada model dari `{provider_type}`.\n"
+                    f"Endpoint: {endpoint or '(base URL belum diset)'}\n"
+                    "Periksa `/provider` atau base URL di setup."
+                ),
+            )
+            return
+
+        def done(choice: str | None) -> None:
+            if not choice:
+                return
+            self.run_worker(self._apply_model(choice))
+
+        self.push_screen(
+            ModelPickerScreen(
+                list(models),
+                current=current,
+                provider=provider_type,
+                title="Pilih model planner",
+            ),
+            done,
+        )
+
+    async def _apply_model(self, model: str) -> None:
+        try:
+            response = await asyncio.to_thread(
+                self._execute_command, f"/model set planner {shlex.quote(model)}"
+            )
+        except Exception as exc:
+            response = f"Gagal mengganti model: {exc}"
+        if response:
+            self.bus.emit("response", markdown=response)
+        self._refresh_chrome()
+        self.query_one("#input-bar", InputBar).focus()
+
+    async def on_attachment_requested(self, message: AttachmentRequested) -> None:
+        if self._busy or not message.paths:
+            return
+        for path in message.paths[:8]:
+            try:
+                response = await asyncio.to_thread(
+                    self._execute_command, f"/attach {shlex.quote(path)}"
+                )
+            except Exception as exc:
+                response = f"Gagal melampirkan {path}: {exc}"
+            if response:
+                self.bus.emit("response", markdown=response)
+        self._refresh_attachments()
+        self._update_hint("/attach")
+
+    def _refresh_attachments(self) -> None:
+        line = self.query_one("#attachment-line", Static)
+        pending = self.orch.state.metadata.get("pending_attachments") or []
+        if not pending:
+            line.display = False
+            line.update("")
+            return
+        names = ", ".join(str(item.get("name") or item.get("path")) for item in pending[:4])
+        more = f" +{len(pending) - 4}" if len(pending) > 4 else ""
+        line.display = True
+        line.update(f"📎 {len(pending)} lampiran: {names}{more} · /attach clear")
 
     def action_focus_tab_chat(self) -> None:
         self._switch_tab("tab-chat")
@@ -494,6 +638,9 @@ class WthTuiApp(App[None]):
     def action_focus_tab_config(self) -> None:
         self._switch_tab("tab-config")
 
+    def action_focus_tab_ops(self) -> None:
+        self._switch_tab("tab-ops")
+
     def _update_hint(self, text: str) -> None:
         hint = self.query_one("#hint-line", Static)
         if text.startswith("/"):
@@ -503,8 +650,10 @@ class WthTuiApp(App[None]):
                 cmd = get_platform_registry().search(partial.lstrip("/"), limit=1)
                 usage = cmd[0].usage if cmd else ""
                 hint.update(f" [dim]hint:[/] {usage}")
+                hint.display = True
                 return
         hint.update("")
+        hint.display = False
 
     def action_command_palette(self) -> None:
         def done(cmd: str | None) -> None:
@@ -525,6 +674,18 @@ class WthTuiApp(App[None]):
 
     def action_clear_transcript(self) -> None:
         self.query_one("#transcript", TranscriptPanel).clear()
+
+    def action_attach_prompt(self) -> None:
+        """Ctrl+O pre-fills `/attach ` so a path can be typed or pasted."""
+        if self._busy:
+            return
+        bar = self.query_one("#input-bar", InputBar)
+        bar.load_text("/attach ")
+        try:
+            bar.move_cursor((0, len("/attach ")))
+        except Exception:
+            pass
+        bar.focus()
 
     def action_toggle_activity(self) -> None:
         self._show_activity = not self._show_activity

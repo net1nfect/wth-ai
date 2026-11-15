@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import itertools
 from typing import Any, TYPE_CHECKING
 
 from wth_ai.ctf.packs import ctf_wordlists, suggest_challenge_type
@@ -67,7 +68,15 @@ class EngagementLoop:
         orch.state.metadata["exploit_chains"] = [c.to_dict() for c in chains]
         lines.append(f"- Hypotheses: {len(pre_hypotheses)} | Chains: {len(chains)}")
 
-        for iteration in range(1, max_iterations + 1):
+        from wth_ai.engagement.mode import is_no_limits
+
+        no_limits = is_no_limits(getattr(orch, "config", None))
+        iterations = (
+            itertools.count(1)
+            if no_limits or max_iterations <= 0
+            else range(1, max_iterations + 1)
+        )
+        for iteration in iterations:
             memory.iteration = iteration
             memory.save()
             self.sm.transition(LoopState.PLANNING)
@@ -108,12 +117,14 @@ class EngagementLoop:
             )
 
             self.sm.transition(LoopState.EXECUTING)
-            for task_dict in orch.state.task_queue[:3]:
+            batch = orch.state.task_queue if no_limits else orch.state.task_queue[:3]
+            for task_dict in batch:
                 task = ExecutorTask.from_dict(task_dict)
                 result = orch.executor.execute_module(task, orch.state)
                 pairs = orch.state.metadata.pop("request_pairs", [])
                 if pairs:
                     orch.evidence_vault.store_from_executor(task.id, pairs, task.evidence_schema)
+                    orch.record_engagement_pairs(pairs, source="engagement_loop")
                 memory.update_from_executor(result.to_dict())
                 orch.state.completed_tasks.append(result.to_dict())
                 lines.append(f"- Task {task.id} ({task.evidence_schema.get('type', task.module)}): {result.status}")
@@ -126,7 +137,7 @@ class EngagementLoop:
                 # bukan mikro-state per-task -- TRANSITIONS tidak mendefinisikan
                 # VERIFYING->EXECUTING untuk task berikutnya dalam batch yang sama.
                 candidates = self.evidence.to_findings_candidates(
-                    self.evidence.from_executor_result(result)
+                    self.evidence.from_executor_result(result), task_id=task.id
                 )
                 for cand in candidates:
                     orch.findings_db.add_finding(cand)
@@ -138,14 +149,13 @@ class EngagementLoop:
                         ok, missing = orch.evidence_vault.validate_schema(task.id, schema)
                         if not ok:
                             lines.append(f"  ! Evidence gate: missing {missing}")
-                    import os
-                    if orch.client.available():
-                        v = orch.verifier.verify(finding, orch.state, evidence_vault=orch.evidence_vault)
-                    elif os.environ.get("WTH_TEST_MODE") == "1":
-                        v = orch.verifier.verify_offline(finding, orch.evidence_vault)
-                    else:
-                        lines.append("LLM tidak tersedia untuk verifikasi.")
-                        continue
+                    v = orch.verifier.verify_with_evidence(
+                        finding,
+                        orch.state,
+                        pairs=pairs,
+                        vuln_class=schema.get("type") or getattr(finding, "vuln_class", "") or task.module,
+                        evidence_vault=orch.evidence_vault,
+                    )
                     verdict = v.get("verdict", "needs_more_evidence")
                     replan = v.get("replan_hint", "")
                     if verdict == "verified":

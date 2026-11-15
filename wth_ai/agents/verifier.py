@@ -74,8 +74,78 @@ class VerifierAgent(BaseLLMAgent):
         )
         return self._parse_verification(raw, finding.id, model)
 
-    def verify_offline(self, finding: Finding, evidence_vault: Any = None) -> dict[str, Any]:
-        """Rule-based verification when LLM unavailable."""
+    def verify_evidence(
+        self,
+        finding: Finding,
+        pairs: list[Any],
+        *,
+        vuln_class: str | None = None,
+        expected: tuple[str, ...] = (),
+    ) -> dict[str, Any] | None:
+        """Verdict deterministik dari pasangan baseline/probe (GAP-010).
+
+        Return None jika bukti kurang dari dua observasi -- pemanggil harus
+        jatuh ke LLM atau menandai needs_more_evidence, bukan mengklaim verified.
+        """
+        from wth_ai.verify.deterministic import verify_finding
+
+        return verify_finding(finding, pairs, vuln_class=vuln_class, expected=expected)
+
+    def verify_with_evidence(
+        self,
+        finding: Finding,
+        state: SessionState,
+        *,
+        pairs: list[Any] | None = None,
+        vuln_class: str | None = None,
+        evidence_vault: Any = None,
+    ) -> dict[str, Any]:
+        """Gate deterministik lebih dulu; LLM hanya bila bukti belum memutuskan.
+
+        `verified`/`false_positive` dari aturan konkret tidak boleh ditimpa LLM.
+        `needs_more_evidence` (atau bukti <2 observasi) baru diteruskan ke LLM
+        bila tersedia; jika tidak, jatuh ke verifier offline.
+        """
+        candidate_pairs = list(pairs or [])
+        if not candidate_pairs and evidence_vault is not None:
+            getter = getattr(evidence_vault, "pairs_for_finding", None)
+            if callable(getter):
+                key = str(getattr(finding, "task_id", "") or finding.id)
+                candidate_pairs = getter(key)
+        klass = vuln_class or str(getattr(finding, "vuln_class", "") or "") or None
+        deterministic = self.verify_evidence(finding, candidate_pairs, vuln_class=klass)
+        if deterministic is not None and deterministic.get("verdict") in {"verified", "false_positive"}:
+            return deterministic
+        client = getattr(self, "client", None)
+        if client is not None and client.available():
+            return self.verify(finding, state, evidence_vault=evidence_vault)
+        return self.verify_offline(
+            finding, evidence_vault, pairs=candidate_pairs, vuln_class=klass
+        )
+
+    def verify_offline(
+        self,
+        finding: Finding,
+        evidence_vault: Any = None,
+        *,
+        pairs: list[Any] | None = None,
+        vuln_class: str | None = None,
+    ) -> dict[str, Any]:
+        """Rule-based verification when LLM unavailable.
+
+        Jika ada >=2 observasi (baseline + probe), verifikasi deterministik
+        dijalankan lebih dulu. Tanpa sinyal konkret hasilnya
+        `needs_more_evidence`, bukan `verified`.
+        """
+        candidate_pairs = list(pairs or [])
+        if not candidate_pairs and evidence_vault is not None:
+            getter = getattr(evidence_vault, "pairs_for_finding", None)
+            if callable(getter):
+                candidate_pairs = getter(finding.id)
+        deterministic = self.verify_evidence(finding, candidate_pairs, vuln_class=vuln_class)
+        if deterministic is not None:
+            return deterministic
+
         has_evidence = bool(finding.evidence)
         if evidence_vault:
             has_evidence = has_evidence or evidence_vault.count() > 0

@@ -42,8 +42,13 @@ _REDACT_PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
 def redact_secrets(text: str) -> str:
     """Mask known secret shapes in `text`. Idempotent (re-redacting
     already-redacted text is a no-op) and never raises on non-str-ish input
-    (coerces None/empty to '')."""
+    (coerces None/empty to ''). Under WTH_NO_LIMITS the raw value is returned
+    so the operator/agent can see credentials it is explicitly hunting."""
     out = text or ""
+    from wth_ai.engagement.mode import is_no_limits
+
+    if is_no_limits():
+        return out if isinstance(out, str) else str(out)
     if not isinstance(out, str):
         out = str(out)
     for pat, repl in _REDACT_PATTERNS:
@@ -79,6 +84,10 @@ def mask_url_secrets(url: str) -> str:
     Only the VALUE is replaced; the parameter name and path survive, so the
     endpoint stays identifiable and deduplicable.
     """
+    from wth_ai.engagement.mode import is_no_limits
+
+    if is_no_limits():
+        return url or ""
     if not url or "?" not in url:
         return redact_secrets(url)
     base, _, rest = url.partition("?")

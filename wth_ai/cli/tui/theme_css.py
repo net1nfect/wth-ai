@@ -69,11 +69,12 @@ FooterBar {{
 }}
 
 #input-bar {{
-    height: 3;
+    height: auto;
+    min-height: 3;
+    max-height: 8;
     border: tall {border};
     background: {surface};
     padding: 0 1;
-    dock: bottom;
 }}
 
 #input-bar:focus {{
@@ -96,6 +97,13 @@ FooterBar {{
     background: {surface};
 }}
 
+#attachment-line {{
+    height: 1;
+    color: {accent};
+    padding: 0 1;
+    background: {surface_alt};
+}}
+
 .lower-row {{
     height: 12;
     min-height: 10;
@@ -114,7 +122,7 @@ TabPane {{
     padding: 0;
 }}
 
-#findings-pane, #tools-pane, #config-pane {{
+#findings-pane, #tools-pane, #config-pane, #ops-pane {{
     height: 1fr;
     padding: 1 2;
     background: {surface};
@@ -134,13 +142,52 @@ SidebarPanel {{
 }}
 
 InputBar {{
-    height: 3;
+    min-height: 3;
+    max-height: 8;
 }}
 
 InputBar.-disabled {{
     color: {muted};
 }}
 
+
+ModelPickerScreen {{
+    align: center middle;
+}}
+
+#model-box {{
+    width: 74;
+    height: 22;
+    max-height: 80%;
+    border: solid {brand};
+    background: {surface_alt};
+    padding: 1 2;
+}}
+
+#model-title {{
+    height: 1;
+    color: {text};
+    margin-bottom: 1;
+}}
+
+#model-search {{
+    height: 3;
+    border: tall {border};
+    background: {surface};
+    margin-bottom: 1;
+}}
+
+#model-list {{
+    height: 1fr;
+    background: {surface};
+    border: solid {border};
+}}
+
+#model-status {{
+    height: 1;
+    color: {muted};
+    margin-top: 1;
+}}
 /* Tab highlights */
 TabbedContent Tab {{
     background: {surface_alt};

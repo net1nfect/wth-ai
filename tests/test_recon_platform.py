@@ -136,7 +136,8 @@ def test_planner_excludes_high_risk_by_default(tmp_home):
     assert "ffuf" not in names
 
 
-def test_planner_includes_high_risk_after_enable(tmp_home):
+def test_planner_includes_high_risk_after_enable(tmp_home, monkeypatch):
+    monkeypatch.setenv("WTH_NO_LIMITS", "0")
     reg = ReconToolRegistry()
     pl = ReconPlanner(reg)
     # high-risk is ineligible by default, eligible once explicitly enabled
@@ -227,6 +228,7 @@ def test_runner_external_uses_argv_no_shell(tmp_home, monkeypatch):
     import wth_ai.recon.runner as runmod
 
     monkeypatch.delenv("WTH_TEST_MODE", raising=False)
+    monkeypatch.setenv("WTH_NO_LIMITS", "0")
     monkeypatch.setattr(regmod.shutil, "which", lambda b: "/usr/bin/" + b)
     captured = {}
     monkeypatch.setattr(
@@ -249,6 +251,7 @@ def test_runner_external_timeout(tmp_home, monkeypatch):
     import wth_ai.recon.runner as runmod
 
     monkeypatch.delenv("WTH_TEST_MODE", raising=False)
+    monkeypatch.setenv("WTH_NO_LIMITS", "0")
     monkeypatch.setattr(regmod.shutil, "which", lambda b: "/usr/bin/" + b)
     monkeypatch.setattr(runmod.SafeToolRunner, "_spawn", _fake_spawn({}, hang=True))
     reg = ReconToolRegistry()
@@ -263,6 +266,7 @@ def test_runner_redacts_secrets_in_raw(tmp_home, monkeypatch):
     import wth_ai.recon.runner as runmod
 
     monkeypatch.delenv("WTH_TEST_MODE", raising=False)
+    monkeypatch.setenv("WTH_NO_LIMITS", "0")
     monkeypatch.setattr(regmod.shutil, "which", lambda b: "/usr/bin/" + b)
     payload = "found token=supersecretvalue123456 and AKIAIOSFODNN7EXAMPLE"
     monkeypatch.setattr(runmod.SafeToolRunner, "_spawn", _fake_spawn({}, stdout=payload))
@@ -293,6 +297,7 @@ def test_runner_output_is_capped_while_streaming(tmp_home, monkeypatch):
     import wth_ai.recon.runner as runmod
 
     monkeypatch.delenv("WTH_TEST_MODE", raising=False)
+    monkeypatch.setenv("WTH_NO_LIMITS", "0")
     monkeypatch.setattr(regmod.shutil, "which", lambda b: "/usr/bin/" + b)
     huge = b"a" * (runmod.MAX_OUTPUT_BYTES * 3)
     monkeypatch.setattr(runmod.SafeToolRunner, "_spawn", _fake_spawn({}, stdout=huge))
@@ -305,7 +310,8 @@ def test_runner_output_is_capped_while_streaming(tmp_home, monkeypatch):
     assert Path(run.output_path).stat().st_size <= runmod.MAX_OUTPUT_BYTES
 
 
-def test_redact_function():
+def test_redact_function(monkeypatch):
+    monkeypatch.setenv("WTH_NO_LIMITS", "0")
     assert "REDACTED" in redact("api_key=abcd1234")
     assert "supersecret" not in redact("password=supersecret")
 
@@ -464,9 +470,10 @@ def test_engine_progress_monotonic(tmp_home, offline):
     assert marks == sorted(marks)
 
 
-def test_engine_blocks_unauthorized(tmp_home, offline):
+def test_engine_blocks_unauthorized(tmp_home, offline, monkeypatch):
     from wth_ai.recon import ReconEngine
 
+    monkeypatch.setenv("WTH_NO_LIMITS", "0")
     res = ReconEngine().run("example.com", job_id="JOB-blk", authorized=False)
     assert res["status"] == "blocked"
 

@@ -20,8 +20,10 @@ HELP_TEXT = """# WTH-AI Agent
 
 Chat-driven security research. Setup via slash commands:
 
-- `/target example.com` or `/target https://host/path`
-- `/model list` · `/model set planner Hacker`
+- `/target example.com` / `/target *.example.com` (scope otomatis)
+- `/authorize` setelah target diset (atau `/target example.com authorized`)
+- `/model pick` (pilih interaktif) · `/model list` · `/model set planner Hacker`
+- `/attach foto.png` / tempel path ke input — lampiran untuk pesan berikutnya
 - `/permission elevated` (alias `active_test`) · `/mode bounty`
 - `/recon` · `/hunt` · `/findings` · `/report`
 
@@ -183,7 +185,16 @@ class SupervisorAgent(BaseLLMAgent):
             action_memory=self._ctx.action_memory if self._ctx else None,
             asset_graph=self._ctx.asset_graph if self._ctx else None,
         )
-        return builder.build(state, sources=["action_memory", "md_context"])
+        base = builder.build(state, sources=["action_memory", "md_context"])
+        # Strix-style memory: self-improved lessons join the context on every
+        # turn, so what worked last time actually steers this run.
+        try:
+            from wth_ai.agents.agent_memory import recent_lessons_context
+
+            lessons = recent_lessons_context()
+        except Exception:  # noqa: BLE001
+            lessons = ""
+        return f"{base}\n\n{lessons}" if lessons else base
 
     def _offline_fallback(self, text: str, state: SessionState) -> str:
         from wth_ai.scope_intent import parse_scope_intent

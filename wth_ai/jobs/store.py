@@ -7,8 +7,11 @@ Result mirror: ~/.wth-ai/wth-results/<job_id>/result.json
 
 from __future__ import annotations
 
+import hashlib
 import json
+import os
 import sqlite3
+import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -104,6 +107,164 @@ class JobStore:
         with self._conn() as conn:
             row = conn.execute("SELECT * FROM jobs WHERE job_id = ?", (job_id,)).fetchone()
         return self._row_to_job(row) if row else None
+
+    # --- idempotency ---
+
+    @staticmethod
+    def intent_fingerprint(job_type: str, target: str | None, profile: str | None) -> str:
+        """Stable fingerprint of a job's meaningful intent.
+
+        Two `create_job` calls with the same idempotency key but a different
+        type/target/profile are a conflict, not the same request -- returning
+        the old job would silently drop the second (real) intent.
+        """
+        raw = json.dumps(
+            {"type": job_type, "target": target or "", "profile": profile or ""},
+            sort_keys=True, ensure_ascii=False,
+        )
+        return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:32]
+
+    def find_by_idempotency_key(self, key: str) -> Job | None:
+        """Return the previously created job for `key`, if any.
+
+        Stored in `metadata.idempotency_key` (no schema migration needed for
+        the existing DB; metadata is already JSON). SQLite JSON1 is assumed
+        available (bundled with Python's sqlite3 since 3.38-ish); fall back to
+        a Python scan when it is not, so old environments still work.
+        """
+        if not key:
+            return None
+        try:
+            with self._conn() as conn:
+                row = conn.execute(
+                    "SELECT * FROM jobs WHERE json_extract(metadata, '$.idempotency_key') = ? "
+                    "ORDER BY created_at ASC LIMIT 1",
+                    (key,),
+                ).fetchone()
+            if row is not None:
+                return self._row_to_job(row)
+        except sqlite3.Error:
+            pass
+        # Fallback: scan metadata in Python (bounded, newest-first list).
+        for job in self.list_jobs(limit=2000):
+            if job.metadata.get("idempotency_key") == key:
+                return job
+        return None
+
+    # --- checkpoint ---
+
+    def checkpoint_dir(self) -> Path:
+        return self.home / "data" / "checkpoints"
+
+    def checkpoint_path(self, job_id: str) -> Path:
+        # job_id is generated (JOB-<hex>) but treat it as an opaque token and
+        # sanitize anyway: checkpoints are read back and could be influenced by
+        # a custom caller, so never allow path separators / traversal.
+        safe = "".join(c for c in str(job_id) if c.isalnum() or c in "-_")
+        return self.checkpoint_dir() / f"{safe}.json"
+
+    def save_checkpoint(self, job_id: str, payload: dict[str, Any]) -> str:
+        """Persist a resumable checkpoint atomically (write tmp + os.replace).
+
+        Atomicity matters: a crash mid-write must never leave a half-JSON file
+        that makes `load_checkpoint` return `None` and silently restart the
+        whole engagement.
+
+        NOTE: this is the unconditional write used by every existing caller.
+        It is *last-writer-wins*; use `save_checkpoint_cas` when two writers
+        could race (see the docstring there).
+        """
+        path = self.checkpoint_path(job_id)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        body = json.dumps(
+            {"job_id": job_id, "saved_at": _now(), "payload": payload},
+            ensure_ascii=False,
+        )
+        fd, tmp_name = tempfile.mkstemp(dir=str(path.parent), suffix=".tmp")
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as fh:
+                fh.write(body)
+                fh.flush()
+                os.fsync(fh.fileno())
+            os.replace(tmp_name, path)
+        finally:
+            if os.path.exists(tmp_name):
+                os.unlink(tmp_name)
+        secure_file(path)
+        return str(path)
+
+    def save_checkpoint_cas(
+        self, job_id: str, payload: dict[str, Any], *, run_id: str, revision: int,
+    ) -> str | None:
+        """Compare-and-swap checkpoint write: reject a stale or foreign writer.
+
+        The defect this closes is **silent clobbering**, not torn files. Two
+        workers can be authorised on the same job (a stuck worker, a retry, or
+        two processes on one `WTH_HOME`). With a plain `os.replace`, the slower
+        writer overwrote the faster one's checkpoint, discarding the steps it
+        had already discovered, and the engagement restarted from a state that
+        had already been superseded. Nothing reported the loss.
+
+        Rules:
+
+        * A writer may always write when its `run_id` matches the stored one
+          and its `revision` is strictly greater (monotonic per owner).
+        * A writer with a *different* `run_id` may only take over when its
+          `revision` is greater than the stored revision — i.e. it actually
+          claimed the job later.
+        * A writer whose `revision` is <= the stored revision is rejected and
+          receives `None`, so the caller can stop and report rather than
+          pretend its state was persisted.
+
+        Returns the path written, or `None` when the write was rejected as
+        stale. A legacy checkpoint (no `run_id`/`revision`) does not block a
+        first writer: revision 0 stored means "unknown", not "newest".
+        """
+        from wth_ai.jobs.checkpoint import CheckpointEnvelope
+
+        path = self.checkpoint_path(job_id)
+        current = self.load_checkpoint(job_id)
+        stored_run = ""
+        stored_rev = 0
+        if current is not None:
+            stored_run = str(current.get("run_id", "") or "")
+            raw_rev = current.get("revision", 0)
+            stored_rev = raw_rev if isinstance(raw_rev, int) and not isinstance(raw_rev, bool) else 0
+
+        if stored_rev > 0 or stored_run:
+            if revision <= stored_rev:
+                return None
+            if stored_run and run_id != stored_run and revision <= stored_rev:
+                return None
+
+        envelope = dict(payload)
+        envelope["run_id"] = run_id
+        envelope["revision"] = revision
+        # Validate through the envelope so a malformed payload never reaches
+        # disk (and never becomes the checkpoint a later resume trusts).
+        CheckpointEnvelope.from_dict(
+            {k: v for k, v in envelope.items() if k != "schema_version"} |
+            {"schema_version": envelope.get("schema_version", 2)}
+        )
+        return self.save_checkpoint(job_id, envelope)
+
+    def load_checkpoint(self, job_id: str) -> dict[str, Any] | None:
+        """Return the checkpoint payload, or None if absent/corrupt.
+
+        Fail-closed: a corrupt checkpoint must not crash the worker, and must
+        not be mistaken for valid resume state.
+        """
+        path = self.checkpoint_path(job_id)
+        if not path.exists():
+            return None
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return None
+        if not isinstance(data, dict):
+            return None
+        payload = data.get("payload")
+        return payload if isinstance(payload, dict) else None
 
     def list_jobs(
         self,

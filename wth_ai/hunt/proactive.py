@@ -44,6 +44,52 @@ SSRF_HOST_VARIANTS = ("localhost", "[::1]", "0.0.0.0")  # nosec B104
 OBJ_PARAM_HINTS = ("id", "user", "user_id", "account", "account_id", "uuid", "order", "doc", "file")
 URL_PARAM_HINTS = ("url", "uri", "link", "next", "redirect", "dest", "target", "callback", "image", "fetch")
 
+#: Method yang secara struktural mengubah state. Ini fakta HTTP, bukan dugaan
+#: tentang endpoint tertentu: GET/HEAD/OPTIONS aman dikirim ulang, POST tidak.
+_SAFE_METHODS = frozenset({"GET", "HEAD", "OPTIONS", "TRACE"})
+#: Method yang idempoten menurut RFC 7231: mengirimnya dua kali menghasilkan
+#: state akhir yang sama.
+_IDEMPOTENT_METHODS = frozenset({"GET", "HEAD", "OPTIONS", "PUT", "DELETE", "TRACE"})
+
+
+def derive_risk(
+    method: str, *, reversible: bool | None = None, blast_radius: str = "",
+) -> dict[str, Any]:
+    """Metadata risiko dari METHOD (+ sifat operasi yang eksplisit).
+
+    Dipisah dari kelas supaya bisa diuji langsung dan dipakai pemanggil lain
+    (mis. katalog payload) tanpa membuat dataclass.
+
+    `reversible=None` berarti pemanggil tidak tahu. Operasi yang mengubah
+    state tanpa idempotensi lalu diperlakukan konservatif sebagai destruktif
+    sampai ada bukti pemulihan — lebih baik diblokir daripada diulang.
+    """
+    verb = str(method or "GET").upper()
+    mutating = verb not in _SAFE_METHODS
+    idempotent = verb in _IDEMPOTENT_METHODS
+    radius = blast_radius or ("none" if not mutating else "single-object")
+    # Destruktif = mengubah state DAN tidak idempoten DAN pemulihannya tidak
+    # terjamin. `reversible=False` lebih berbahaya dari `None`, bukan lebih
+    # aman: operasi yang MENGKLAIM tidak bisa dipulihkan harus dianggap
+    # destruktif tanpa syarat, dan operasi ber-radius `self` tetap destruktif
+    # bila tidak bisa dipulihkan.
+    if not (mutating and not idempotent):
+        destructive = False
+    elif reversible is None:
+        destructive = True
+    elif reversible is False:
+        destructive = True
+    else:
+        # reversible=True: hanya aman bila cakupannya milik kita sendiri.
+        destructive = radius not in ("self", "none") or radius == "mass"
+    return {
+        "mutating": mutating,
+        "idempotent": idempotent,
+        "reversible": True if reversible is None else bool(reversible),
+        "blast_radius": radius,
+        "destructive": destructive,
+    }
+
 
 @dataclass(frozen=True)
 class NextTest:
@@ -56,6 +102,47 @@ class NextTest:
     priority: float = 1.0
     source_finding: str = ""
     vuln_class: str = ""
+    #: Metadata risiko yang bisa DIPAKAI MESIN, bukan label bebas.
+    #:
+    #: `risk` lama hanyalah string untuk dibaca manusia: tidak bisa dipakai
+    #: memfilter kandidat, memutuskan butuh approval, atau memilih urutan
+    #: eksekusi. Field di bawah menutup itu, dan sengaja diturunkan dari
+    #: METHOD + sifat operasi (bukan diketik tangan per aturan):
+    #:
+    #: * `mutating`       -> request mengubah state target?
+    #: * `idempotent`     -> aman dikirim ulang tanpa menggandakan efek?
+    #: * `reversible`     -> ada cara memulihkan tanpa bantuan pemilik target?
+    #: * `blast_radius`   -> `none` | `self` | `single-object` | `mass`
+    #: * `requires_auth`  -> butuh sesi/kredensial untuk bermakna?
+    #: * `destructive`    -> gabungan: mengubah state DAN tidak idempoten.
+    mutating: bool = False
+    idempotent: bool = True
+    reversible: bool = True
+    blast_radius: str = "none"
+    requires_auth: bool = False
+    destructive: bool = False
+
+    def __post_init__(self) -> None:
+        # Turunkan metadata dari METHOD bila pemanggil tidak menyebutkan
+        # sifat operasinya. Pemanggil yang TAHU (mis. payload katalog dengan
+        # `reversible` deklaratif) tetap menang: metadata eksplisit tidak
+        # ditimpa oleh turunan otomatis.
+        derived = derive_risk(
+            str(self.probe.get("method", "GET")),
+            reversible=self.reversible if not self.reversible else None,
+            blast_radius=self.blast_radius if self.blast_radius != "none" else "",
+        )
+        if self.blast_radius == "none":
+            object.__setattr__(self, "blast_radius", derived["blast_radius"])
+        object.__setattr__(self, "mutating", derived["mutating"])
+        object.__setattr__(self, "idempotent", derived["idempotent"])
+        object.__setattr__(self, "destructive", derived["destructive"])
+        # `risk` tetap label manusiawi, tapi diturunkan konsisten dari
+        # metadata supaya tidak ada saran "low" untuk langkah destruktif.
+        if self.destructive and self.risk == "low":
+            object.__setattr__(self, "risk", "high")
+        elif self.mutating and self.risk == "low":
+            object.__setattr__(self, "risk", "medium")
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -66,6 +153,12 @@ class NextTest:
             "priority": round(self.priority, 3),
             "source_finding": self.source_finding,
             "vuln_class": self.vuln_class,
+            "mutating": self.mutating,
+            "idempotent": self.idempotent,
+            "reversible": self.reversible,
+            "blast_radius": self.blast_radius,
+            "requires_auth": self.requires_auth,
+            "destructive": self.destructive,
         }
 
 
@@ -348,9 +441,11 @@ def propose_next_tests(
     supaya usulan yang sama tidak menumpuk di daftar.
     """
     weights = dict(weights or load_weights())
+    findings_list = list(findings)
+    pairs_list = list(request_pairs)
     proposals: list[NextTest] = []
 
-    for finding in findings:
+    for finding in findings_list:
         data = finding if isinstance(finding, Mapping) else getattr(finding, "__dict__", {}) or {}
         vuln_class = str(data.get("vuln_class") or data.get("type") or "").lower()
         rule = _RULES.get(vuln_class)
@@ -358,7 +453,49 @@ def propose_next_tests(
             continue
         proposals.extend(rule(data, weights))
 
-    proposals.extend(_rules_from_signals(list(request_pairs), weights))
+    proposals.extend(_rules_from_signals(pairs_list, weights))
+
+    # Chain templates: finding yang sudah punya bukti → probe lanjutan yang
+    # membaca URL/parameter nyata (IDOR→enumerasi, SSRF→metadata, SQLi→exfil).
+    try:
+        from wth_ai.hunt.chains import chain_next_tests
+
+        proposals.extend(chain_next_tests(
+            findings=findings_list,
+            request_pairs=pairs_list,
+            weights=weights,
+            limit=max(1, min(4, limit)),
+        ))
+    except Exception:  # noqa: BLE001 - planner tidak boleh mematikan loop hunt
+        pass
+
+    # Sintesis dari fakta respons: payload disusun ulang dari DBMS/framework/
+    # konteks pantulan/kedalaman path yang benar-benar terlihat, bukan dari
+    # katalog statis. Tetap kandidat sampai verifier deterministik bicara.
+    try:
+        from wth_ai.hunt.synthesis import synthesize_next_tests
+
+        proposals.extend(synthesize_next_tests(
+            findings=findings_list,
+            request_pairs=pairs_list,
+            limit=max(1, min(4, limit)),
+        ))
+    except Exception:  # noqa: BLE001 - planner tidak boleh mematikan loop hunt
+        pass
+
+    # GAP-008: prior Bayesian — sinyal yang tidak cocok aturan statis tetap
+    # menghasilkan usulan yang bisa ditelusuri (posterior + fitur penggerak).
+    try:
+        from wth_ai.hunt.priors import bayesian_next_tests
+
+        proposals.extend(bayesian_next_tests(
+            findings=findings_list,
+            request_pairs=pairs_list,
+            weights=weights,
+            limit=max(1, min(4, limit)),
+        ))
+    except Exception:  # noqa: BLE001 - planner tidak boleh mematikan loop hunt
+        pass
 
     seen: set[tuple[str, str]] = set()
     unique: list[NextTest] = []

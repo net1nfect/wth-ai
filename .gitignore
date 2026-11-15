@@ -27,3 +27,10 @@ data/sessions/*.bak
 wth-results/**
 reports/**
 !reports/.gitkeep
+
+# Output recon pihak ketiga — jangan pernah ikut version control
+recon/
+
+# File sampah lokal
+/2000
+*.cookies

@@ -76,13 +76,16 @@ def build_executor_stack(state: SessionState) -> dict[str, Any]:
 
 def run_executor_job(job: Any, ctx: Any) -> dict[str, Any]:
     """Execute queued tasks from session state (authorized, standard+)."""
+    from wth_ai.engagement.mode import is_no_limits
+
+    no_limits = is_no_limits()
     meta = getattr(job, "metadata", {}) or {}
     # WU-008 exit-review finding: default False, bukan True. Fail-closed law
     # (MISSING -> DENY), konsisten dengan WU-011's authorized:bool=False
     # pattern -- sebelumnya landmine: unreachable hari ini (tidak ada caller
     # yang membuat job type="executor"), tapi akan fail-open diam-diam begitu
     # WU P1 (WU-101/WU-103) mewiring caller yang lupa set metadata.authorized.
-    if not bool(meta.get("authorized", False)):
+    if not no_limits and not bool(meta.get("authorized", False)):
         return {"type": "executor", "status": "failed", "error": "not authorized"}
 
     state = load_session_for_job(job)
@@ -91,7 +94,7 @@ def run_executor_job(job: Any, ctx: Any) -> dict[str, Any]:
 
     stack = build_executor_stack(state)
     perm = stack["permission_mgr"]
-    if perm.mode == PermissionMode.READ_ONLY_RECON:
+    if perm.mode == PermissionMode.READ_ONLY_RECON and not no_limits:
         return {
             "type": "executor",
             "status": "blocked",
@@ -104,8 +107,9 @@ def run_executor_job(job: Any, ctx: Any) -> dict[str, Any]:
 
     approved = bool(meta.get("approved", False))
     results: list[dict[str, Any]] = []
-    total = min(len(tasks_raw), 6)
-    for i, td in enumerate(tasks_raw[:6]):
+    task_cap = len(tasks_raw) if no_limits else min(len(tasks_raw), 6)
+    total = max(task_cap, 1)
+    for i, td in enumerate(tasks_raw[:task_cap]):
         if ctx.should_stop():
             return {"type": "executor", "status": "stopped", "results": results}
         ctx.progress(int((i / max(total, 1)) * 90), 100, f"task {i + 1}/{total}")

@@ -42,6 +42,13 @@ KNOWN_CLASSES = frozenset({
     "business_logic", "state_machine", "race", "mass_assignment", "idor_write",
     "injection_detect", "file_path", "cache_desync", "api_graphql", "auth_session",
     "cloud_storage", "host_header", "adaptive",
+    # GAP-009: kelas baru dengan executor nyata di executor/vuln
+    "sqli", "ssti", "cmdi", "command_injection", "path_traversal", "lfi",
+    # Konsistensi dengan executor/kelas katalog: sebelumnya kelas ini ditolak
+    # generator walau executors-nya ada.
+    "xss", "ssrf", "idor", "bola", "auth", "auth_jwt", "jwt", "open_redirect",
+    "xxe", "nosql", "ldap", "xpath", "deserialization", "prototype_pollution",
+    "graphql", "request_smuggling", "websocket",
 })
 
 MAX_GENERATED_FILE_BYTES = 2_000_000
@@ -89,6 +96,9 @@ def validate_generated(data: Mapping[str, Any]) -> tuple[Payload | None, str]:
     if not isinstance(data, Mapping):
         return None, "bukan objek JSON"
 
+    from wth_ai.engagement.mode import is_no_limits
+
+    no_limits = is_no_limits()
     missing = [field for field in REQUIRED_FIELDS if not str(data.get(field, "") or "").strip()]
     if missing:
         return None, f"bidang wajib kosong: {', '.join(missing)}"
@@ -115,20 +125,20 @@ def validate_generated(data: Mapping[str, Any]) -> tuple[Payload | None, str]:
     state_changing = method not in {"GET", "HEAD", "OPTIONS"}
     destructive = bool(data.get("requires_destructive", False)) or state_changing
     cleanup = str(data.get("cleanup", "") or "").strip()
-    if destructive and not cleanup:
+    if destructive and not cleanup and not no_limits:
         return None, (
             f"metode {method} mengubah/menghapus data, jadi wajib menyatakan `cleanup` "
             "(cara memulihkan keadaan)"
         )
 
     reversible = bool(data.get("reversible", True))
-    if destructive and not reversible and not cleanup:
+    if destructive and not reversible and not cleanup and not no_limits:
         return None, "tidak reversibel tanpa pemulihan manual = tidak boleh dipakai"
 
     # Payload massal: DITERIMA sebagai dokumentasi, tapi tidak pernah bisa dijalankan.
     auto_runnable = bool(data.get("auto_runnable", True))
     bounded = str(data.get("bounded_alternative", "") or "").strip()
-    if blast == "mass":
+    if blast == "mass" and not no_limits:
         auto_runnable = False
         bounded = bounded or (
             "Belum ada padanan berbatas yang dinyatakan — susun satu payload yang menyentuh "
@@ -242,6 +252,11 @@ def generate_with_llm(
     prompt = GENERATION_PROMPT.format(vuln_class=vuln_class, goal=goal,
                                       tech_stack=tech_stack or "tidak diketahui",
                                       count=max(1, min(10, int(count))))
+    from wth_ai.agents import no_limits_prompt
+    from wth_ai.engagement.mode import is_no_limits
+
+    if is_no_limits():
+        prompt = f"{no_limits_prompt()}\n\n---\n\n{prompt}"
     try:
         # `chat_for_role` TIDAK menerima `max_tokens` (signature-nya: role, messages, *,
         # timeout, stream, on_token, response_format). Versi pertama gua mengirim

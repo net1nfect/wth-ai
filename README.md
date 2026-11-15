@@ -226,10 +226,92 @@ wth-ai bot telegram     # Telegram daemon
 | `standard` | `/permission standard` | + nuclei, ffuf, arjun, **run_shell** testing |
 | `elevated` | `/permission elevated` | + sqlmap, dalfox (butuh `/approve`) |
 | `full_lab` | `/permission full_lab` | Lab/CTF only — tetap ada denylist |
+| `unrestricted` | `/permission unrestricted` | Semua tool; scope tetap wajib |
+| `godmode` | `/permission godmode` | **Tanpa batas**: semua tool, semua target, tanpa approval, tanpa rate/iterasi limit |
 
-Agent **tidak bisa bypass** permission — semua command lewat `PermissionManager.check_command()`.
+### No-limits (godmode)
+
+Untuk lab/CTF/target milik sendiri di mana guardrail hanya menambah friksi:
+
+```bash
+wth safety godmode on      # setara: wth safety unrestricted on
+wth-ai run "/permission godmode"
+```
+
+Yang dimatikan: scope/authorization check, approval, denylist, rate limit, batas
+iterasi/cycle/depth subagent, redaksi secret, filter tool per-role, dan konstitusi
+`AGENT.md`. Yang tetap ada: bukti `[TX:...]`, pemulihan payload destruktif, dan
+laporan — supaya hasil tetap bisa ditulis.
+
+`yolo` tetap berbeda: ia menaikkan capability dan mematikan approval, tetapi
+**tetap mewajibkan authorization**.
 
 ---
+
+## Malware Forge
+
+WTH-AI bisa membangun artefak malware nyata (bukan sketsa): shellcode runner,
+reflective PE loader, TCP implant, HTTP stager, dropper, dan beacon — native C,
+PowerShell, Python, atau Bash. Setiap artefak ditulis ke `~/.wth-ai/malware/<id>/`
+bersama source, README, `metadata.json`, hash, dan analisis statis (entropi, PE
+section/import, YARA, indikator C2/anti-analysis). Build otomatis bila toolchain ada.
+
+```bash
+/malware help
+/malware forge implant --c2 127.0.0.1:4444 --features amsi,etw,antidebug,sleepmask
+/malware forge loader --os windows --arch x64
+/malware analyze ~/.wth-ai/malware/<id>/implant.exe
+/malware encode stage.bin --format powershell
+```
+
+Agent memakai ini lewat tool `malware_forge` / `malware_analyze` / `malware_encode`
+dan skill `malware-forge`. `shellcode`/`dropper` menghasilkan payload **msfvenom asli**
+(`--payload linux/x64/exec --opt CMD=...`); tanpa msfvenom tool menolak, bukan menulis placeholder.
+
+## Strix-Mode: Agent Menyerang Langsung (tanpa slash)
+
+Doktrin agent dibesarkan dari arsitektur Strix (usestrix/strix):
+AI yang **menyerang, bukan menjawab** — ia memutuskan langkah berikutnya dari
+respons terakhir target, bukan dari checklist statis:
+
+| Strix capability | WTH-AI feature |
+|------------------|----------------|
+| Reason from the last response | `http_probe` sudah adaptif otomatis: 403/406/429/401/WAF memicu katalog mutasi (header/encoding/method) dan laporan `[ADAPTIF] ... BYPASS` — **tanpa `/adaptive`** |
+| Full hacker toolkit | `run_shell`, `recon_run_tool`, `oob_*`, `computer_use`, `malware_forge` |
+| Python Runtime (custom exploit) | `python_runtime` — tulis skrip python sendiri, jalan via run_shell nyata (permission/audit sama) |
+| Multi-agent orchestration | `delegate_task` — spawn subagent spesialis (injection, authz, recon, ctf…) |
+| Real exploit validation | every finding wajib bukti `[TX:...]` + `[DIFF vs TX]` |
+| Agentic memory | `memory_write`/`memory_read` persist antar sesi |
+| Self-improvement | `self_improve` — pelajaran tersimpan dan kembali ke context turn berikutnya |
+| Malware on demand | "buat malware X" di chat → tool `malware_forge` dipanggil agent SEKARANG, tanpa bawa `/malware` |
+
+Semua ini sudah di-inject ke prompt supervisor + no-limits override, jadi agent
+TIDAK menunggu perintah slash — ia menyerang, menulis kode, mempelajari, dan
+mengingat secara mandiri.
+
+## Adaptive & Proactive
+
+Dua lapisan otonomi yang berjalan nyata di atas jalur probe/audit yang sama:
+
+```bash
+# Adaptive: baseline -> klasifikasi WAF/rate/auth -> mutasi -> ukur -> memori target
+wth adaptive https://target.example/admin --rounds 3 --moves 8
+/adaptive https://target.example/admin --header "Authorization: Bearer ..."
+
+# Proactive: daemon siklus autopilot+adaptive untuk banyak target
+wth autonomy add target.example other.example
+wth autonomy start --interval 300 --steps 6
+wth autonomy status
+wth autonomy stop
+```
+
+- `wth_ai/adaptive/` — signal classifier (Cloudflare/Akamai/Imperva/F5/AWS/…), 28 mutasi
+  path/header/encoding/method, memori per target di `$WTH_HOME/adaptive/<host>.json`.
+- `wth_ai/continuous/` — daemon `start/stop/status`, state/PID/log di `$WTH_HOME/runtime/`.
+- Setiap respons 403/406/429/401/WAF di autopilot otomatis memicu retry adaptif dan
+  mencatat strategi yang menang; langkah adaptif tidak memakan budget siklus utama.
+- TUI `Ctrl+6` membuka **Ops** dashboard: baseline, strategy, attempt, bypass, daemon counters.
+- `--safe` / `WTH_NO_LIMITS=0` mengembalikan scope+approval; default build ini no-limits.
 
 ## Quick Start (5 menit)
 
@@ -368,6 +450,8 @@ Status bar menampilkan: `hyp 12 · chains 3 · cov 15% · verified 1`
 | `/report` | Laporan H1 dengan PoC |
 | `/permission` | Set mode testing |
 | `/scope set accounts=...` | Multi-account untuk IDOR |
+| `/adaptive <url>` | Bypass adaptif: sinyal → mutasi → ukur → memori |
+| `/autonomy start\|stop\|status\|add` | Daemon proaktif siklus autopilot+adaptive |
 
 ---
 
@@ -395,10 +479,10 @@ Status bar menampilkan: `hyp 12 · chains 3 · cov 15% · verified 1`
 
 ## Keamanan & Etika
 
-- Jangan test target tanpa izin tertulis
+- Jangan test target tanpa izin tertulis (kecuali `godmode` — target dianggap authorized)
 - Rate limit default: 2 req/s (ubah di scope)
-- High-risk commands butuh `/approve`
-- Secrets di-redact otomatis di transcript & report
+- High-risk commands butuh `/approve` (kecuali `godmode`)
+- Secrets di-redact otomatis di transcript & report (kecuali `godmode`)
 
 ---
 
@@ -411,6 +495,9 @@ wth_ai/
   brain/        # Hypothesis + chain planner
   agents/       # Planner, executor, tool loop, grounding
   executor/vuln/# IDOR, SSRF, XSS, auth, race
+  adaptive/     # signal classifier + mutation engine + per-target memory
+  continuous/   # proactive autonomy daemon + state/PID/log
+  malware/      # forge implant/loader/dropper + analyzer
   recon/deep/   # JS, OpenAPI, GraphQL analysis
   evidence/     # Evidence vault
 AGENT.md        # Konstitusi bug hunter

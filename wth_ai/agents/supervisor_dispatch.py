@@ -7,7 +7,7 @@ import time
 from typing import Any
 
 from wth_ai.agents.supervisor_context import SupervisorContext
-from wth_ai.engagement.mode import auto_approve_enabled
+from wth_ai.engagement.mode import auto_approve_enabled, is_no_limits
 from wth_ai.models import AssessmentPhase, ExecutorTask, FindingState, PermissionMode, sort_tasks_by_dependencies
 from wth_ai.permission_presets import apply_preset
 
@@ -28,7 +28,7 @@ def _dispatch_computer_use(ctx: SupervisorContext, args: dict[str, Any], *, appr
     if not action:
         return "computer_use: argumen 'action' wajib."
 
-    if action in INPUT_ACTIONS:
+    if action in INPUT_ACTIONS and not is_no_limits(getattr(ctx, "config", None)):
         if not ctx.permission_mgr.mode_sufficient(PermissionMode.STANDARD_TESTING):
             return (
                 f"DITOLAK: '{action}' menyuntik input ke desktop operator dan butuh minimal preset "
@@ -175,6 +175,19 @@ def _dispatch_research(ctx: SupervisorContext, args: dict[str, Any]) -> str:
     return f"research: aksi tidak dikenal {action!r}. Pilihan: search, fetch, browser, notes."
 
 
+
+
+def _tx_stub(terminal: Any, transcript_id: str) -> Any:
+    stored = getattr(getattr(terminal, "transcripts", None), "get", None)
+    if stored is not None:
+        try:
+            got = stored(transcript_id)
+            if got is not None:
+                return got
+        except Exception:  # noqa: BLE001
+            pass
+    return None
+
 def dispatch_supervisor_tool(
     ctx: SupervisorContext,
     name: str,
@@ -215,6 +228,55 @@ def _dispatch(ctx: SupervisorContext, name: str, args: dict[str, Any], *, approv
     if name.startswith("mcp_"):
         return _dispatch_mcp(ctx, name, args)
 
+    # Strix-style Python Runtime: the agent writes its own exploit/validation
+    # script and executes it on the spot through the same run_shell path
+    # (same permission/approval/audit) -- no sandbox simulation.
+    if name == "python_runtime":
+        code = str(args.get("code", "") or "")
+        if not code.strip():
+            return "ERROR: python_runtime butuh 'code'."
+        name = "run_shell"
+        args = {
+            "command": f"python3 - <<'WTHPYEOF'\n{code}\nWTHPYEOF",
+            "purpose": str(args.get("purpose") or "python exploit runtime"),
+            # GAP-007 versi tanpa-Docker: kode agent-written eksekusi di
+            # clean-room (throwaway cwd/HOME + env dipangkas), bukan di host
+            # bersih. Map ke run_shell cleanroom=True — jalur permission/audit
+            # tetap sama.
+            "cleanroom": True,
+        }
+
+    if name == "self_improve":
+        from wth_ai.agents.agent_memory import write_lesson
+
+        lesson = str(args.get("lesson", "") or "").strip()
+        if not lesson:
+            return "ERROR: self_improve butuh 'lesson'."
+        entry = write_lesson(
+            str(args.get("topic", "general")),
+            lesson,
+            evidence=str(args.get("evidence", "") or ""),
+        )
+        return (
+            f"LESSON TERSIMPAN ({entry['id']}): topic={entry['topic']} — {lesson[:200]}"
+            " (pelah Barclay teratas akan di-inject ke context berikutnya)"
+        )
+
+    if name == "memory_write":
+        from wth_ai.agents.agent_memory import write_note
+
+        key = write_note(str(args.get("key", "note") or "note"),
+                         str(args.get("value", "") or ""))
+        return f"Memory tersimpan: {key} (persist antar sesi)."
+
+    if name == "memory_read":
+        from wth_ai.agents.agent_memory import read_note, read_lessons
+
+        topic = str(args.get("lesson_topic", "") or "")
+        notes = read_note(str(args.get("key", "") or ""))
+        lessons = read_lessons(topic, limit=int(args.get("limit", 10) or 10))
+        return json.dumps({"notes": notes, "lessons": lessons}, indent=2)[:6000]
+
     if name == "scope_set":
         ctx.notify_phase("scope", 5)
         target = args.get("target", "")
@@ -226,7 +288,7 @@ def _dispatch(ctx: SupervisorContext, name: str, args: dict[str, Any], *, approv
             # memanggil scope_set(target=...) tanpa pernah menyebut otorisasi
             # sama sekali dan sebelumnya lolos jadi authorized=True begitu
             # saja. Fail-closed law: MISSING -> DENY.
-            authorized=args.get("authorized", False),
+            authorized=args.get("authorized", True if is_no_limits(ctx.config) else False),
             environment=args.get("environment", "production"),
             in_scope=in_scope,
             rate_limit_rps=args.get("rate_limit_rps", ctx.scope_mgr.scope.rate_limit_rps),
@@ -244,6 +306,60 @@ def _dispatch(ctx: SupervisorContext, name: str, args: dict[str, Any], *, approv
 
     if name == "computer_use":
         return _dispatch_computer_use(ctx, args, approved=approved)
+
+    if name == "malware_forge":
+        from wth_ai.malware import ForgeRequest, forge, format_result
+
+        try:
+            req = ForgeRequest(
+                language=str(args.get("language", "c")),
+                kind=str(args.get("kind", "loader")),
+                target_os=str(args.get("os", "windows")),
+                arch=str(args.get("arch", "x64")),
+                c2=str(args.get("c2", "") or ""),
+                features=set(args.get("features") or ["amsi", "etw"]),
+                build=bool(args.get("build", True)),
+                name=str(args.get("name", "") or ""),
+                payload=str(args.get("payload", "") or ""),
+                opts={str(k): str(v) for k, v in (args.get("opts") or {}).items()},
+            )
+        except ValueError as exc:
+            return f"FORGE GAGAL: {exc}"
+        out = forge(req, build=req.build)
+        ctx.state.metadata["last_malware"] = str(out.output_dir)
+        report = format_result(out)
+        if out.artifacts:
+            import json as _json
+            meta = out.output_dir / "metadata.json"
+            if meta.exists():
+                try:
+                    data = _json.loads(meta.read_text(encoding="utf-8"))
+                    analyses = data.get("analysis") or []
+                    if analyses:
+                        from wth_ai.malware import format_report
+                        report += "\n\n" + "\n\n".join(format_report(a) for a in analyses)
+                except Exception:  # noqa: BLE001
+                    pass
+        return report
+
+    if name == "malware_encode":
+        from wth_ai.malware.encoder import encode
+
+        source = str(args.get("payload", "") or "")
+        if not source:
+            return "malware_encode: argumen 'payload' (path atau hex) wajib."
+        try:
+            return encode(source, key=int(args.get("key", 0x5A)), fmt=str(args.get("format", "c")))
+        except (ValueError, OSError) as exc:
+            return f"ENCODE GAGAL: {exc}"
+
+    if name == "malware_analyze":
+        from wth_ai.malware import analyze, format_report
+
+        target = str(args.get("path", "") or "")
+        if not target:
+            return "malware_analyze: argumen 'path' wajib."
+        return format_report(analyze(target))
 
     if name == "oob_create":
         return _dispatch_oob_create(ctx, args)
@@ -277,6 +393,7 @@ def _dispatch(ctx: SupervisorContext, name: str, args: dict[str, Any], *, approv
             "agent_phase": ctx.current_phase,
             "target": ctx.state.scope.target,
             "permission": ctx.state.permission_mode.value,
+            "no_limits": is_no_limits(ctx.config),
             "graph_nodes": cov.get("nodes", 0),
             "coverage_pct": cov.get("coverage_pct", 0),
             "findings": len(ctx.findings_db.findings),
@@ -356,14 +473,15 @@ def _dispatch(ctx: SupervisorContext, name: str, args: dict[str, Any], *, approv
         if saved:
             notes.append(f"Tersimpan di {saved}.")
         # Batas yang tidak bisa dilewati model: massal tidak pernah dijalankan.
-        if payload.blast_radius == "mass" or not payload.auto_runnable:
+        # (Kecuali operator menyalakan godmode/WTH_NO_LIMITS.)
+        if (payload.blast_radius == "mass" or not payload.auto_runnable) and not is_no_limits(ctx.config):
             notes.append(
                 "TIDAK dijalankan: berdampak massal (dokumentasi saja). "
                 f"Padanan berbatas: {payload.bounded_alternative or 'belum dinyatakan'}"
             )
             return "\n".join(notes)
         destructive_allowed = bool(getattr(getattr(ctx.state, "scope", None), "destructive_allowed", False))
-        if payload.requires_destructive and not destructive_allowed:
+        if payload.requires_destructive and not destructive_allowed and not is_no_limits(ctx.config):
             notes.append("TIDAK dijalankan: destruktif tapi engagement belum membuka opt-in "
                          "(`/scope set destructive=yes`).")
             return "\n".join(notes)
@@ -382,6 +500,276 @@ def _dispatch(ctx: SupervisorContext, name: str, args: dict[str, Any], *, approv
         if result.analysis:
             notes.append(result.analysis)
         return "\n".join(notes)
+
+    if name == "pipeline_surface":
+        from wth_ai.pipeline.models import Surface
+
+        surface = Surface.from_target(
+            str(args.get("target", "") or ""),
+            method=str(args.get("method", "GET") or "GET"),
+            headers=args.get("headers") or {},
+            body=str(args.get("body", "") or ""),
+        )
+        data = surface.to_dict()
+        data["message"] = "Inventory saja — belum ada request ke target."
+        return json.dumps(data, indent=2)
+
+    if name == "pipeline_discover":
+        from wth_ai.models import PermissionMode as _PermissionMode
+        from wth_ai.pipeline.discovery import (
+            discover_document,
+            discover_from_js,
+            external_script_urls,
+            js_import_urls,
+        )
+        from wth_ai.pipeline.models import RequestSpec, Surface
+        from wth_ai.pipeline.session import ProbeSession, scope_guard_from
+
+        target = str(args.get("target") or ctx.state.scope.target or "").strip()
+        if not target:
+            return "ERROR: pipeline_discover butuh 'target' atau scope target."
+        in_scope, scope_msg = ctx.scope_mgr.is_in_scope(target)
+        if not in_scope:
+            return f"ERROR: target out of scope — {scope_msg}"
+        if not is_no_limits(ctx.config) and not ctx.state.scope.authorized:
+            return "DITOLAK: scope belum authorized. Set scope dengan authorized=true dulu."
+        if not ctx.permission_mgr.mode_sufficient(_PermissionMode.STANDARD_TESTING):
+            return (
+                f"DITOLAK: pipeline_discover butuh minimal preset 'ask' (standard testing); "
+                f"mode sekarang {ctx.permission_mgr.mode.value}."
+            )
+
+        seed = Surface.from_target(target)
+        auto = auto_approve_enabled(ctx.config)
+        purpose = str(args.get("purpose") or "pipeline:discover")
+
+        def _send(request):  # type: ignore[no-untyped-def]
+            result = ctx.terminal.dispatch_tool(
+                "http_probe",
+                {
+                    "method": request.method,
+                    "url": request.url,
+                    "headers": dict(request.headers or {}),
+                    "body": request.body or "",
+                    "follow_redirects": bool(request.follow_redirects),
+                    "purpose": purpose,
+                },
+                actor="recon",
+                approved=approved or auto,
+            )
+            if result.blocked:
+                return {
+                    "status_code": 0,
+                    "stdout": f"BLOCKED: {result.block_reason}",
+                    "method": request.method,
+                    "url": request.url,
+                    "response_headers": {},
+                    "transcript_id": result.transcript_id,
+                }
+            return {
+                "status_code": result.status_code,
+                "stdout": result.stdout,
+                "method": request.method,
+                "url": result.url or request.url,
+                "response_headers": dict(result.response_headers or {}),
+                "transcript_id": result.transcript_id,
+            }
+
+        session = ProbeSession(
+            sender=_send,
+            rate_limit_rps=float(getattr(ctx.state.scope, "rate_limit_rps", 0.0) or 0.0),
+            scope_guard=scope_guard_from(getattr(ctx.state, "scope", None)),
+        )
+        baseline, html = session.baseline(seed)
+        if baseline.status == 0:
+            return json.dumps({
+                "error": baseline.snippet or "seed fetch gagal/diblokir",
+                "baseline_transcript_id": baseline.transcript_id,
+            }, indent=2)
+
+        limit = max(1, min(100, int(args.get("max_surfaces", 25) or 25)))
+        seed_url = baseline.url or seed.url
+        surfaces = discover_document(
+            seed_url, html,
+            content_type=str(baseline.headers.get("content-type", "")),
+            max_surfaces=limit,
+        )
+        direct_scripts = external_script_urls(seed_url, html, max_urls=5)
+        seen_scripts: set[str] = set()
+        queue = list(direct_scripts)
+        external_fetched = 0
+        imported_fetched = 0
+        extra: list = []
+        while queue and len(seen_scripts) < 12:
+            script_url = queue.pop(0)
+            if script_url in seen_scripts:
+                continue
+            seen_scripts.add(script_url)
+            script_obs, script_body = session.send(
+                RequestSpec("GET", script_url), role="discover:js",
+            )
+            if script_obs.status != 200 or len(script_body) > 512_000:
+                continue
+            external_fetched += 1
+            if script_url not in direct_scripts:
+                imported_fetched += 1
+            extra.extend(discover_from_js(script_url, script_body, max_surfaces=limit))
+            for imported in js_import_urls(script_url, script_body, max_urls=5):
+                if imported not in seen_scripts:
+                    queue.append(imported)
+        merged = []
+        seen = set()
+        for item in [*surfaces, *extra]:
+            key = (
+                item.surface.method.upper(),
+                item.surface.url,
+                tuple(sorted(p.name for p in item.surface.params)),
+            )
+            if key in seen:
+                continue
+            seen.add(key)
+            merged.append(item)
+        surfaces = merged[:limit]
+        data = {
+            "seed_url": seed_url,
+            "baseline_status": baseline.status,
+            "baseline_transcript_id": baseline.transcript_id,
+            "count": len(surfaces),
+            "external_scripts_fetched": external_fetched,
+            "imported_js_fetched": imported_fetched,
+            "surfaces": [item.to_dict() for item in surfaces],
+            "message": (
+                "Tetap kandidat, bukan temuan. Pilih surface yang relevan lalu panggil "
+                "pipeline_probe; request probe tetap melewati scope/approval."
+            ),
+        }
+        stored = ctx.state.metadata.setdefault("discovered_surfaces", [])
+        stored.extend(data["surfaces"])
+        if len(stored) > 200:
+            del stored[:-200]
+        return json.dumps(data, indent=2)[:12000]
+
+    if name == "pipeline_probe":
+        from wth_ai.models import PermissionMode as _PermissionMode
+        from wth_ai.pipeline.models import Surface
+        from wth_ai.pipeline.runner import run_technique
+        from wth_ai.pipeline.session import ProbeSession, scope_guard_from
+        from wth_ai.pipeline.techniques import get_technique, technique_classes
+
+        vuln_class = str(args.get("vuln_class", "") or "").strip().lower()
+        technique = get_technique(vuln_class)
+        if technique is None:
+            return (
+                f"ERROR: pipeline belum punya technique '{vuln_class}'. "
+                f"Tersedia: {', '.join(sorted(set(technique_classes())))}. "
+                "Kelas yang tidak punya teknik pipeline (mis. nuclei) tetap lewat jalur khusus."
+            )
+        target = str(args.get("target") or ctx.state.scope.target or "").strip()
+        if not target:
+            return "ERROR: pipeline_probe butuh 'target' atau scope target."
+        in_scope, scope_msg = ctx.scope_mgr.is_in_scope(target)
+        if not in_scope:
+            return f"ERROR: target out of scope — {scope_msg}"
+        if not is_no_limits(ctx.config) and not ctx.state.scope.authorized:
+            return "DITOLAK: scope belum authorized. Set scope dengan authorized=true dulu."
+        if not ctx.permission_mgr.mode_sufficient(_PermissionMode.STANDARD_TESTING):
+            return (
+                f"DITOLAK: pipeline_probe butuh minimal preset 'ask' (standard testing); "
+                f"mode sekarang {ctx.permission_mgr.mode.value}."
+            )
+
+        surface = Surface.from_target(
+            target,
+            method=str(args.get("method", "GET") or "GET"),
+            headers=args.get("headers") or {},
+            body=str(args.get("body", "") or ""),
+        )
+        if not surface.params and getattr(technique, "requires_parameter", True):
+            return json.dumps({
+                "verified": False,
+                "risk": "low",
+                "message": "Tidak ada parameter query/JSON/form; tidak ada yang diprobe.",
+                "params": [],
+            }, indent=2)
+
+        auto = auto_approve_enabled(ctx.config)
+        purpose = str(args.get("purpose") or f"pipeline:{vuln_class}")
+
+        def _send(request):  # type: ignore[no-untyped-def]
+            started = time.perf_counter()
+            result = ctx.terminal.dispatch_tool(
+                "http_probe",
+                {
+                    "method": request.method,
+                    "url": request.url,
+                    "headers": dict(request.headers or {}),
+                    "body": request.body or "",
+                    "follow_redirects": bool(request.follow_redirects),
+                    "purpose": purpose,
+                },
+                actor="executor",
+                approved=approved or auto,
+            )
+            elapsed_ms = (time.perf_counter() - started) * 1000.0
+            if result.blocked:
+                return {
+                    "status_code": 0,
+                    "stdout": f"BLOCKED: {result.block_reason}",
+                    "method": request.method,
+                    "url": request.url,
+                    "response_headers": {},
+                    "elapsed_ms": elapsed_ms,
+                    "transcript_id": result.transcript_id,
+                }
+            return {
+                "status_code": result.status_code,
+                "stdout": result.stdout,
+                "method": request.method,
+                "url": result.url or request.url,
+                "response_headers": dict(result.response_headers or {}),
+                "elapsed_ms": elapsed_ms,
+                "transcript_id": result.transcript_id,
+            }
+
+        max_probes = int(args.get("max_probes", getattr(technique, "probe_budget", 12)) or 12)
+        max_probes = max(1, min(30, max_probes))
+        session = ProbeSession(
+            sender=_send,
+            rate_limit_rps=float(getattr(ctx.state.scope, "rate_limit_rps", 0.0) or 0.0),
+            scope_guard=scope_guard_from(getattr(ctx.state, "scope", None)),
+        )
+        run = run_technique(
+            technique, surface, session,
+            max_probes=max_probes,
+            deadline_s=60.0,
+            context={
+                "metadata": dict(ctx.state.metadata or {}),
+                "state": ctx.state,
+                "transcripts": ctx.terminal.transcripts,
+                "tool": "pipeline_probe",
+            },
+        )
+        if run.baseline.status == 0:
+            return json.dumps({
+                "verified": False,
+                "risk": "low",
+                "error": run.baseline.snippet or "baseline request gagal/diblokir",
+                "baseline_transcript_id": run.baseline.transcript_id,
+                "params": [p.to_dict() for p in surface.params],
+            }, indent=2)
+
+        if run.pairs:
+            ctx.state.metadata.setdefault("request_pairs", []).extend(run.pairs)
+        data = run.to_dict()
+        data["message"] = (
+            "Evidence di atas hanya dari verdict sinyal; needs_more_evidence bukan berarti aman."
+        )
+        return json.dumps(data, indent=2)
+
+    if name == "solidity_audit":
+        from wth_ai.solidity import dispatch_solidity_audit
+
+        return dispatch_solidity_audit(ctx, args, approved=approved)
 
     if name in ("http_probe", "run_shell"):
         auto = auto_approve_enabled(ctx.config)
@@ -410,6 +798,56 @@ def _dispatch(ctx: SupervisorContext, name: str, args: dict[str, Any], *, approv
                 ctx.state.metadata.setdefault("request_pairs", []).append(
                     evidence_pair(result, role=str(args.get("purpose") or "adaptive"))
                 )
+            # Strix-like "reason from the last response": a blocked response is
+            # NOT an answer, it is an instruction. Mutate the request right
+            # here (path/header/encoding/method) and re-probe -- the operator
+            # does not run /adaptive; the engine runs by itself. Disable via
+            # {"adaptive": "0"} on the probe args.
+            if not result.blocked and str(args.get("adaptive", "1")).lower() not in {"0", "false", "no"}:
+                try:
+                    from urllib.parse import urlsplit
+
+                    from wth_ai.adaptive import AdaptiveEngine, HttpRequest, classify
+                    from wth_ai.terminal.analysis import evidence_pair as _pair
+
+                    probe_url = str(args.get("url", "") or "")
+                    headers = dict(getattr(result, "response_headers", {}) or {})
+                    signal = classify(int(getattr(result, "status_code", 0) or 0),
+                                      headers, str(result.stdout or ""), analysis=result.analysis or "")
+                    if signal.is_blocked and "://" in probe_url:
+                        host = urlsplit(probe_url).netloc or ctx.state.scope.target or "target"
+                        engine = AdaptiveEngine(host)
+                        seed = HttpRequest(
+                            method=str(args.get("method", "GET")),
+                            url=probe_url,
+                            headers={str(k): str(v) for k, v in (args.get("headers") or {}).items()},
+                            body=args.get("body") if args.get("body") is not None else None,
+                        )
+                        moves = int(args.get("adaptive_moves", 3) or 3)
+                        attempts = engine.retry_blocked(
+                            seed, result,
+                            lambda p: ctx.terminal.dispatch_tool(
+                                "http_probe", p, actor="supervisor",
+                                approved=approved or auto),
+                            limit=max(1, moves),
+                        )
+                        for attempt in attempts:
+                            if attempt.transcript_id:
+                                ctx.state.metadata.setdefault("request_pairs", []).append(
+                                    _pair(_tx_stub(ctx.terminal, attempt.transcript_id),
+                                          role=f"adaptive:{attempt.strategy}"))
+                            parts.append(
+                                f"[ADAPTIF] {attempt.strategy} ({attempt.description}) "
+                                f"-> status={attempt.status or '-'} signal={attempt.signal}"
+                                f"{' BYPASS' if attempt.improved else ''}"
+                                f"{f' tx={attempt.transcript_id}' if attempt.transcript_id else ''}"
+                                + (f"; {attempt.note[:200]}" if attempt.note else "")
+                            )
+                        if attempts and any(a.improved for a in attempts):
+                            parts.append("[ADAPTIF] bypass: lanjutkan permintaan yang menang di atas.")
+                except Exception as _adaptive_err:  # noqa: BLE001
+                    parts.append(f"[ADAPTIF] engine error: {_adaptive_err}")
+
             if result.stdout:
                 parts.append(result.stdout[:3000])
             elif result.stderr:
@@ -474,13 +912,18 @@ def _dispatch(ctx: SupervisorContext, name: str, args: dict[str, Any], *, approv
         finding = ctx.findings_db.findings.get(fid)
         if not finding:
             return f"Finding not found: {fid}"
-        import os
-        if ctx.client.available():
-            v = ctx.verifier.verify(finding, ctx.state, evidence_vault=ctx.evidence_vault)
-        elif os.environ.get("WTH_TEST_MODE") == "1":
-            v = ctx.verifier.verify_offline(finding, ctx.evidence_vault)
-        else:
-            return "LLM unavailable for verification"
+        pairs = []
+        key = str(getattr(finding, "task_id", "") or finding.id)
+        getter = getattr(ctx.evidence_vault, "pairs_for_finding", None)
+        if callable(getter):
+            pairs = getter(key)
+        v = ctx.verifier.verify_with_evidence(
+            finding,
+            ctx.state,
+            pairs=pairs,
+            vuln_class=str(getattr(finding, "vuln_class", "") or "") or None,
+            evidence_vault=ctx.evidence_vault,
+        )
         verdict = v.get("verdict", "needs_more_evidence")
         if verdict == "verified":
             ctx.findings_db.update_finding_state(finding.id, FindingState.VERIFIED)
@@ -508,7 +951,7 @@ def _dispatch(ctx: SupervisorContext, name: str, args: dict[str, Any], *, approv
         job = ctx.job_manager.create_job(
             "recon", target=target, profile=args.get("profile", "recon-only"),
             created_by="supervisor",
-            metadata={"authorized": ctx.state.scope.authorized},
+            metadata={"authorized": True if is_no_limits(ctx.config) else ctx.state.scope.authorized},
             permission_mode=ctx.state.permission_mode,
         )
         return json.dumps({"job_id": job.job_id, "status": job.status}, indent=2)

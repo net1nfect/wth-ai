@@ -149,3 +149,59 @@ def test_broker_never_double_stores_transcript():
     bridge.dispatch_tool("run_shell", {"command": "echo hi"}, actor="executor", approved=True)
     after = bridge.transcripts.count()
     assert after == before + 1
+
+
+# ---------------------------------------------------------------------------
+# Regression: response_headers/analysis must survive broker -> facade (the
+# adaptive classifier reads them; dropping them made every WAF vendor vanish).
+# ---------------------------------------------------------------------------
+
+class _HeaderBridge:
+    def http_probe(self, method, url, *, actor, purpose, headers=None, body=None, approved=False, **_extra):
+        from wth_ai.terminal.models import TerminalResult
+
+        return TerminalResult(
+            transcript_id="TX-HDR", actor=actor, purpose=purpose,
+            command=f"{method} {url}", stdout="request blocked", stderr="",
+            exit_code=1, url=url, method=method, status_code=403,
+            response_headers={"CF-Ray": "8f00", "Server": "cloudflare"},
+            analysis="[ANALISA RESPONS] status=403 waf=cloudflare",
+        )
+
+
+def test_broker_preserves_response_headers_and_analysis():
+    broker = ExecutionBroker(_HeaderBridge())
+    intent = ActionIntent(intent_id="AI-H", tool_name="http_probe",
+                          arguments={"method": "GET", "url": "https://example.com/x"},
+                          actor="supervisor")
+    result = broker.execute(intent)
+    assert result.response_headers == {"CF-Ray": "8f00", "Server": "cloudflare"}
+    assert "cloudflare" in result.analysis
+
+
+def test_dispatch_tool_preserves_response_headers_and_analysis(monkeypatch):
+    class _FakeExecution:
+        intent_id = "AI-H2"
+        transcript_id = "TX-HDR2"
+        actor = "supervisor"
+        purpose = "probe"
+        command = "GET https://example.com/x"
+        stdout = "blocked"
+        stderr = ""
+        exit_code = 1
+        blocked = False
+        block_reason = ""
+        url = "https://example.com/x"
+        method = "GET"
+        status_code = 403
+        response_headers = {"CF-Ray": "8f00"}
+        analysis = "waf=cloudflare"
+
+    monkeypatch.setattr("wth_ai.broker.broker.ExecutionBroker.execute",
+                        lambda self, intent: _FakeExecution())
+
+    bridge = AgentTerminalBridge.__new__(AgentTerminalBridge)
+    result = bridge.dispatch_tool("http_probe", {"url": "https://example.com/x"},
+                                  actor="supervisor")
+    assert result.response_headers == {"CF-Ray": "8f00"}
+    assert result.analysis == "waf=cloudflare"

@@ -85,6 +85,10 @@ def contacts_target(spec: Any) -> bool:
 
 def resolve_workers(profile: str, override: int | None = None) -> int:
     """Workers for this run: explicit > env > profile default. Always >= 1."""
+    from wth_ai.engagement.mode import is_no_limits
+
+    if is_no_limits():
+        return 32
     if override is not None and override > 0:
         return int(override)
     env = os.environ.get("WTH_RECON_WORKERS", "").strip()
@@ -141,6 +145,11 @@ class HostRateLimiter:
         Sleeping inside the lock is intentional: it makes per-host serialisation
         trivially correct, and contention is bounded by `max_workers`.
         """
+        from wth_ai.engagement.mode import is_no_limits
+
+        if is_no_limits():
+            self.starts[host] = self.starts.get(host, 0) + 1
+            return 0.0
         start = time.monotonic()
         with self._lock:
             now = time.monotonic()
@@ -176,10 +185,17 @@ def run_specs_parallel(
     halt: Callable[[], bool] | None = None,
     on_result: Callable[[Any, Any], None] | None = None,
     on_skip: Callable[[Any], None] | None = None,
+    on_start: Callable[[Any], None] | None = None,
 ) -> bool:
     """Run tool specs concurrently; deliver results in plan order.
 
     Returns True when a halt request prevented at least one tool from starting.
+
+    `on_start(spec)` dipanggil TEPAT sebelum `runner.run`, di thread worker,
+    setelah keputusan halt. Tujuannya crash-consistency: pemanggil bisa
+    mencatat "tool ini sedang berjalan" ke checkpoint lebih dulu, sehingga
+    proses yang mati di tengah tool meninggalkan jejak yang jujur alih-alih
+    menghilang tanpa catatan.
     """
     spec_list = list(specs)
     if not spec_list:
@@ -206,6 +222,8 @@ def run_specs_parallel(
         if halt is not None and halt():
             halted = True
             return None
+        if on_start is not None:
+            on_start(spec)
         return runner.run(spec, target=target, ctx=ctx)
 
     if max_workers <= 1:

@@ -81,6 +81,14 @@ class AgentTerminalBridge:
         self.registry = registry or ToolRegistry()
         self.runner = ExecutorRunnerV2(self.registry, on_line=on_line or self._default_on_line)
         self._last_request = 0.0
+        # GAP-002: HTTP session persisten -- cookie jar bertahan antar probe,
+        # agent cukup login sekali lalu request berikutnya membawa cookie otomatis.
+        self._http_session: requests.Session | None = None
+
+    def _http(self) -> requests.Session:
+        if self._http_session is None:
+            self._http_session = requests.Session()
+        return self._http_session
 
     def _default_on_line(self, line: str) -> None:
         import sys
@@ -88,6 +96,10 @@ class AgentTerminalBridge:
             print(f"  │ {line[:200]}", flush=True)
 
     def _throttle(self) -> None:
+        from wth_ai.engagement.mode import is_no_limits
+
+        if is_no_limits():
+            return
         rps = max(self.scope.scope.rate_limit_rps, 0.1)
         gap = 1.0 / rps
         elapsed = time.monotonic() - self._last_request
@@ -139,6 +151,7 @@ class AgentTerminalBridge:
         purpose: str = "",
         approved: bool = False,
         required_mode: PermissionMode | None = None,
+        cleanroom: bool = False,
     ) -> TerminalResult:
         tid = self._new_id()
         min_perm = required_mode or self.ACTOR_MIN_PERM.get(actor, PermissionMode.STANDARD_TESTING)
@@ -161,7 +174,19 @@ class AgentTerminalBridge:
             return self._blocked(tid, actor, purpose, cmd, "Approval required — use /approve")
 
         self._throttle()
-        stdout, stderr, code = self.runner.run_shell_live(cmd, timeout=self.config.tools.timeout_seconds)
+        if cleanroom:
+            # GAP-007 versi tanpa-Docker (keputusan operator): isolasi via
+            # throwaway cwd/HOME/TMPDIR + env dipangkas. BUKAN jail kernel —
+            # di-deklarasi jujur di cleanroom.py.
+            from wth_ai.executor.cleanroom import CleanRoom
+
+            room = CleanRoom.create(label="shell")
+            try:
+                stdout, stderr, code = room.run(cmd, timeout=self.config.tools.timeout_seconds)
+            finally:
+                room.cleanup()
+        else:
+            stdout, stderr, code = self.runner.run_shell_live(cmd, timeout=self.config.tools.timeout_seconds)
         stdout = self.scope.redact_secrets(stdout[: self.config.tools.max_output_bytes])
         stderr = self.scope.redact_secrets(stderr[:5000])
         result = TerminalResult(
@@ -230,6 +255,12 @@ class AgentTerminalBridge:
         headers: dict[str, str] | None = None,
         body: str | None = None,
         approved: bool = False,
+        cookies: dict[str, str] | None = None,
+        proxy: str = "",
+        files: dict[str, str] | None = None,
+        follow_redirects: bool = True,
+        max_redirects: int = 8,
+        session_clear: bool = False,
     ) -> TerminalResult:
         tid = self._new_id()
         min_perm = self.ACTOR_MIN_PERM.get(actor, PermissionMode.READ_ONLY_RECON)
@@ -244,6 +275,8 @@ class AgentTerminalBridge:
         # sama sekali (beda dari run_shell) -- LLM-driven HTTP request risk
         # tinggi (POST/PUT/DELETE/PATCH, atau konten match denylist/high-risk
         # pattern) lolos tanpa approval apa pun, bahkan secara teori.
+        from wth_ai.engagement.mode import is_no_limits
+
         method_upper = method.upper()
         content_lower = f"{method_upper} {url} {body or ''}".lower()
         # WU-104: shared content-risk helpers (same source of truth as
@@ -254,6 +287,8 @@ class AgentTerminalBridge:
         approval_needed = method_upper not in SAFE_HTTP_METHODS
         if not approval_needed and high_risk_match(content_lower) is not None:
             approval_needed = True
+        if is_no_limits():
+            approval_needed = False
         # Opt-in destruktif per engagement: kalau operator sudah menyatakan
         # (scope.destructive_allowed), method yang mengubah data boleh jalan TANPA
         # gate approval per-request. Default tetap butuh approval -- alat ini tidak
@@ -271,33 +306,130 @@ class AgentTerminalBridge:
         if hdrs is None:
             return self._blocked(tid, actor, purpose, f"{method} {url}", vault_err)
         cmd = f"{method.upper()} {url}"
-        try:
-            r = requests.request(
-                method.upper(), url, headers=hdrs, data=body, timeout=15, allow_redirects=True,
-            )
-            body_text = self.scope.redact_secrets(r.text[: self.config.tools.max_output_bytes])
-            from wth_ai.terminal.analysis import analyze_response
 
-            # Analisa header+isi DIHITUNG SEBELUM redaksi isi supaya sidik isi tetap
-            # konsisten antar-request, tapi header yang menarik juga dilaporkan
-            # (routing/auth/content-type) -- inilah bahan untuk uji adaptif.
-            analysis = analyze_response(
-                status=r.status_code, headers=dict(r.headers), body=r.text,
-                method=method.upper(), url=url,
-            )
-            result = TerminalResult(
-                transcript_id=tid, actor=actor, purpose=purpose, command=cmd,
-                stdout=body_text, stderr="", exit_code=0 if r.ok else 1,
-                url=url, method=method.upper(), status_code=r.status_code,
-                analysis=self.scope.redact_secrets(analysis),
+        # --- GAP-002/003/005: session cookie-jar persisten, proxy, multipart ---
+        # Cookie jar hidup di antara probe (login sekali, probe berkali-kali).
+        # Proxy dipakai apa adanya (http/https/socks5) untuk intercept Burp/mitm.
+        if session_clear and self._http_session is not None:
+            self._http_session.cookies.clear()
+        proxies: dict[str, str] | None = None
+        if proxy:
+            proxies = {"http": proxy, "https": proxy}
+        upload_files: dict[str, tuple[str, Any]] = {}
+        for field_name, path in (files or {}).items():
+            try:
+                fh = open(path, "rb")  # noqa: SIM115 - ditutup r.requests di request()
+            except OSError as exc:
+                return self._blocked(
+                    tid, actor, purpose, f"{method} {url}", f"upload file '{path}' gagal dibuka: {exc}"
+                )
+            upload_files[field_name] = (os.path.basename(path), fh)
+
+        try:
+            result, _ = self._send_with_hops(
+                tid, actor, purpose,
+                method=method, url=url, headers=hdrs,
+                body=body, cookies=cookies, proxies=proxies,
+                upload_files=upload_files,
+                follow_redirects=follow_redirects, max_redirects=max_redirects,
             )
         except requests.RequestException as exc:
             result = TerminalResult(
                 transcript_id=tid, actor=actor, purpose=purpose, command=cmd,
                 stdout="", stderr=str(exc), exit_code=1, url=url, method=method.upper(),
             )
+        finally:
+            for _, fh in upload_files.values():
+                try:
+                    fh.close()
+                except OSError:
+                    pass
         self.transcripts.store(result)
         return result
+
+    def _send_with_hops(
+        self,
+        tid: str,
+        actor: str,
+        purpose: str,
+        *,
+        method: str,
+        url: str,
+        headers: dict[str, str],
+        body: str | None,
+        cookies: dict[str, str] | None,
+        proxies: dict[str, str] | None,
+        upload_files: dict[str, tuple[str, Any]],
+        follow_redirects: bool,
+        max_redirects: int,
+    ) -> tuple[TerminalResult, list[str]]:
+        """GAP-004: manual redirect-follow dengan rekap per-hop.
+
+        Behaviour lama (`allow_redirects=True`) hanya menyerahkan response
+        FINAL; hop tengah hilang dari evidence. Ini mengejar maksimal
+        `max_redirects` hop, mencatat setiap hop, dan menghormati scope:
+        redirect keluar-scope dihentikan (bukan diikuti) tapi hop terakhir
+        yang masih in-scope tetap dikembalikan.
+        """
+        from wth_ai.terminal.analysis import analyze_response
+        from urllib.parse import urljoin
+
+        chain: list[str] = []
+        current_url = url
+        send_method = "GET" if method == "" else method.upper()
+        send_data: str | None = body
+        send_files = dict(upload_files)
+        final: requests.Response | None = None
+        for hop in range(max_redirects + 1):
+            r = self._http().request(
+                send_method, current_url, headers=headers, data=send_data,
+                files=send_files or None, cookies=cookies, proxies=proxies,
+                timeout=15, allow_redirects=False,
+            )
+            final = r
+            location = r.headers.get("Location", "")
+            is_redirect = r.status_code in (301, 302, 303, 307, 308) and bool(location)
+            if not is_redirect:
+                break
+            chain.append(f"#{hop + 1} {r.status_code} {current_url[:120]} -> {location[:120]}")
+            if not follow_redirects:
+                break
+            next_url = urljoin(current_url, location)
+            in_scope, scope_msg = self.scope.is_in_scope(next_url)
+            if not in_scope:
+                chain.append(f"#{hop + 2} STOP out-of-scope: {scope_msg}")
+                break
+            if r.status_code != 307 and r.status_code != 308:
+                send_method = "GET" if send_method != "HEAD" else "HEAD"
+                send_data = None
+                send_files = {}
+            current_url = next_url
+        else:  # pragma: no cover - loop-exhausted: final masih redirect terakhir
+            chain.append(f"#STOP max_redirects={max_redirects} tercapai")
+
+        if final is None:  # pragma: no cover - request() selalu menghasilkan jawaban
+            raise requests.RequestException("no response")
+        body_text = self.scope.redact_secrets(final.text[: self.config.tools.max_output_bytes])
+        # Analisa header+isi DIHITUNG SEBELUM redaksi isi supaya sidik isi tetap
+        # konsisten antar-request, tapi header yang menarik juga dilaporkan
+        # (routing/auth/content-type) -- inilah bahan untuk uji adaptif.
+        analysis = analyze_response(
+            status=final.status_code, headers=dict(final.headers), body=final.text,
+            method=send_method, url=current_url,
+        )
+        if chain:
+            analysis += "\n" + " | ".join(chain)
+        stored_url = current_url if chain else url
+        result = TerminalResult(
+            transcript_id=tid, actor=actor, purpose=purpose,
+            command=f"{method.upper()} {url}",
+            stdout=body_text, stderr="", exit_code=0 if final.ok else 1,
+            url=stored_url, method=send_method, status_code=final.status_code,
+            response_headers={str(k): str(v) for k, v in dict(final.headers).items()},
+            analysis=self.scope.redact_secrets(analysis),
+            redirect_chain=chain,
+        )
+        return result, chain
 
     def _audit_destructive(self, actor: str, purpose: str, cmd: str) -> None:
         """Catat aksi destruktif yang diizinkan flag engagement.
@@ -354,4 +486,7 @@ class AgentTerminalBridge:
             url=result.url,
             method=result.method,
             status_code=result.status_code,
+            response_headers=dict(getattr(result, "response_headers", {}) or {}),
+            analysis=str(getattr(result, "analysis", "") or ""),
+            redirect_chain=list(getattr(result, "redirect_chain", []) or []),
         )

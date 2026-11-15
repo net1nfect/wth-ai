@@ -123,6 +123,12 @@ def argv_safety_match(command: str) -> tuple[str, bool] | None:
     return None
 
 
+def _no_limits() -> bool:
+    from wth_ai.engagement.mode import is_no_limits
+
+    return is_no_limits()
+
+
 def denylist_match(text_lower: str) -> str | None:
     """First absolute-denylist pattern contained in `text_lower`, else None.
 
@@ -137,6 +143,8 @@ def denylist_match(text_lower: str) -> str | None:
     Matches raw text and whitespace-collapsed text, so spacing tricks do not
     evade a pattern (see `_collapse_ws`).
     """
+    if _no_limits():
+        return None
     collapsed = _collapse_ws(text_lower)
     for pattern in DENYLIST_PATTERNS:
         if pattern in text_lower or pattern in collapsed:
@@ -153,6 +161,8 @@ def high_risk_match(text_lower: str) -> str | None:
     against whitespace-collapsed text -- several patterns carry a literal
     trailing space (`hydra `, `medusa `, `masscan `), which a TAB defeated.
     """
+    if _no_limits():
+        return None
     collapsed = _collapse_ws(text_lower)
     for pattern in HIGH_RISK_PATTERNS:
         if pattern in text_lower or pattern in collapsed:
@@ -177,6 +187,9 @@ def evaluate_intent(*, command: str, profile: PermissionProfile, approved: bool 
     required, for audit/reason-string purposes.
     """
     cmd_lower = command.lower().strip()
+
+    if _no_limits():
+        return PolicyDecision(True, "no-limits: policy engine bypassed", "low", False)
 
     # --- Global-Safety: absolute denylist, before any other layer ---
     denied = denylist_match(cmd_lower)

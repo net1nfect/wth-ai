@@ -21,7 +21,24 @@ _SCOPE_PATTERNS: tuple[tuple[re.Pattern[str], int], ...] = (
 # Negasi eksplisit ("not"/"tidak"/"belum"/"tanpa"/dst tepat sebelum kata)
 # dicek terpisah -- fail-closed: ambigu/negasi -> False, TIDAK PERNAH True.
 _AUTH_WORD_RE = re.compile(r"\b(authorized|izin)\b")
-_NEGATION_WORDS = frozenset({"not", "tidak", "belum", "tanpa", "no", "never", "jangan"})
+_NEGATION_WORDS = frozenset({"not", "tidak", "belum", "tanpa", "no", "never", "jangan", "bukan"})
+
+#: Suffix otorisasi yang ditempel di belakang target, mis.
+#: `example.com authorized`, `example.com, unauthorized`,
+#: `example.com not authorized`. Domain asli tidak pernah punya whitespace
+#: sebelum kata ini, jadi hanya suffix yang dipotong.
+_AUTH_SUFFIX_RE = re.compile(
+    r"[\s,]+(?:(?:not|tidak|belum|tanpa|no|never|jangan|bukan)\s+)?"
+    r"(?:authorized|izin|unauthorized)\s*$",
+    re.I,
+)
+
+#: Satu domain atau wildcard, tanpa skema/path. Dipakai untuk input singkat
+#: `/target example.com` dan `/target *.example.com`.
+_HOST_OR_WILDCARD_RE = re.compile(
+    r"^(?:\*\.)?(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$",
+    re.I,
+)
 
 
 def _text_expresses_authorization(lower: str) -> bool:
@@ -65,11 +82,23 @@ def parse_scope_intent(text: str) -> dict[str, Any] | None:
     if re.match(r"^https?://", raw, re.I):
         return _args_from_target(raw, authorized=authorized)
 
+    # Input singkat yang diminta operator: cukup domain atau wildcard.
+    # `handle_target()` juga memanggil parser ini dengan prefix "set target",
+    # tetapi jalur natural-language/fallback tetap harus menerima bentuk telanjang.
+    if _HOST_OR_WILDCARD_RE.match(_strip_auth_suffix(raw)):
+        return _args_from_target(raw, authorized=authorized)
+
     return None
+
+
+def _strip_auth_suffix(raw: str) -> str:
+    """Buang kata otorisasi dari ujung target; jangan sentuh domain asli."""
+    return _AUTH_SUFFIX_RE.sub("", raw).strip()
 
 
 def _args_from_target(raw: str, *, authorized: bool = False) -> dict[str, Any]:
     raw = raw.strip().strip('"').strip("'").rstrip(".,;")
+    raw = _strip_auth_suffix(raw)
     if "://" in raw:
         parsed = urlparse(raw)
         host = (parsed.hostname or "").lower().rstrip(".")
@@ -87,6 +116,17 @@ def _args_from_target(raw: str, *, authorized: bool = False) -> dict[str, Any]:
         }
 
     host = raw.split("/")[0].split(":")[0].lower().rstrip(".")
-    if re.match(r"^[\w.-]+\.[a-z]{2,}$", host, re.I):
+    if host.startswith("*."):
+        base = host[2:].rstrip(".")
+        if _HOST_OR_WILDCARD_RE.match(f"*.{base}"):
+            # target tetap root agar recon punya host yang bisa di-resolve;
+            # wildcard disimpan sebagai pola scope.
+            return {
+                "target": base,
+                "authorized": authorized,
+                "in_scope": [f"*.{base}"],
+                "notes": "wildcard=true",
+            }
+    if _HOST_OR_WILDCARD_RE.match(host):
         return {"target": host, "authorized": authorized, "in_scope": [host, f"*.{host}"]}
     return {"target": raw, "authorized": authorized, "in_scope": [raw]}

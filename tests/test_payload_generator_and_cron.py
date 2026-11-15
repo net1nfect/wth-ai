@@ -262,3 +262,17 @@ def test_autopilot_handler_reads_the_destructive_flag_from_the_saved_scope():
     source = inspect.getsource(handler_autopilot)
     assert "SessionStore" in source and "destructive_allowed" in source
     assert 'meta.get("destructive' not in source and "metadata.get(\"destructive" not in source
+
+
+def test_generator_accepts_executor_classes():
+    from wth_ai.hunt.generator import KNOWN_CLASSES, validate_generated
+
+    for vuln_class in ("xss", "ssrf", "idor", "auth", "open_redirect", "xxe", "nosql"):
+        assert vuln_class in KNOWN_CLASSES
+        payload, error = validate_generated({
+            "vuln_class": vuln_class,
+            "title": f"probe {vuln_class}",
+            "proves": "kelas executor harus diterima generator",
+            "probe": {"method": "GET", "url": "https://example.test/x"},
+        })
+        assert payload is not None, (vuln_class, error)

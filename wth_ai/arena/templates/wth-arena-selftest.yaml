@@ -1,0 +1,14 @@
+id: wth-arena-selftest
+info:
+  name: WTH Arena Selftest
+  author: arena
+  severity: high
+http:
+  - method: GET
+    path:
+      - "{{BaseURL}}/arena-selftest"
+    matchers:
+      - type: word
+        words:
+          - "arena-selftest-marker"
+        condition: or

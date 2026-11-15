@@ -25,6 +25,7 @@ SPECS: dict[str, SubagentSpec] = {
     "infra": SubagentSpec("infra", "Infra misconfig", ("unauthorized-access-common-services",)),
     "ctf": SubagentSpec("ctf", "CTF solver", ("ctf-web", "ctf-pwn", "ctf-crypto")),
     "reporter": SubagentSpec("reporter", "Report builder", ("bug-bounty-deep-testing",)),
+    "malware": SubagentSpec("malware", "Malware forge + analysis", ("malware-forge",)),
 }
 
 

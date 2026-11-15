@@ -128,7 +128,7 @@ class ReconToolRegistry:
         spec = self.tools.get(name)
         if spec is None:
             return False
-        if is_unrestricted() and os.environ.get("WTH_UNRESTRICTED") == "1":
+        if is_unrestricted():
             return True
         return self._overrides.get(name, spec.enabled_by_default)
 

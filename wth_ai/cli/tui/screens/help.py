@@ -7,21 +7,22 @@ from textual.containers import VerticalScroll
 from textual.screen import ModalScreen
 from textual.widgets import Static
 
+from wth_ai.cli.ui.theme import THEME
 from wth_ai.platform.registry import get_platform_registry
 
 
 class SlashHelpScreen(ModalScreen[None]):
-    DEFAULT_CSS = """
-    SlashHelpScreen {
+    DEFAULT_CSS = f"""
+    SlashHelpScreen {{
         align: center middle;
-    }
-    #help-box {
+    }}
+    #help-box {{
         width: 90;
         height: 24;
-        border: solid #30363d;
-        background: #161b22;
+        border: solid {THEME['border']};
+        background: {THEME['surface_alt']};
         padding: 1 2;
-    }
+    }}
     """
 
     def compose(self) -> ComposeResult:

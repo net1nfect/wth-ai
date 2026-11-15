@@ -39,3 +39,8 @@ class ExecutionResult:
     url: str = ""
     method: str = ""
     status_code: int = 0
+    response_headers: dict[str, str] = field(default_factory=dict)
+    analysis: str = ""
+    #: Rantai redirect per-hop (GAP-004) -- dishare ke agent agar open-redirect /
+    #: SSRF-via-redirect bisa di-point-after-nya, bukan hilang diam-diam.
+    redirect_chain: list[str] = field(default_factory=list)

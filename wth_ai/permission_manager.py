@@ -87,6 +87,11 @@ PERMISSION_ALIASES = {
     "active_test": PermissionMode.ELEVATED_APPROVAL.value,
     "elevated": PermissionMode.ELEVATED_APPROVAL.value,
     "unrestricted": PermissionMode.UNRESTRICTED.value,
+    "godmode": PermissionMode.UNRESTRICTED.value,
+    "god": PermissionMode.UNRESTRICTED.value,
+    "nolimit": PermissionMode.UNRESTRICTED.value,
+    "no_limits": PermissionMode.UNRESTRICTED.value,
+    "no-limits": PermissionMode.UNRESTRICTED.value,
     # Legacy spellings. These were the values advertised by the LLM-facing
     # `permission_set` tool schema ("read_only_recon" / "standard_testing" /
     # "elevated_testing"), none of which are real PermissionMode values -- so
@@ -130,13 +135,21 @@ class PermissionManager:
         return self.mode
 
     def display(self) -> str:
+        from wth_ai.engagement.mode import is_no_limits
+
+        suffix = "\nNo-limits: ON (semua guardrail dimatikan)" if is_no_limits() else ""
         return (
             f"PERMISSION MODE: {self.mode.value}\n"
             f"Description: {MODE_DESCRIPTIONS[self.mode]}\n"
             f"Level: {PERMISSION_LEVEL[self.mode]}/{max(PERMISSION_LEVEL.values())}"
+            f"{suffix}"
         )
 
     def mode_sufficient(self, required: PermissionMode | str) -> bool:
+        from wth_ai.engagement.mode import is_no_limits
+
+        if is_no_limits():
+            return True
         if isinstance(required, str):
             required = PermissionMode(required) if required in {p.value for p in PermissionMode} else PermissionMode.READ_ONLY_RECON
         return PERMISSION_LEVEL[self.mode] >= PERMISSION_LEVEL[required]
@@ -158,8 +171,19 @@ class PermissionManager:
         method had no `approved` parameter at all, making callers' own
         `approval_needed and not approved` checks dead code.
         """
+        from wth_ai.engagement.mode import is_no_limits
         from wth_ai.policy.engine import evaluate_intent
         from wth_ai.policy.profiles_builtin import PROFILES
+
+        if is_no_limits():
+            return {
+                "command": command,
+                "current_mode": self.mode.value,
+                "allowed": True,
+                "reason": "no-limits: command allowlist/policy bypassed",
+                "risk": "low",
+                "approval_needed": False,
+            }
 
         profile = PROFILES[self.mode]
         decision = evaluate_intent(command=command, profile=profile, approved=approved)
@@ -181,6 +205,17 @@ class PermissionManager:
         return result
 
     def permission_check_block(self, required: PermissionMode, action_risk: str, approved: bool = False) -> dict[str, Any]:
+        from wth_ai.engagement.mode import is_no_limits
+
+        if is_no_limits():
+            return {
+                "current_mode": self.mode.value,
+                "required_mode": required.value if isinstance(required, PermissionMode) else required,
+                "action_risk": action_risk,
+                "approval_needed": False,
+                "approved": True,
+                "sufficient": True,
+            }
         return {
             "current_mode": self.mode.value,
             "required_mode": required.value if isinstance(required, PermissionMode) else required,

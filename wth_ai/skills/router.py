@@ -27,6 +27,7 @@ INTENT_SKILL_MAP: dict[str, list[str]] = {
     "smuggling": ["request-smuggling", "http2-specific-attacks"],
     "ctf": ["solve-challenge", "ctf-web", "ctf-pwn", "ctf-crypto"],
     "report": ["bug-bounty-deep-testing"],
+    "malware": ["malware-forge", "ctf-malware", "reverse-shell-techniques", "windows-av-evasion"],
 }
 
 
@@ -110,7 +111,7 @@ class SkillRouter:
             if re.search(pat, text):
                 return "chat"
         assess_patterns = [
-            r"\b(audit|scan|recon|test|pentest|assess|cve|vuln|exploit|idor|xss|sqli)\b",
+            r"\b(audit|scan|recon|test|pentest|assess|cve|vuln|exploit|idor|xss|sqli|malware|implant|loader|dropper|stager|shellcode|beacon)\b",
             r"^(plan|hunt|recon|execute|verify|report|graph)\b",
             r"\b(asset\s+graph|attack\s+surface|findings?)\b",
             r"/(plan|recon|static|dynamic|execute|verify|report)\b",

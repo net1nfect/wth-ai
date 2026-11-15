@@ -15,6 +15,8 @@
 | [011](ADR-011-engagement-lifecycle-fsm.md) | Engagement Lifecycle State Machine | Security/Platform | Accepted |
 | [012](ADR-012-split-unrestricted-flag.md) | Memecah `WTH_UNRESTRICTED` jadi Dimensi Independen | Security/Platform | Accepted |
 | [013](ADR-013-sandbox-boundary.md) | Sandbox Boundary — OS-Level, Bukan Container | Security/Platform | Accepted |
+| [014](ADR-014-context-budget-and-transport-scope-enforcement.md) | Context Budget Berprioritas & Enforcement Scope di Transport | AI/Agent + Security/Platform | Accepted |
+| [015](ADR-015-checkpoint-recovery-contract.md) | Kontrak Checkpoint Lintas-Engine (Recovery Contract) | Platform/Reliability | Accepted |
 
 Catatan: keputusan "hapus kode legacy `core/`/`agents/` root/dll" (item #29 di `docs/planning/01-gap-analysis.md`) sengaja TIDAK mendapat ADR tersendiri — sudah terkonfirmasi dead code tanpa ambiguitas/trade-off yang perlu didiskusikan (lihat `MIGRATION-MATRIX.md`), berbeda dari 13 keputusan di atas yang semuanya punya alternatif nyata yang dipertimbangkan dan ditolak.
 

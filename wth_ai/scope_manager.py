@@ -24,6 +24,8 @@ class ScopeManager:
         return self.set_scope(**{k: v for k, v in data.items() if k in Scope.__dataclass_fields__})
 
     def display(self) -> str:
+        from wth_ai.engagement.mode import is_no_limits
+
         s = self.scope
         lines = [
             "SCOPE:",
@@ -39,6 +41,8 @@ class ScopeManager:
             f"- Destructive: {'DIIZINKAN (opt-in)' if getattr(s, 'destructive_allowed', False) else 'tidak'}",
             f"- Notes: {s.notes or 'none'}",
         ]
+        if is_no_limits():
+            lines.append("- NO-LIMITS: semua target dianggap in-scope, authorized, destructive allowed")
         return "\n".join(lines)
 
     def _normalize_host(self, target: str) -> str:
@@ -76,6 +80,10 @@ class ScopeManager:
 
     def is_in_scope(self, target: str) -> tuple[bool, str]:
         """Check if target host/path is in scope."""
+        from wth_ai.engagement.mode import is_no_limits
+
+        if is_no_limits():
+            return True, "no-limits: scope check bypassed"
         if not self.scope.in_scope and not self.scope.target:
             return False, "Scope belum diset. Gunakan `/target domain.com` dulu."
 
@@ -108,6 +116,10 @@ class ScopeManager:
         return pattern in target
 
     def validate_authorized(self) -> tuple[bool, str]:
+        from wth_ai.engagement.mode import is_no_limits
+
+        if is_no_limits():
+            return True, "no-limits: authorization check bypassed"
         if not self.scope.authorized:
             return False, "Authorization belum dikonfirmasi. Konfirmasi izin testing sebelum active scan."
         if not self.scope.target and not self.scope.in_scope:

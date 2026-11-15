@@ -12,9 +12,12 @@ class ExecutorPool:
     """Run multiple executor tasks concurrently with rate limiting."""
 
     def __init__(self, *, max_workers: int = 3, rate_limit_rps: float = 2.0) -> None:
-        self.max_workers = max_workers
+        from wth_ai.engagement.mode import is_no_limits
+
+        self.no_limits = is_no_limits()
+        self.max_workers = max(max_workers, 64) if self.no_limits else max_workers
         self.rate_limit_rps = max(0.5, rate_limit_rps)
-        self._semaphore = asyncio.Semaphore(max_workers)
+        self._semaphore = asyncio.Semaphore(self.max_workers)
 
     async def run_all(
         self,
@@ -28,14 +31,16 @@ class ExecutorPool:
 
         async def _run_one(task: ExecutorTask) -> dict[str, Any]:
             async with self._semaphore:
-                await asyncio.sleep(delay)
+                if not self.no_limits:
+                    await asyncio.sleep(delay)
                 result = await asyncio.to_thread(
                     execute_fn,
                     task,
                 )
                 return {"task_id": task.id, "result": result}
 
-        coros = [_run_one(t) for t in tasks[: self.max_workers * 2]]
+        selected = tasks if self.no_limits else tasks[: self.max_workers * 2]
+        coros = [_run_one(t) for t in selected]
         return await asyncio.gather(*coros)
 
     def run_all_sync(

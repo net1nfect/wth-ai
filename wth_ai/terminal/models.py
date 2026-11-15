@@ -20,10 +20,17 @@ class TerminalResult:
     url: str = ""
     method: str = ""
     status_code: int = 0
+    #: Header respons asli (lowercase keys optional) -- bahan classifier adaptif.
+    response_headers: dict[str, str] = field(default_factory=dict)
     #: Ringkasan analisa respons (status/ukuran/sidik isi/header penting). Dipakai
     #: agent untuk memutuskan langkah berikutnya dari sinyal, bukan membaca ulang
     #: seluruh badan respons. Lihat `terminal/analysis.py`.
     analysis: str = ""
+    #: Rantai redirect yang ditempuh (GAP-004): setiap hop direkam sebagai
+    #: "#<urut> <status> <asal> -> <tujuan>". Sharpest signal untuk open-redirect
+    #: dan SSRF-via-redirect: sebelumnya requests mengikuti redirect diam-diam dan
+    #: hop tengah HILANG dari evidence.
+    redirect_chain: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -39,7 +46,9 @@ class TerminalResult:
             "url": self.url,
             "method": self.method,
             "status_code": self.status_code,
+            "response_headers": {str(k): str(v) for k, v in self.response_headers.items()},
             "analysis": self.analysis[:4000],
+            "redirect_chain": list(self.redirect_chain)[:16],
         }
 
     def summary(self) -> str:

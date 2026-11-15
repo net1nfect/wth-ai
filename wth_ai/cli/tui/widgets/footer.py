@@ -3,8 +3,8 @@
 from textual.widgets import Static
 
 FOOTER_TEXT = (
-    " ctrl+1..5 tabs · ctrl+p palette · ctrl+/ help · /quit exit · "
-    "ctrl+d exit · ctrl+c interrupt · ctrl+l clear · ctrl+t activity panel "
+    " ctrl+p palette · ctrl+o lampiran · ctrl+/ help · ctrl+t activity · "
+    "ctrl+l clear · ctrl+c interrupt "
 )
 
 

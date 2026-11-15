@@ -54,6 +54,7 @@ class ExecutionBroker:
                 actor=intent.actor,
                 purpose=intent.purpose,
                 approved=intent.approved,
+                cleanroom=bool(intent.arguments.get("cleanroom", False)),
             )
         elif intent.tool_name == "http_probe":
             tr = self.bridge.http_probe(
@@ -64,6 +65,10 @@ class ExecutionBroker:
                 headers=intent.arguments.get("headers"),
                 body=intent.arguments.get("body"),
                 approved=intent.approved,
+                cookies=intent.arguments.get("cookies"),
+                proxy=str(intent.arguments.get("proxy") or ""),
+                files=intent.arguments.get("files"),
+                follow_redirects=bool(intent.arguments.get("follow_redirects", True)),
             )
         else:
             # NOTE: purpose=intent.tool_name here (not intent.purpose) --
@@ -90,4 +95,7 @@ class ExecutionBroker:
             url=tr.url,
             method=tr.method,
             status_code=tr.status_code,
+            response_headers=dict(getattr(tr, "response_headers", {}) or {}),
+            analysis=str(getattr(tr, "analysis", "") or ""),
+            redirect_chain=list(getattr(tr, "redirect_chain", []) or []),
         )

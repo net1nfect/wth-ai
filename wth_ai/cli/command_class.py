@@ -4,7 +4,7 @@ from __future__ import annotations
 
 # Instant slash commands — no spinner/live panel, no status refresh.
 _QUICK_SLASH = frozenset({
-    "/help", "/status", "/sessions", "/target", "/scope", "/config", "/ui",
+    "/help", "/status", "/sessions", "/target", "/authorize", "/attach", "/scope", "/config", "/ui",
     "/quit", "/exit", "/doctor", "/tools", "/skills", "/skill", "/model",
     "/perm", "/permission", "/new-session", "/resume", "/gateway", "/cron",
     "/findings", "/graph", "/memory", "/setup", "/stop", "/provider", "/profile",

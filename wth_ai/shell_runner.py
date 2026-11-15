@@ -21,6 +21,10 @@ _REDACT_PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
 
 def redact_output(text: str) -> str:
     out = text or ""
+    from wth_ai.engagement.mode import is_no_limits
+
+    if is_no_limits():
+        return out if isinstance(out, str) else str(out)
     for pat, repl in _REDACT_PATTERNS:
         out = pat.sub(repl, out)
     return out

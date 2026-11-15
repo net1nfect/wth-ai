@@ -9,6 +9,7 @@ Handler signature: ``handler(job, ctx) -> dict``. ``ctx`` exposes
 from __future__ import annotations
 
 import json
+import time
 from pathlib import Path
 from typing import Any, Callable
 
@@ -132,7 +133,9 @@ def handler_recon(job: Any, ctx: Any) -> dict[str, Any]:
     # represent explicit operator intent (`wth recon run/quick`, the `/recon`
     # slash handler, a `recon watch` cron entry, the supervisor's
     # `job_create_recon`) set it explicitly at that boundary.
-    authorized = bool(meta.get("authorized", False))
+    from wth_ai.engagement.mode import is_no_limits
+
+    authorized = is_no_limits() or bool(meta.get("authorized", False))
     realtime = bool(meta.get("realtime", False))
 
     manager = getattr(ctx, "_manager", None)
@@ -142,6 +145,32 @@ def handler_recon(job: Any, ctx: Any) -> dict[str, Any]:
 
     ctx.log(f"recon start target={target} profile={profile} authorized={authorized}")
     engine = ReconEngine()
+
+    # Checkpoint per-tool: crash di tengah scan tidak membuang tool yang sudah
+    # selesai, dan retry tidak menghubungi ulang tool tersebut. Store adalah
+    # satu-satunya sumber kebenaran; tanpa store, scan tetap jalan tapi
+    # recovery-nya dilaporkan tidak tersedia (bukan diklaim ada).
+    resume_cp = None
+    if store is not None:
+        raw = store.load_checkpoint(job.job_id)
+        if raw:
+            try:
+                from wth_ai.jobs.checkpoint import CheckpointEnvelope
+
+                resume_cp = CheckpointEnvelope.from_dict(raw)
+                ctx.log(
+                    f"recovery: checkpoint recon dimuat "
+                    f"({len(resume_cp.engine_state.get('tools') or {})} tool tercatat)"
+                )
+            except Exception as exc:  # noqa: BLE001 - korup/asing => mulai bersih
+                ctx.log(f"recovery: checkpoint recon ditolak ({type(exc).__name__}; mulai dari awal)")
+                resume_cp = None
+
+    def _save_recon_cp(env: Any) -> None:
+        if store is None:
+            return
+        store.save_checkpoint(job.job_id, env.to_dict())
+
     result = engine.run(
         target,
         profile=profile,
@@ -155,6 +184,8 @@ def handler_recon(job: Any, ctx: Any) -> dict[str, Any]:
         # `wth job stop` can now actually stop a running scan: the engine polls
         # this between tools instead of the handler checking once at entry.
         should_stop=ctx.should_stop,
+        checkpoint=_save_recon_cp if store is not None else None,
+        resume=resume_cp,
     )
 
     if realtime:
@@ -240,8 +271,11 @@ def handler_autopilot(job: Any, ctx: Any) -> dict[str, Any]:
     target = job.target or ""
     if not target:
         return {"type": "autopilot", "status": "failed", "error": "no target"}
+    from wth_ai.engagement.mode import is_no_limits
+
+    no_limits = is_no_limits()
     meta = getattr(job, "metadata", {}) or {}
-    if not bool(meta.get("authorized", False)):
+    if not no_limits and not bool(meta.get("authorized", False)):
         return {"type": "autopilot", "status": "blocked",
                 "reason": "authorized flag required (fail-closed)"}
     if ctx.should_stop():
@@ -306,34 +340,155 @@ def handler_autopilot(job: Any, ctx: Any) -> dict[str, Any]:
             )
     except Exception:  # noqa: BLE001
         state.scope.destructive_allowed = False
+    if no_limits:
+        state.scope.destructive_allowed = True
 
     def _probe(probe: dict[str, Any]) -> Any:
         method = str(probe.get("method", "GET")).upper()
         actor = "recon" if method in {"GET", "HEAD", "OPTIONS"} else "executor"
         return bridge.dispatch_tool("http_probe", probe, actor=actor, approved=False)
 
-    steps = int(meta.get("steps", 6) or 6)
-    cycles = int(meta.get("cycles", 2) or 2)
+    steps = int(meta.get("steps", 6) if meta.get("steps") is not None else 6)
+    cycles = int(meta.get("cycles", 2) if meta.get("cycles") is not None else 2)
+    # Kebijakan umur checkpoint: `metadata.checkpoint_max_age_seconds`.
+    # Tidak diset => 0 => tidak ada batas umur (perilaku lama, kompatibel).
+    # Ini keputusan operator yang tertulis di job, bukan default tersembunyi.
+    _raw_max_age = meta.get("checkpoint_max_age_seconds")
+    try:
+        checkpoint_max_age = float(_raw_max_age) if _raw_max_age is not None else 0.0
+    except (TypeError, ValueError):
+        checkpoint_max_age = 0.0
+        ctx.log(
+            f"recovery: checkpoint_max_age_seconds tidak valid ({_raw_max_age!r}); "
+            "dipakai 0 (tanpa batas umur)"
+        )
+    if checkpoint_max_age > 0:
+        ctx.log(f"recovery: batas umur checkpoint {checkpoint_max_age:.0f}s")
     ctx.progress(30, 100, "autopilot: menjalankan langkah berbatas")
+    # Checkpoint/resume: a retried autopilot job continues from the last
+    # completed cycle instead of re-probing everything. The store is the same
+    # one used for jobs, and checkpoint failure is best-effort (never fails the
+    # job). See ADR-014 follow-up.
+    store = getattr(ctx, "_manager", None)
+    store = getattr(store, "store", None)
+    resume_cp = None
+    raw_cp = store.load_checkpoint(job.job_id) if store is not None else None
+    if raw_cp:
+        try:
+            from wth_ai.hunt.autopilot import AutopilotCheckpoint
+
+            resume_cp = AutopilotCheckpoint.from_dict(raw_cp)
+            ctx.log(
+                f"recovery: checkpoint dimuat cursor={resume_cp.cursor} "
+                f"completed={len(resume_cp.completed_keys())} "
+                f"failed={len(resume_cp.failed_keys())}"
+            )
+        except Exception as exc:  # noqa: BLE001 - corrupt/unsupported => start fresh
+            # Jangan klaim recovery bila checkpoint tidak bisa divalidasi.
+            ctx.log(f"recovery: checkpoint ditolak ({type(exc).__name__}); mulai dari awal")
+            resume_cp = None
+    else:
+        ctx.log("recovery: tidak ada checkpoint")
+
+    # Lease checkpoint: satu `run_id` per EKSEKUSI handler, dan `revision`
+    # yang naik monoton per penulisan. Kalau eksekusi ini bukan pemegang
+    # checkpoint terbaru, CAS menolak dan langkah destruktif berhenti —
+    # lebih baik berhenti dengan alasan jelas daripada menimpa progres
+    # proses lain secara diam-diam.
+    stored_cp = raw_cp or {}
+    raw_rev = stored_cp.get("revision", 0)
+    base_revision = raw_rev if isinstance(raw_rev, int) and not isinstance(raw_rev, bool) else 0
+    stored_run = str(stored_cp.get("run_id", "") or "")
+    lease_id = f"{job.job_id}:{int(time.time() * 1000)}:{id(ctx)}"
+    revision_counter = {"n": base_revision}
+
+    def _next_revision() -> int:
+        # Satu run baru yang mengambil alih harus memakai revision > yang
+        # tersimpan; run yang melanjutkan (run_id sama) cukup naik satu.
+        if stored_run and stored_run != lease_id:
+            revision_counter["n"] = max(revision_counter["n"], base_revision)
+        revision_counter["n"] += 1
+        return revision_counter["n"]
+
+    def _save_cp(cp: Any) -> None:
+        if store is None:
+            # Fail closed untuk langkah destruktif: tanpa store tidak ada
+            # checkpoint yang bisa dipakai merekonsiliasi efek setelah crash.
+            # Langkah non-destruktif tetap berjalan dan degradasinya dilaporkan.
+            raise RuntimeError("job store tidak tersedia; checkpoint tidak dapat ditulis")
+        payload = cp.to_dict()
+        # CAS: kalau proses lain sudah menulis checkpoint yang lebih baru,
+        # snapshot ini basi dan TIDAK boleh menimpanya. Menimpanya berarti
+        # menghapus langkah yang sudah ditemukan proses itu — kehilangan yang
+        # tidak terlihat di log. Kegagalan CAS diperlakukan sama seperti
+        # kegagalan tulis: langkah destruktif diblokir, alasannya dilaporkan.
+        written = store.save_checkpoint_cas(
+            job.job_id, payload, run_id=lease_id, revision=_next_revision(),
+        )
+        if written is None:
+            raise RuntimeError(
+                "checkpoint ditolak: proses lain memegang checkpoint yang lebih baru "
+                f"(run_id={lease_id})"
+            )
+
     report = run_autopilot(
         target=target, run_probe=_probe, state=state,
-        max_cycles=max(1, min(6, cycles)), max_steps_per_cycle=max(1, min(20, steps)),
+        max_cycles=0 if no_limits else max(1, min(6, cycles)),
+        max_steps_per_cycle=0 if no_limits else max(1, min(20, steps)),
         destructive_allowed=state.scope.destructive_allowed,
+        checkpoint=_save_cp,
+        resume=resume_cp,
+        # Worker timeouts/cancellations cannot kill the thread; the engine
+        # polls this at cycle and step boundaries and persists before exiting.
+        should_stop=ctx.should_stop,
+        checkpoint_max_age_seconds=checkpoint_max_age,
     )
+    # Recovery degradation harus terlihat di log job: "tidak ada checkpoint",
+    # "resume ditolak", dan "checkpoint gagal ditulis" adalah tiga keadaan
+    # berbeda, dan status akhir job tidak boleh menyamarkan salah satunya.
+    if report.resume_rejected_reason:
+        ctx.log(f"recovery: resume ditolak — {report.resume_rejected_reason}")
+    if report.resource_budget_changed:
+        ctx.log(f"recovery: {report.resource_budget_changed}")
+    if report.checkpoint_error:
+        ctx.log(f"recovery: checkpoint gagal ditulis — {report.checkpoint_error}")
+    unfinished = [
+        step.title for step in report.steps
+        if not step.ran and step.blocked_reason
+    ]
+    if unfinished:
+        ctx.log(
+            f"autopilot: {len(unfinished)} langkah belum selesai "
+            f"(diblokir/butuh verifikasi)"
+        )
     ctx.progress(90, 100, "autopilot: menyusun usulan berikutnya")
     from wth_ai.hunt.proactive import propose_next_tests
 
     proposals = propose_next_tests(findings=[], request_pairs=state.metadata.get("request_pairs", []))
     ctx.progress(100, 100, "autopilot selesai")
     ctx.log(f"autopilot: {report.ran} langkah dijalankan, {report.changed} perubahan")
+    # `stop_incomplete` means the run ended at a boundary with unexecuted work
+    # (cooperative stop or a destructive step blocked by failed persistence).
+    # Reporting that as `completed` would tell the operator the engagement is
+    # done when it is not.
+    final_status = "stopped" if report.stop_incomplete else "completed"
+    if report.stop_incomplete:
+        ctx.log(f"autopilot: berhenti belum selesai — {report.stopped_reason}")
     return {
         "type": "autopilot",
-        "status": "completed",
+        "status": final_status,
         "target": target,
         "report": report.to_dict(),
         "summary": format_report(report),
         "next_tests": [p.to_dict() for p in proposals],
         "destructive_allowed": state.scope.destructive_allowed,
+        "resumed_from_cycle": getattr(resume_cp, "cursor", 0) if resume_cp else 0,
+        "resume_rejected_reason": report.resume_rejected_reason,
+        "resource_budget_changed": report.resource_budget_changed,
+        "checkpoint_error": report.checkpoint_error,
+        "stopped_reason": report.stopped_reason,
+        "stop_incomplete": report.stop_incomplete,
+        "unfinished_steps": unfinished,
     }
 
 

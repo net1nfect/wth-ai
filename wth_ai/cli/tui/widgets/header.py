@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from textual.widgets import Static
 
-from wth_ai.cli.ui.theme import SPINNER_FRAMES
+from wth_ai.cli.ui.theme import SPINNER_FRAMES, THEME
 
 
 def _bar(pct: int, width: int = 16) -> str:
@@ -65,14 +65,19 @@ class HeaderBar(Static):
 
     def _render_header(self) -> None:
         spin = SPINNER_FRAMES[self._spin_idx % len(SPINNER_FRAMES)] if self._busy else "●"
-        llm_color = "#3fb950" if self._llm == "online" else "#f85149"
-        busy_tag = "[bold #d29922] RUNNING [/]" if self._busy else ""
+        llm_color = THEME["accent"] if self._llm == "online" else THEME["error"]
+        busy_tag = f"[bold {THEME['warn']}] RUNNING [/]" if self._busy else ""
         bar = _bar(self._pct) if self._busy or self._pct > 0 else ""
         phase_bit = f"  [dim]phase[/] [bold]{self._phase}[/]"
         bar_bit = f"  {bar}" if bar else ""
+        mode_tag = (
+            f" [bold {THEME['error']}]NO-LIMITS[/] "
+            if self._mode == "godmode"
+            else f" {self._mode} "
+        )
         self.update(
-            f" {spin} [bold #58a6ff]WTH-AI[/] v{self._version}  {busy_tag}"
-            f"[dim]·[/] {self._mode}  [dim]·[/] target: [bold]{self._target}[/]  "
+            f" {spin} [bold {THEME['brand']}]WTH-AI[/] v{self._version}  {busy_tag}"
+            f"[dim]·[/]{mode_tag}[dim]·[/] target: [bold]{self._target}[/]  "
             f"[dim]·[/] perm: {self._perm}  [dim]·[/] llm: [{llm_color}]{self._llm}[/]"
             f"{phase_bit}{bar_bit} "
         )

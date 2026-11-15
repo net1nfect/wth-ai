@@ -23,6 +23,7 @@ from wth_ai.planner.profiles import get_profile
 from wth_ai.skills.fusion import SkillFusionEngine
 from wth_ai.skills.router import SkillRouter
 from wth_ai.agents.tool_loop import AgentToolLoop
+from wth_ai.context.builder import ContextBudgetReport
 from wth_ai.tools.registry import ToolRegistry
 
 
@@ -82,10 +83,18 @@ class PlannerAgent(BaseLLMAgent):
         pre_hypotheses: list[dict[str, Any]] | None = None,
         chain_suggestions: list[dict[str, Any]] | None = None,
         on_token: Callable[[str], None] | None = None,
+        context_budget: int | None = None,
+        context_report: ContextBudgetReport | None = None,
     ) -> dict[str, Any]:
+        budget = (
+            int(getattr(getattr(self.config, "agent", None), "planner_context_budget", 0) or 0)
+            if context_budget is None else int(context_budget)
+        )
         context = self._build_context(
             state, resume_context, skill_context, learning_context, graph_context,
-            pre_hypotheses, chain_suggestions,
+            context_budget=budget,
+            pre_hypotheses=pre_hypotheses, chain_suggestions=chain_suggestions,
+            report=context_report,
         )
         prompt = f"{context}\n\nUSER REQUEST:\n{user_input}"
 
@@ -259,8 +268,10 @@ class PlannerAgent(BaseLLMAgent):
         skill_context: str = "",
         learning_context: str = "",
         graph_context: str = "",
+        context_budget: int = 0,
         pre_hypotheses: list[dict[str, Any]] | None = None,
         chain_suggestions: list[dict[str, Any]] | None = None,
+        report: ContextBudgetReport | None = None,
     ) -> str:
         recon_meta = state.metadata.get("last_recon", {})
         recon_block = ""
@@ -280,19 +291,11 @@ class PlannerAgent(BaseLLMAgent):
         elif recon_meta and recon_meta.get("api_endpoints", 0) > 5:
             profile_name = "api"
         profile = get_profile(profile_name)
-        parts = [
-            resume_context,
-            learning_context,
-            skill_context,
-            graph_context,
-            profile.extra_context(None),
-            recon_block,
-        ]
-        if pre_hypotheses:
-            parts.append(f"PRE-HYPOTHESES (rule engine): {json.dumps(pre_hypotheses[:15], ensure_ascii=False)}")
-        if chain_suggestions:
-            parts.append(f"CHAIN SUGGESTIONS: {json.dumps(chain_suggestions[:8], ensure_ascii=False)}")
-        parts.extend([
+        # Policy blocks are INVARIANTS: they must survive any budget. The
+        # research/context blobs below are budgeted with priorities so a huge
+        # recon JSON or learning blob can never push scope/permission out of
+        # the model window (ADR-014 follow-up).
+        policy_parts = [
             f"PERMISSION MODE: {state.permission_mode.value}",
             f"PHASE: {state.current_phase.value}",
             f"SCOPE: {json.dumps(state.scope.to_dict(), ensure_ascii=False)}",
@@ -300,15 +303,63 @@ class PlannerAgent(BaseLLMAgent):
             f"ATTACK SURFACE ({len(state.attack_surface)} items, sample): {surface_sample}",
             f"COMPLETED TASKS: {len(state.completed_tasks)}",
             f"PENDING TASKS: {len(state.task_queue)}",
-        ])
+        ]
         if not state.attack_surface and not recon_meta:
-            parts.append(
+            policy_parts.append(
                 "RECON STATUS: belum dijalankan — sarankan user jalankan /recon sebelum planning mendalam"
             )
+        policy_block = "\n".join(p for p in policy_parts if p)
+
+        from wth_ai.context.builder import BudgetedContextBuilder, ContextSection
+
+        sections: list[ContextSection] = [
+            # Pinned policy block: invarian keamanan, tidak pernah dipotong.
+            # Satu mekanisme dengan `pinned` (bukan `invariant=` literal +
+            # salinan aturan di call site).
+            ContextSection("policy", policy_block, priority=1000, pinned=True),
+        ]
+        if resume_context:
+            sections.append(ContextSection("resume", resume_context, priority=90))
+        if learning_context:
+            sections.append(ContextSection("learning", learning_context, priority=80))
+        if skill_context:
+            sections.append(ContextSection("skill", skill_context, priority=70))
+        if graph_context:
+            sections.append(ContextSection("graph", graph_context, priority=60))
+        extra = profile.extra_context(None)
+        if extra:
+            sections.append(ContextSection("profile", extra, priority=50))
+        if recon_block:
+            sections.append(ContextSection("recon", recon_block, priority=55))
+        if pre_hypotheses:
+            sections.append(ContextSection(
+                "pre_hypotheses",
+                f"PRE-HYPOTHESES (rule engine): {json.dumps(pre_hypotheses[:15], ensure_ascii=False)}",
+                priority=45,
+            ))
+        if chain_suggestions:
+            sections.append(ContextSection(
+                "chain_suggestions",
+                f"CHAIN SUGGESTIONS: {json.dumps(chain_suggestions[:8], ensure_ascii=False)}",
+                priority=44,
+            ))
         if state.completed_tasks:
-            last = state.completed_tasks[-1]
-            parts.append(f"LAST EXECUTOR RESULT: {json.dumps(last, ensure_ascii=False)[:2000]}")
-        return "\n".join(p for p in parts if p)
+            sections.append(ContextSection(
+                "last_result",
+                f"LAST EXECUTOR RESULT: {json.dumps(state.completed_tasks[-1], ensure_ascii=False)[:2000]}",
+                priority=40,
+            ))
+
+        # Single budgeting rule: delegate the unbounded case AND the budgeted
+        # case to the same builder instead of keeping a second `<= 0` branch
+        # here with its own ordering logic.
+        rep = report if report is not None else ContextBudgetReport()
+        # Planner must never fail a turn over budget arithmetic: the safety
+        # block is the priority, so an oversized invariant keeps itself and the
+        # body is trimmed (explicitly reported, never silent).
+        return BudgetedContextBuilder().build_from_sections(
+            sections, budget=context_budget, overflow="keep_invariant", report=rep,
+        )
 
     def _tasks_from_json(self, items: list[dict[str, Any]]) -> list[ExecutorTask]:
         tasks: list[ExecutorTask] = []

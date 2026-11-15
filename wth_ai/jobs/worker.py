@@ -43,6 +43,14 @@ class JobContext:
         self._manager = manager
         self._job = job
         self.job_id = job.job_id
+        # Python cannot kill a running thread. When the worker stops waiting
+        # for a job (timeout / handler exception), the only safe mechanism is
+        # a cooperative signal the handler polls at its own boundaries.
+        self._stop_requested = False
+
+    def request_stop(self) -> None:
+        """Ask the handler thread to unwind at its next checkpoint."""
+        self._stop_requested = True
 
     def log(self, line: str) -> None:
         self._manager.store.append_log(self.job_id, line)
@@ -58,6 +66,8 @@ class JobContext:
         )
 
     def should_stop(self) -> bool:
+        if self._stop_requested:
+            return True
         fresh = self._manager.store.get_job(self.job_id)
         return bool(fresh and fresh.status in ("stopped", "cancelled"))
 
@@ -102,7 +112,7 @@ class WorkerEngine:
             pass
 
     def status(self) -> dict[str, Any]:
-        base = {"running": False, "updated_at": None}
+        base: dict[str, Any] = {"running": False, "updated_at": None}
         if self.status_path.exists():
             try:
                 base.update(json.loads(self.status_path.read_text(encoding="utf-8")))
@@ -221,12 +231,17 @@ class WorkerEngine:
         try:
             result = ex.submit(handler, job, ctx).result(timeout=budget)
         except FutureTimeout:
+            # Signal BEFORE releasing the future: the handler may already be
+            # mid-loop, and every additional request it makes after the job is
+            # recorded `failed` is unreconciled side work.
+            ctx.request_stop()
             ex.shutdown(wait=False)
             self.store.fail_job(job.job_id, "timeout")
             self.store.append_log(job.job_id, f"timeout after {budget}s")
             self.bus.emit("job.failed", job_id=job.job_id, data={"reason": "timeout"})
             return {"status": "failed", "job_id": job.job_id, "error": "timeout"}
         except Exception as exc:  # noqa: BLE001 - capture handler failure
+            ctx.request_stop()
             ex.shutdown(wait=False)
             self.store.fail_job(job.job_id, str(exc))
             self.store.append_log(job.job_id, f"exception: {exc}")

@@ -35,7 +35,13 @@ wth-ai = "wth_ai.cli.entry:main"
 include = ["wth_ai*"]
 
 [tool.setuptools.package-data]
-wth_ai = ["tools/manifest.yaml", "recon/recon_rules.yaml"]
+# GAP-012: semua data runtime ikut wheel (pemuat memakai wth_ai.resources).
+# Kunci subpaket dikutip penuh karena titik di TOML = tabel bersarang.
+"wth_ai.prompts" = ["*.txt"]
+"wth_ai.arena" = ["templates/*.yaml", "templates/*.yml", "**/*.txt", "**/*.json"]
+"wth_ai.brain" = ["**/*.yaml", "**/*.yml"]
+"wth_ai.tools" = ["**/*.yaml", "**/*.yml", "**/*.json"]
+"wth_ai.recon" = ["**/*.yaml", "**/*.yml", "**/*.json"]
 
 [tool.pyright]
 include = ["wth_ai", "tests"]

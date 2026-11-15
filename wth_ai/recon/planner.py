@@ -224,7 +224,7 @@ class ReconPlanner:
         spec = self.registry.get(name)
         if spec is None:
             return False, "unknown tool"
-        if is_unrestricted() and os.environ.get("WTH_UNRESTRICTED") == "1":
+        if is_unrestricted():
             if spec.execution_mode in ("manual", "stub"):
                 return False, f"{spec.execution_mode}: not auto-runnable"
             return True, "ok"

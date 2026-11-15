@@ -65,13 +65,49 @@ class JobManager:
         forbidden: tuple[str, ...] = (),
         metadata: dict[str, Any] | None = None,
         permission_mode: PermissionMode | str | None = None,
+        idempotency_key: str | None = None,
     ) -> Job:
+        # Idempotency is checked BEFORE policy/persistence so an accidental
+        # duplicate submit (CLI retry, bot redelivery, crash-resume) returns
+        # the SAME job instead of spawning a second scan. A key reused for a
+        # different intent fails closed rather than silently returning the
+        # wrong job -- dropping a real request is worse than a duplicate.
+        if idempotency_key:
+            existing = self.store.find_by_idempotency_key(idempotency_key)
+            if existing is not None:
+                wanted = JobStore.intent_fingerprint(type, target, profile)
+                have = existing.metadata.get("intent_fingerprint") or JobStore.intent_fingerprint(
+                    existing.type, existing.target, existing.profile,
+                )
+                if wanted == have:
+                    return existing
+                rejected = Job(
+                    type=type, target=target, profile=profile, priority=priority,
+                    created_by=created_by, metadata={**(metadata or {}), "idempotency_key": idempotency_key},
+                )
+                rejected.status = "failed"
+                rejected.error = "idempotency: key reused with different intent"
+                self.store.create_job(rejected)
+                self.store.append_log(
+                    rejected.job_id,
+                    f"REJECTED idempotency conflict: key={idempotency_key} "
+                    f"existing={existing.job_id} type={existing.type} target={existing.target}",
+                )
+                self._audit(
+                    f"idempotency_conflict job={rejected.job_id} key={idempotency_key} "
+                    f"existing={existing.job_id}"
+                )
+                return rejected
+
         allowed, reason = self.policy.evaluate(
             type=type, target=target, forbidden=forbidden, permission_mode=permission_mode,
         )
         meta = dict(metadata or {})
         if requires_approval:
             meta["requires_approval"] = True
+        if idempotency_key:
+            meta["idempotency_key"] = idempotency_key
+            meta["intent_fingerprint"] = JobStore.intent_fingerprint(type, target, profile)
         job = Job(
             type=type, target=target, profile=profile, priority=priority,
             created_by=created_by, metadata=meta,

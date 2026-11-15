@@ -6,10 +6,11 @@ from typing import Any
 
 from wth_ai.agents.subagent.registry import MAX_DEPTH, get_spec
 from wth_ai.agents.subagent.runner import SubagentRunner
+from wth_ai.engagement.mode import is_no_limits
 
 
 def delegate_task(orch: Any, agent_id: str, prompt: str, *, depth: int = 0) -> str:
-    if depth >= MAX_DEPTH:
+    if not is_no_limits(getattr(orch, "config", None)) and depth >= MAX_DEPTH:
         return "ERROR: subagent depth limit reached"
     spec = get_spec(agent_id)
     if not spec:

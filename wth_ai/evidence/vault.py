@@ -40,6 +40,15 @@ class EvidenceVault:
 
         return redact_secrets(text)
 
+    def _redact_obj(self, value: Any) -> Any:
+        if isinstance(value, str):
+            return self.redact(value)
+        if isinstance(value, dict):
+            return {str(k): self._redact_obj(v) for k, v in value.items()}
+        if isinstance(value, (list, tuple)):
+            return [self._redact_obj(v) for v in value]
+        return value
+
     def store(
         self,
         *,
@@ -57,8 +66,8 @@ class EvidenceVault:
             "chain_step": chain_step,
             "graph_node_id": graph_node_id,
             "timestamp": utc_now(),
-            "request": {k: self.redact(str(v)) if isinstance(v, str) else v for k, v in request.items()},
-            "response": {k: self.redact(str(v)) if isinstance(v, str) else v for k, v in response.items()},
+            "request": self._redact_obj(request),
+            "response": self._redact_obj(response),
             "evidence_schema": evidence_schema or {},
         }
         self._items.append(entry)
@@ -73,11 +82,34 @@ class EvidenceVault:
                 finding_id=task_id,
                 chain_step=pair.get("step", f"step_{i}"),
                 request={"method": pair.get("method", "GET"), "url": pair.get("url", "")},
-                response={"status": pair.get("response_status", 0), "body": pair.get("body_snippet", "")},
+                response={
+                    "status": pair.get("response_status", 0),
+                    "body": pair.get("body_snippet", ""),
+                    "headers": pair.get("response_headers", {}),
+                },
                 evidence_schema=schema,
             )
             ids.append(eid)
         return ids
+
+    def pairs_for_finding(self, finding_id: str) -> list[dict[str, Any]]:
+        """Observasi ringkas (baseline/probe) untuk verifikasi deterministik."""
+        out: list[dict[str, Any]] = []
+        for entry in self._items:
+            if entry.get("finding_id") != finding_id:
+                continue
+            req = entry.get("request") or {}
+            resp = entry.get("response") or {}
+            out.append({
+                "role": entry.get("chain_step", ""),
+                "method": req.get("method", "GET"),
+                "url": req.get("url", ""),
+                "response_status": resp.get("status", 0),
+                "body_snippet": resp.get("body", ""),
+                "response_headers": resp.get("headers", {}),
+                "transcript_id": entry.get("id", ""),
+            })
+        return out
 
     def validate_schema(self, finding_id: str, schema: dict[str, Any]) -> tuple[bool, list[str]]:
         """Gate: evidence must match schema requirements."""

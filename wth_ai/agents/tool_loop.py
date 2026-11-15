@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import itertools
 import json
 import threading
 import time
@@ -35,11 +36,14 @@ class AgentToolLoop:
         supervisor_ctx: SupervisorContext | None = None,
         on_token: Callable[[str], None] | None = None,
     ) -> None:
+        from wth_ai.engagement.mode import is_no_limits
+
         self.client = client
         self.bridge = bridge
         self.graph = graph
         self.vault = vault
-        self.max_iters = max_iters
+        # 0 = unlimited. Godmode forces unlimited regardless of caller config.
+        self.max_iters = 0 if is_no_limits() else max_iters
         self.supervisor_ctx = supervisor_ctx
         self.on_token = on_token
         self.grounding = GroundingFirewall()
@@ -68,7 +72,8 @@ class AgentToolLoop:
         tools = tools_for_actor(actor)
         transcripts: list[str] = []
 
-        for iteration in range(self.max_iters):
+        iterations = range(self.max_iters) if self.max_iters > 0 else itertools.count()
+        for iteration in iterations:
             # WU-106: interrupt-check BEFORE the (potentially slow) LLM call
             # -- self.supervisor_ctx.stopped was write-only before this WU
             # (SupervisorAgent.stop()/`/stop` set it, nothing ever read it).
@@ -82,7 +87,7 @@ class AgentToolLoop:
                     "grounded": gr.grounded, "violations": ["stopped_by_user"],
                 }
             role = "planner" if actor == "supervisor" else actor
-            if role not in {"planner", "executor", "verifier", "supervisor", "recon", "code", "reporter", "fallback"}:
+            if role not in {"planner", "executor", "verifier", "supervisor", "recon", "code", "reporter", "fallback", "malware"}:
                 role = "planner"
             data = self._chat_with_tools(role, messages, tools, timeout=timeout)
             msg = data.get("message", {})

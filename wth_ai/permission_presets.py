@@ -20,15 +20,19 @@ capability ceiling, but KEEPS target authorization. That dimension is not
 friction about *how* to test -- it is the record of *what the operator said they
 may test*. Dropping it would let a typo or a stale asset graph point the tool at
 a host nobody authorized, and would leave an engagement with no authorisation
-record at all. `WTH_REQUIRE_AUTHORIZED=0` remains the explicit escape hatch for
-a lab where that record genuinely does not matter.
+record at all.
+
+`godmode` is the explicit exception for an operator who wants zero guardrails:
+it sets the `WTH_NO_LIMITS` master switch, which forces all three dimensions
+(capability max, scope authorization off, approvals off). It is intentionally
+separate from `yolo`, so the old one-word mode keeps its authorization record.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 
-from wth_ai.engagement.mode import set_unrestricted
+from wth_ai.engagement.mode import set_no_limits, set_unrestricted
 from wth_ai.models import PermissionMode
 
 
@@ -40,9 +44,12 @@ class Preset:
     auto_approve: bool
     scope_authorization_required: bool
     description: str
+    no_limits: bool = False
 
     @property
     def summary(self) -> str:
+        if self.no_limits:
+            return "TANPA BATAS: semua tool, semua target, tanpa approval, tanpa limit"
         capability = "max (risk tinggi boleh)" if self.unrestricted else "aman saja"
         approval = "TANPA konfirmasi" if self.auto_approve else "konfirmasi untuk aksi berisiko"
         scope = "wajib authorized" if self.scope_authorization_required else "TIDAK wajib"
@@ -70,6 +77,11 @@ PRESETS: dict[str, Preset] = {
         "yolo", PermissionMode.UNRESTRICTED, True, True, True,
         "Tanpa konfirmasi + capability maksimal. Target tetap harus authorized.",
     ),
+    "godmode": Preset(
+        "godmode", PermissionMode.UNRESTRICTED, True, True, False,
+        "TANPA batas apapun: capability maksimal, target tidak perlu authorized, tanpa approval, tanpa limit iterasi/cycle.",
+        no_limits=True,
+    ),
 }
 
 # Accepted spellings -> canonical preset name.
@@ -78,8 +90,11 @@ ALIASES: dict[str, str] = {
     "read": "read-only", "readonly": "read-only", "read_only": "read-only", "ro": "read-only",
     "ask": "ask", "default": "ask", "safe": "ask", "normal": "ask",
     "auto": "auto", "autopilot": "auto", "accept": "auto", "auto-accept": "auto",
-    "yolo": "yolo", "unrestricted": "yolo", "danger": "yolo", "full": "yolo",
-    "full_lab": "yolo", "full-lab": "yolo", "standard": "ask", "elevated": "auto",
+    "yolo": "yolo", "full": "yolo", "full_lab": "yolo", "full-lab": "yolo",
+    "standard": "ask", "elevated": "auto",
+    "godmode": "godmode", "god": "godmode", "nolimit": "godmode", "no-limit": "godmode", "no-limits": "godmode",
+    "no_limits": "godmode", "nolimits": "godmode", "unbound": "godmode",
+    "blackhat": "godmode", "chaos": "godmode", "unrestricted": "godmode", "danger": "godmode",
 }
 
 
@@ -104,12 +119,14 @@ def apply_preset(name: str, *, permission_mgr=None, config=None) -> Preset:
     """
     preset = resolve_preset(name)
 
-    # Dimension 2 (capability ceiling) and 3 (approval) are process-level.
+    # Master switch first: it forces all three dimensions on. Then write each
+    # dimension explicitly, so switching from godmode back to a normal preset
+    # cannot leave WTH_REQUIRE_AUTHORIZED=0 or WTH_AUTO_APPROVE=1 behind.
+    set_no_limits(preset.no_limits)
     set_unrestricted(preset.unrestricted)
     _set_auto_approve(preset.auto_approve)
+    _set_require_authorized(preset.scope_authorization_required)
 
-    # Dimension 1 (target authorization) is deliberately NOT forced open by any
-    # preset -- see the module docstring. Only an explicit env var lowers it.
     if permission_mgr is not None:
         permission_mgr.set_mode(preset.permission)
     return preset
@@ -121,6 +138,14 @@ def _set_auto_approve(enabled: bool) -> None:
     from wth_ai.engagement.mode import _AUTO_APPROVE_ENV
 
     os.environ[_AUTO_APPROVE_ENV] = "1" if enabled else "0"
+
+
+def _set_require_authorized(required: bool) -> None:
+    import os
+
+    from wth_ai.engagement.mode import _REQUIRE_AUTHORIZED_ENV
+
+    os.environ[_REQUIRE_AUTHORIZED_ENV] = "1" if required else "0"
 
 
 def describe_all() -> str:

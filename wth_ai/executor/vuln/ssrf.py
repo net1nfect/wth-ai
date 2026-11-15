@@ -33,82 +33,9 @@ class SsrfExecutor(BaseVulnExecutor):
     vuln_type = "ssrf"
 
     def execute(self, task: ExecutorTask) -> ExecutorResult:
-        url = task.target
-        if not url.startswith("http"):
-            url = f"https://{url}"
-        parsed = urlparse(url)
-        params = parse_qs(parsed.query)
-        target_param = next((p for p in params if p.lower() in SSRF_MARKERS), None)
-        if not target_param:
-            for p in params:
-                if any(m in p.lower() for m in SSRF_MARKERS):
-                    target_param = p
-                    break
+        from wth_ai.pipeline.executor import execute_pipeline
 
-        if not target_param:
-            return self._result(
-                task, status="success",
-                summary=f"No URL-like param found in {url[:80]}",
-                evidence=[], observations=["Try a URL with ?url= or ?redirect= param"],
-                risk="low",
-            )
-
-        mutated = dict(params)
-        mutated[target_param] = [PROBE_URL]
-        new_query = urlencode(mutated, doseq=True)
-        probe_url = urlunparse(parsed._replace(query=new_query))
-
-        role = self.sessions.role_names()[0] if self.sessions.configured() else "user_a"
-        if not self.sessions.configured():
-            import requests
-            try:
-                r = requests.get(probe_url, timeout=10, allow_redirects=False)
-                resp = {"status": r.status_code, "body": r.text[:5000], "headers": dict(r.headers)}
-            except Exception as exc:
-                resp = {"error": str(exc), "status": 0, "body": ""}
-        else:
-            resp = self.sessions.request(role, "GET", probe_url)
-
-        evidence: list[str] = []
-        observations = [f"status={resp.get('status')}", f"param={target_param}"]
-        request_pairs = [{"method": "GET", "url": probe_url, "response_status": resp.get("status"),
-                          "body_snippet": resp.get("body", "")[:500]}]
-
-        # ── BUKTI dari ISI, bukan dari error ────────────────────────────────
-        # Versi sebelumnya hanya menyimpulkan dari 500 / "connection refused", dan
-        # itu rapuh: aplikasi apa pun yang error pada URL buruk terlihat sama, dan
-        # "connection refused" membuktikan percobaan koneksi, bukan akses.
-        # Sekarang: ambil penanda unik dari halaman loopback milik target, minta
-        # server mengambilnya lewat parameter, lalu cek penanda itu MUNCUL di
-        # respons. Kalau muncul, server benar-benar mengambil resource internal.
-        proof, proof_pair = self._prove_by_content(parsed, params, target_param)
-        if proof:
-            evidence.append(proof)
-            if proof_pair:
-                request_pairs.append(proof_pair)
-
-        body = resp.get("body", "").lower()
-        oob_hit = self._try_oob_callback(task)
-        if oob_hit:
-            evidence.append(f"OOB callback (blind-SSRF): {oob_hit}")
-        # Sinyal sekunder (lemah): tetap dilaporkan, tapi TIDAK sendirian dianggap
-        # bukti kuat -- disebut apa adanya sebagai indikasi.
-        if not proof:
-            if resp.get("status") in {500, 502, 504}:
-                evidence.append(f"Indikasi (lemah): server error saat diminta URL internal via {target_param}")
-            if "connection refused" in body or "127.0.0.1" in body:
-                evidence.append(f"Indikasi (lemah): error jaringan internal terefleksi untuk param {target_param}")
-            if resp.get("headers", {}).get("Location", "").startswith("http://127"):
-                evidence.append("Indikasi (lemah): redirect ke host internal terdeteksi")
-
-        return self._result(
-            task, status="success",
-            summary=f"SSRF probe on {target_param} → {probe_url[:100]}",
-            evidence=evidence,
-            observations=observations,
-            risk="high" if proof else ("medium" if evidence else "low"),
-            request_pairs=request_pairs,
-        )
+        return execute_pipeline(self, task, "ssrf")
 
     def _prove_by_content(self, parsed, params, target_param) -> tuple[str, dict | None]:
         """Ambil halaman loopback target, lalu buktikan server mengambilnya.

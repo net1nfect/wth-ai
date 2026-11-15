@@ -31,8 +31,9 @@ class SubagentRunner:
 
     def run(self, agent_id: str, prompt: str) -> str:
         from wth_ai.agents.subagent.registry import MAX_DEPTH
+        from wth_ai.engagement.mode import is_no_limits
 
-        if self.depth >= MAX_DEPTH:
+        if not is_no_limits() and self.depth >= MAX_DEPTH:
             return f"Subagent depth limit ({MAX_DEPTH}) reached."
         spec = get_spec(agent_id)
         if not spec:
@@ -56,6 +57,15 @@ class SubagentRunner:
             result = handle_recon(self.orch, [target])
         elif agent_id == "reporter":
             result = self.orch._report()
+        elif agent_id == "malware":
+            from wth_ai.config import WTHConfig
+
+            result = self.orch.supervisor.run(
+                f"[malware] {prompt}\nTarget: {target}\n\nSkill context:\n{skill_ctx[:6000]}",
+                self.orch.state,
+                callbacks=self.orch._ui_callbacks() if hasattr(self.orch, "_ui_callbacks") else None,
+                persist_fn=getattr(self.orch, "_persist", None),
+            )
         elif agent_id in {"injection", "xss", "auth", "authz", "ssrf", "infra"}:
             goal = f"[{agent_id}] {prompt}\nTarget: {target}\n\nSkill context:\n{skill_ctx[:6000]}"
             result = self.orch._assess_loop(f"/plan {goal}")

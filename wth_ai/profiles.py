@@ -94,7 +94,7 @@ def builtin_presets() -> dict[str, dict[str, Any]]:
             # tidak lagi bisa di-set preset -- itu keputusan per-engagement manusia,
             # bukan pilihan template. unrestricted di sini HANYA mempengaruhi
             # capability ceiling (dimensi 2), tidak lagi membypass authorization.
-            "safety": {"default_permission": "full_lab", "unrestricted": True},
+            "safety": {"default_permission": "full_lab", "unrestricted": True, "no_limits": True},
             "recon": {"profile": "high-quality", "rate_limit_rps": 0},
             "tuning": {"max_tokens": 8192, "temperature": 0.3},
         },
@@ -106,7 +106,7 @@ def builtin_presets() -> dict[str, dict[str, Any]]:
             # tidak lagi bisa di-set preset -- itu keputusan per-engagement manusia,
             # bukan pilihan template. unrestricted di sini HANYA mempengaruhi
             # capability ceiling (dimensi 2), tidak lagi membypass authorization.
-            "safety": {"default_permission": "full_lab", "unrestricted": True},
+            "safety": {"default_permission": "full_lab", "unrestricted": True, "no_limits": True},
             "recon": {"profile": "high-quality", "rate_limit_rps": 0},
             "tuning": {"max_tokens": 8192, "temperature": 0.4},
         },
@@ -189,10 +189,15 @@ def apply_profile(name: str) -> dict[str, Any]:
         config.safety.unrestricted = bool(safety["unrestricted"])
     if "require_authorized" in safety:
         config.safety.require_authorized = bool(safety["require_authorized"])
+    if "no_limits" in safety:
+        config.safety.no_limits = bool(safety["no_limits"])
     if data.get("engagement_mode"):
         from wth_ai.engagement.mode import set_engagement_mode
         set_engagement_mode(data["engagement_mode"])
-    if config.safety.unrestricted:
+    if config.safety.no_limits:
+        from wth_ai.engagement.mode import set_no_limits
+        set_no_limits(True)
+    elif config.safety.unrestricted:
         from wth_ai.engagement.mode import set_unrestricted
         set_unrestricted(True)
     tuning = data.get("tuning", {})

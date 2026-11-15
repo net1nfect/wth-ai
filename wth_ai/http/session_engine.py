@@ -48,7 +48,9 @@ class SessionEngine:
             self.roles[name] = SessionRole(name=name, username=user.strip(), password=passwd.strip())
 
     def _throttle(self) -> None:
-        if self.rate_limit_rps <= 0:
+        from wth_ai.engagement.mode import is_no_limits
+
+        if self.rate_limit_rps <= 0 or is_no_limits():
             return
         min_gap = 1.0 / self.rate_limit_rps
         elapsed = time.monotonic() - self._last_request

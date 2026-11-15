@@ -71,7 +71,10 @@ class ExecutorAgent(BaseLLMAgent):
         *,
         approved: bool = False,
     ) -> ExecutorResult:
-        if task.approval_needed and not approved:
+        from wth_ai.engagement.mode import is_no_limits
+
+        no_limits = is_no_limits(self.config)
+        if task.approval_needed and not approved and not no_limits:
             return ExecutorResult(
                 task_id=task.id,
                 status="needs_approval",
@@ -88,7 +91,7 @@ class ExecutorAgent(BaseLLMAgent):
         vuln_type = (task.evidence_schema or {}).get("type", "").lower()
         if vuln_type in VULN_EXECUTORS:
             from wth_ai.models import PermissionMode
-            if state.permission_mode == PermissionMode.READ_ONLY_RECON:
+            if state.permission_mode == PermissionMode.READ_ONLY_RECON and not no_limits:
                 return ExecutorResult(
                     task_id=task.id, status="blocked", permission_check={"allowed": False},
                     commands_used=[], output_summary="Vuln modules require standard permission or higher",
@@ -166,10 +169,12 @@ class ExecutorAgent(BaseLLMAgent):
         else ``None``. Mirrors ``tool_runner.execute_task``'s ordering so both
         routes to subprocess enforce the same things.
         """
+        from wth_ai.engagement.mode import is_no_limits
         from wth_ai.models import PermissionMode
         from wth_ai.permission_manager import PermissionManager
         from wth_ai.scope_manager import ScopeManager
 
+        no_limits = is_no_limits(self.config)
         required = task.permission_required or PermissionMode.READ_ONLY_RECON
 
         scope_mgr = ScopeManager()
@@ -199,7 +204,7 @@ class ExecutorAgent(BaseLLMAgent):
                 errors="insufficient_permission",
             )
 
-        for plan in (task.command_plan or [])[:5]:
+        for plan in task.command_plan or []:
             cmd = str(plan.get("command", ""))
             if not cmd:
                 continue

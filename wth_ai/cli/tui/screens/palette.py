@@ -5,43 +5,45 @@ from __future__ import annotations
 from textual.app import ComposeResult
 from textual.containers import Vertical
 from textual.screen import ModalScreen
-from textual.widgets import Input, Static
+from textual.widgets import Static
 
+from wth_ai.cli.tui.widgets.clipboard_input import ClipboardInput
+from wth_ai.cli.ui.theme import THEME
 from wth_ai.platform.registry import get_platform_registry
 
 
 class CommandPaletteScreen(ModalScreen[str | None]):
     """Fuzzy slash command picker (Ctrl+P)."""
 
-    DEFAULT_CSS = """
-    CommandPaletteScreen {
+    DEFAULT_CSS = f"""
+    CommandPaletteScreen {{
         align: center middle;
-    }
-    #palette-box {
+    }}
+    #palette-box {{
         width: 80;
         height: auto;
         max-height: 20;
-        border: solid #58a6ff;
-        background: #161b22;
+        border: solid {THEME['brand']};
+        background: {THEME['surface_alt']};
         padding: 1 2;
-    }
-  #palette-results {
+    }}
+  #palette-results {{
         height: auto;
         max-height: 12;
-    }
+    }}
     """
 
     def compose(self) -> ComposeResult:
         with Vertical(id="palette-box"):
             yield Static("[bold]Command palette[/] — type to filter")
-            yield Input(placeholder="search commands…", id="palette-input")
+            yield ClipboardInput(placeholder="search commands…", id="palette-input")
             yield Static("", id="palette-results")
 
     def on_mount(self) -> None:
-        self.query_one("#palette-input", Input).focus()
+        self.query_one("#palette-input", ClipboardInput).focus()
         self._refresh("")
 
-    def on_input_changed(self, event: Input.Changed) -> None:
+    def on_input_changed(self, event: ClipboardInput.Changed) -> None:
         if event.input.id == "palette-input":
             self._refresh(event.value)
 
@@ -52,7 +54,7 @@ class CommandPaletteScreen(ModalScreen[str | None]):
             lines.append(f"{c.name}  [dim]{c.usage}[/]")
         self.query_one("#palette-results", Static).update("\n".join(lines) or "No matches")
 
-    async def on_input_submitted(self, event: Input.Submitted) -> None:
+    async def on_input_submitted(self, event: ClipboardInput.Submitted) -> None:
         if event.input.id != "palette-input":
             return
         q = event.value.strip()

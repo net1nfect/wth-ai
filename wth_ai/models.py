@@ -305,6 +305,11 @@ class ExecutorTask:
     forbidden_actions: list[str] = field(default_factory=list)
     command_plan: list[dict[str, str]] = field(default_factory=list)
     expected_evidence: list[str] = field(default_factory=list)
+    #: Request eksplisit untuk pipeline (opsional; default kompatibel dengan
+    #: task lama yang hanya membawa URL GET di `target`).
+    method: str = "GET"
+    headers: dict[str, str] = field(default_factory=dict)
+    body: str = ""
     evidence_schema: dict[str, Any] = field(default_factory=dict)
     stop_condition: str = ""
     success_criteria: str = ""
@@ -336,6 +341,9 @@ class ExecutorTask:
             forbidden_actions=data.get("forbidden_actions", []),
             command_plan=data.get("command_plan", []),
             expected_evidence=data.get("expected_evidence", []),
+            method=str(data.get("method") or "GET").upper(),
+            headers=dict(data.get("headers") or {}),
+            body=str(data.get("body") or ""),
             evidence_schema=evidence_schema,
             stop_condition=data.get("stop_condition", ""),
             success_criteria=data.get("success_criteria", ""),
@@ -469,6 +477,12 @@ class Finding:
     root_cause: str = ""
     remediation: str = ""
     cwe: str = ""
+    #: Kelas bug (sqli/idor/xss/...) -- dipakai verifier deterministik tanpa
+    #: menebak dari judul. Kosong = inferensi lama tetap berlaku.
+    vuln_class: str = ""
+    #: Task executor asal finding; kunci EvidenceVault untuk mengambil pasangan
+    #: baseline/probe yang bisa diverifikasi tanpa LLM.
+    task_id: str = ""
     created_at: str = field(default_factory=utc_now)
     updated_at: str = field(default_factory=utc_now)
 
@@ -486,6 +500,8 @@ class Finding:
             "root_cause": self.root_cause,
             "remediation": self.remediation,
             "cwe": self.cwe,
+            "vuln_class": self.vuln_class,
+            "task_id": self.task_id,
             "created_at": self.created_at,
             "updated_at": self.updated_at,
         }

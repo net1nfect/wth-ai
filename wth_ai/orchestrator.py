@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import threading
 from typing import Any, Callable
 
 from wth_ai.agents.chat import ChatAgent
@@ -90,6 +91,7 @@ class WTHOrchestrator:
         self.skill_router = SkillFusionEngine(self.skills, self.config)
         self.tool_runner = ToolRunner(self.config, self.permission_mgr, self.scope_mgr)
         self.state = SessionState()
+        self._engagement_lock = threading.Lock()
         self._approved_tasks: set[str] = set()
         self.tool_registry = ToolRegistry()
         self.manifest_runner = ManifestToolRunner(self.config, self.permission_mgr, self.scope_mgr, self.tool_registry)
@@ -330,14 +332,214 @@ class WTHOrchestrator:
             # supaya gate destruktif yang memutuskan, bukan autopilot.
             return bridge.dispatch_tool("http_probe", probe, actor="supervisor", approved=False)
 
+        from wth_ai.engagement.mode import is_no_limits
+        from wth_ai.state import EngagementState
+
+        engagement = getattr(self, "_engagement_state", None)
+        if engagement is None or engagement.engagement_id != self.state.session_id:
+            engagement = EngagementState(target=target, engagement_id=self.state.session_id)
+            self._engagement_state = engagement
+        engagement.target = target
+
+        no_limits = is_no_limits(self.config)
         report = run_autopilot(
             target=target, run_probe=_probe, state=self.state,
-            max_cycles=2, max_steps_per_cycle=steps,
-            destructive_allowed=bool(getattr(self.state.scope, "destructive_allowed", False)),
+            max_cycles=0 if no_limits else 2,
+            max_steps_per_cycle=0 if no_limits else steps,
+            destructive_allowed=no_limits or bool(getattr(self.state.scope, "destructive_allowed", False)),
             learn=self._learn_from_autopilot_step,
+            adaptive=True,
+            adaptive_moves=4 if no_limits else 3,
+            adaptive_budget=0 if no_limits else 12,
+            engagement=engagement,
         )
+        try:
+            engagement.save()
+            if report.ran:
+                report.stopped_reason += f" · state={engagement.engagement_id} probes={engagement.metrics()['probes']}"
+        except Exception:  # noqa: BLE001
+            pass
         self._persist()
         return format_report(report)
+
+    def _handle_adaptive(self, args: list[str]) -> str:
+        """`/adaptive [url|host] [--method M] [--rounds N] [--moves N]` — bypass adaptif.
+
+        Alur nyata: request baseline → klasifikasi sinyal → katalog mutasi →
+        eksekusi lewat http_probe (audit/transcript yang sama) → ukur perbaikan →
+        simpan strategi yang menang ke memori target.
+        """
+        from wth_ai.adaptive import AdaptiveEngine, HttpRequest, format_report
+        from wth_ai.engagement.mode import is_no_limits
+        from wth_ai.recon.http import normalize_url
+
+        target = self.state.scope.target or ""
+        url = ""
+        method = "GET"
+        body: str | None = None
+        headers: dict[str, str] = {}
+        rounds = 3
+        moves = 8
+        explore = False
+        rest = list(args)
+        i = 0
+        while i < len(rest):
+            item = rest[i]
+            if item in {"--url", "--method", "--body", "--rounds", "--moves", "--header"}:
+                if i + 1 >= len(rest):
+                    return f"Opsi {item} butuh nilai."
+                val = rest[i + 1]
+                if item == "--url":
+                    url = val
+                elif item == "--method":
+                    method = val.upper()
+                elif item == "--body":
+                    body = val
+                elif item == "--rounds":
+                    try:
+                        rounds = int(val)
+                    except ValueError:
+                        return "--rounds butuh angka."
+                elif item == "--moves":
+                    try:
+                        moves = int(val)
+                    except ValueError:
+                        return "--moves butuh angka."
+                elif item == "--header":
+                    if ":" not in val:
+                        return "--header butuh format Nama: nilai"
+                    k, v = val.split(":", 1)
+                    headers[k.strip()] = v.strip()
+                i += 2
+                continue
+            if item == "--explore":
+                explore = True
+            elif not url:
+                url = item
+            i += 1
+
+        if not target and not url:
+            return "Set target dulu: `/target <host>` atau `/adaptive https://host/path`."
+        if not url:
+            url = normalize_url(target)
+        elif "://" not in url:
+            url = normalize_url(url)
+        if not target:
+            target = url.split("://", 1)[-1].split("/", 1)[0]
+
+        bridge = getattr(self, "terminal", None)
+        if bridge is None:
+            return "Bridge terminal tidak tersedia; jalankan lewat sesi interaktif."
+
+        def _probe(probe: dict[str, Any]) -> Any:
+            return bridge.dispatch_tool("http_probe", probe, actor="supervisor", approved=False)
+
+        def _progress(event: str, payload: dict[str, Any]) -> None:
+            bus = getattr(self, "_ui_bus", None)
+            if bus is not None:
+                try:
+                    bus.emit(event, **payload)
+                except Exception:
+                    pass
+
+        no_limits = is_no_limits(self.config)
+        engine = AdaptiveEngine(target)
+        report = engine.run(
+            HttpRequest(method=method, url=url, headers=headers, body=body),
+            _probe,
+            max_rounds=0 if (no_limits and rounds <= 0) else max(1, rounds),
+            moves_per_round=moves if moves > 0 else 12,
+            explore=explore,
+            progress=_progress,
+        )
+        self.state.metadata["adaptive_last"] = report.to_dict()
+        self._persist()
+        bus = getattr(self, "_ui_bus", None)
+        if bus is not None:
+            try:
+                bus.emit("adaptive_done", **report.to_dict())
+            except Exception:
+                pass
+        return format_report(report)
+
+    def _handle_autonomy(self, args: list[str]) -> str:
+        """`/autonomy start|stop|status|add|rm|run` — daemon proaktif.
+
+        Daemon menjalankan siklus autopilot+adaptive untuk tiap target pada
+        interval tetap; state/PID/log ada di `$WTH_HOME/runtime/`.
+        """
+        from wth_ai.continuous import control, format_status
+
+        sub = args[0].lower() if args else "status"
+        rest = args[1:]
+        interval = 300
+        steps = 6
+        cycles = 1
+        no_limits = True
+        targets: list[str] = []
+        i = 0
+        while i < len(rest):
+            item = rest[i]
+            if item in {"--interval", "--steps", "--cycles"}:
+                if i + 1 >= len(rest):
+                    return f"Opsi {item} butuh nilai."
+                try:
+                    val = int(rest[i + 1])
+                except ValueError:
+                    return f"Opsi {item} butuh angka."
+                if item == "--interval":
+                    interval = val
+                elif item == "--steps":
+                    steps = val
+                else:
+                    cycles = val
+                i += 2
+                continue
+            if item == "--safe":
+                no_limits = False
+            elif item.startswith("--"):
+                return f"Opsi tidak dikenal: {item}"
+            else:
+                targets.append(item)
+            i += 1
+
+        try:
+            if sub in {"status", "show"}:
+                return format_status(control.status())
+            if sub == "add":
+                if not targets:
+                    return "Usage: /autonomy add <host> [host...]"
+                state = control.add_targets(targets)
+                return format_status(state)
+            if sub in {"rm", "remove"}:
+                if not targets:
+                    return "Usage: /autonomy rm <host> [host...]"
+                state = control.remove_targets(targets)
+                return format_status(state)
+            if sub == "start":
+                if not targets and not control.status().targets and self.state.scope.target:
+                    targets = [self.state.scope.target]
+                state = control.start(targets or None, interval=interval, steps=steps,
+                                      cycles=cycles, no_limits=no_limits)
+                return format_status(state)
+            if sub == "stop":
+                return format_status(control.stop())
+            if sub in {"run", "once"}:
+                from wth_ai.continuous.runner import run_cycle, summarize
+
+                state = control.status()
+                chosen = targets or state.targets
+                if not chosen and self.state.scope.target:
+                    chosen = [self.state.scope.target]
+                if not chosen:
+                    return "Belum ada target. `/autonomy add <host>` dulu."
+                summary = run_cycle(self, chosen, steps=steps, cycles=cycles, adaptive=True)
+                return f"## Autonomy run — sekali\n{summarize(summary)}"
+            return "Usage: /autonomy [status|start|stop|add|rm|run] [--interval N] [--steps N] [--safe]"
+        except ValueError as exc:
+            return f"AUTONOMY GAGAL: {exc}"
+        except Exception as exc:  # noqa: BLE001
+            return f"AUTONOMY GAGAL: {type(exc).__name__}: {exc}"
 
     def _handle_payloads(self, args: list[str]) -> str:
         """`/payloads [kelas] [--destructive]` — katalog payload berbatas."""
@@ -374,17 +576,119 @@ class WTHOrchestrator:
                 lines.append(f"padanan berbatas: {payload.bounded_alternative}")
             return "\n".join(lines)
 
-        destructive_allowed = bool(getattr(self.state.scope, "destructive_allowed", False))
+        from wth_ai.engagement.mode import is_no_limits
+
+        no_limits = is_no_limits(self.config)
+        destructive_allowed = no_limits or bool(getattr(self.state.scope, "destructive_allowed", False))
         items = filter_payloads(
             None,
-            max_blast="single-object" if not destructive_allowed else "single-object",
+            max_blast="mass" if no_limits else "single-object",
             include_destructive=destructive_allowed,
+            auto_only=not no_limits,
         )
         header = (
-            f"mode destruktif: {'AKTIF (opt-in)' if destructive_allowed else 'TERTUTUP'}"
-            " — `/scope set destructive=yes` untuk membukanya"
+            f"mode destruktif: {'NO-LIMITS (semua payload)' if no_limits else ('AKTIF (opt-in)' if destructive_allowed else 'TERTUTUP')}"
+            + ("" if no_limits else " — `/scope set destructive=yes` untuk membukanya")
         )
         return header + "\n\n" + format_payloads(items)
+
+    def _handle_malware(self, args: list[str]) -> str:
+        """`/malware forge ...` · `/malware analyze <path>` — malware forge."""
+        from wth_ai.malware import LANGS, KINDS, OSES, ForgeRequest, analyze, forge, format_report, format_result
+
+        sub = args[0].lower() if args else "help"
+        if sub in {"help", "-h", "--help"}:
+            return (
+                "Pakai:\n"
+                "  /malware forge <kind> [--lang c|powershell|python|bash] [--os windows|linux|macos]\n"
+                "                  [--arch x64|x86|arm64] [--c2 host:port|url] [--features amsi,etw,antidebug,sleepmask]\n"
+                "                  [--payload linux/x64/exec] [--opt CMD=/bin/echo hi] [--no-build]\n"
+                "  /malware analyze <path> · /malware encode <file|hex> [--key 0x5A] [--format ...]\n"
+                f"kind: {', '.join(KINDS)} · language: {', '.join(LANGS)} · os: {', '.join(OSES)}"
+            )
+        if sub == "analyze":
+            if len(args) < 2:
+                return "Usage: /malware analyze <path>"
+            return format_report(analyze(args[1]))
+        if sub == "encode":
+            from wth_ai.malware.encoder import encode
+            if len(args) < 2:
+                return "Usage: /malware encode <file|hex> [--key 0x5A] [--format c|python|powershell|hex|base64]"
+            key, fmt = 0x5A, "c"
+            rest = args[2:]
+            for i, item in enumerate(rest):
+                if item == "--key" and i + 1 < len(rest):
+                    key = int(rest[i + 1], 0)
+                elif item == "--format" and i + 1 < len(rest):
+                    fmt = rest[i + 1]
+            try:
+                return encode(args[1], key=key, fmt=fmt)
+            except (ValueError, OSError) as exc:
+                return f"ENCODE GAGAL: {exc}"
+        if sub != "forge":
+            return self._handle_malware(["help"])
+
+        opts: dict[str, object] = {"language": "c", "target_os": "windows", "arch": "x64", "features": ["amsi", "etw"], "build": True}
+        kind = ""
+        rest = args[1:]
+        i = 0
+        while i < len(rest):
+            item = rest[i]
+            if item.startswith("--"):
+                key = item[2:]
+                if key == "no-build":
+                    opts["build"] = False
+                    i += 1
+                    continue
+                if i + 1 >= len(rest):
+                    return f"Opsi {item} butuh nilai."
+                val = rest[i + 1]
+                if key == "lang":
+                    opts["language"] = val
+                elif key == "os":
+                    opts["target_os"] = val
+                elif key == "arch":
+                    opts["arch"] = val
+                elif key == "c2":
+                    opts["c2"] = val
+                elif key == "features":
+                    opts["features"] = [f for f in val.split(",") if f]
+                elif key == "name":
+                    opts["name"] = val
+                elif key == "payload":
+                    opts["payload"] = val
+                elif key == "opt":
+                    if "=" not in val:
+                        return "Opsi --opt butuh KEY=VALUE."
+                    k, v = val.split("=", 1)
+                    opts.setdefault("opts", {})[k] = v
+                else:
+                    return f"Opsi tidak dikenal: {item}"
+                i += 2
+                continue
+            if not kind:
+                kind = item
+            i += 1
+        if not kind:
+            return "Usage: /malware forge <kind> [opsi] — lihat /malware help"
+        try:
+            req = ForgeRequest(kind=kind, **opts)  # type: ignore[arg-type]
+        except (TypeError, ValueError) as exc:
+            return f"FORGE GAGAL: {exc}"
+        out = forge(req, build=bool(opts["build"]))
+        self.state.metadata["last_malware"] = str(out.output_dir)
+        self._persist()
+        report = format_result(out)
+        meta = out.output_dir / "metadata.json"
+        if meta.exists():
+            try:
+                import json as _json
+
+                for item in (_json.loads(meta.read_text(encoding="utf-8")).get("analysis") or []):
+                    report += "\n\n" + format_report(item)
+            except Exception:  # noqa: BLE001
+                pass
+        return report
 
     def _handle_next(self, args: list[str]) -> str:
         """`/next` — langkah uji berikutnya yang disusun dari temuan + sinyal respons."""
@@ -622,22 +926,35 @@ class WTHOrchestrator:
             self._sync_state_from_db()
             return target_hint
 
+        attachments = self._take_attachments()
+
         # Hybrid routing: chat vs security-assess based on intent.
         agent_mode = getattr(getattr(self.config, "agent", None), "mode", "hybrid")
         # WU-119: session-aware fallback -- follow-up tanpa keyword eksplisit
         # tapi di tengah engagement aktif (target+phase != INTAKE) -> "assess".
         intent = self.skill_router.detect_intent(text, session_state=self.state)
         if agent_mode in {"hybrid", "chat"} and intent == "chat":
-            resp = self._chat_turn(text)
+            resp = self._chat_turn(text, attachments=attachments)
             self._index_fts(text, resp)
             return resp
         if agent_mode == "chat":
-            resp = self._chat_turn(text)
+            resp = self._chat_turn(text, attachments=attachments)
             self._index_fts(text, resp)
             return resp
-        resp = self._supervisor_turn(text)
+        resp = self._supervisor_turn(text, attachments=attachments)
         self._index_fts(text, resp)
         return resp
+
+    def _take_attachments(self) -> list[dict[str, object]]:
+        """Ambil lampiran yang menunggu; slash command tidak menghabiskannya."""
+        metadata = getattr(self.state, "metadata", None)
+        if not isinstance(metadata, dict):
+            return []
+        pending = metadata.pop("pending_attachments", [])
+        if not pending:
+            return []
+        self._persist()
+        return [dict(item) for item in pending if isinstance(item, dict)]
 
     def _index_fts(self, user_text: str, response: str) -> None:
         try:
@@ -646,11 +963,11 @@ class WTHOrchestrator:
         except Exception:
             pass
 
-    def _chat_turn(self, text: str) -> str:
+    def _chat_turn(self, text: str, *, attachments: list[dict[str, object]] | None = None) -> str:
         from wth_ai.llm.errors import LLMError, LLMUnavailableError
         try:
             self.state.conversation.append({"role": "user", "content": text})
-            result = self.chat.respond(text, self.state)
+            result = self.chat.respond(text, self.state, attachments=attachments)
             reply = (result or {}).get("raw") or ""
             self.state.conversation.append({"role": "assistant", "content": reply[:8000]})
             self._persist()
@@ -660,9 +977,14 @@ class WTHOrchestrator:
         except LLMError as exc:
             return f"Chat model error: {exc}"
 
-    def _supervisor_turn(self, text: str) -> str:
+    def _supervisor_turn(self, text: str, *, attachments: list[dict[str, object]] | None = None) -> str:
         from wth_ai.llm.errors import LLMError, LLMUnavailableError
         try:
+            if attachments:
+                from wth_ai.attachments import attachment_manifest
+                manifest = attachment_manifest(attachments)
+                if manifest:
+                    text = text + "\n\n" + manifest
             result = self.supervisor.run(
                 text, self.state,
                 callbacks=self._ui_callbacks(),
@@ -731,7 +1053,8 @@ class WTHOrchestrator:
         if err:
             return err
         if user_input.strip().lower().startswith("/plan") and not self.state.attack_surface:
-            if not self.state.metadata.get("last_recon"):
+            from wth_ai.engagement.mode import is_no_limits
+            if not self.state.metadata.get("last_recon") and not is_no_limits(self.config):
                 return (
                     "Attack surface kosong. Jalankan `/recon` dulu untuk memetakan target, "
                     "atau set scope: `/scope set target=domain.com authorized=yes`"
@@ -1065,9 +1388,9 @@ class WTHOrchestrator:
     def _handle_permission(self, args: list[str]) -> str:
         """`/permission [mode]` — one word sets the whole safety policy.
 
-        Accepts the presets (`plan`, `read-only`, `ask`, `auto`, `yolo`) and the
-        raw `PermissionMode` values via aliases, so muscle memory from the old
-        spelling keeps working.
+        Accepts the presets (`plan`, `read-only`, `ask`, `auto`, `yolo`, `godmode`)
+        and the raw `PermissionMode` values via aliases, so muscle memory from the
+        old spelling keeps working.
         """
         from wth_ai.permission_presets import apply_preset, describe_all
 
@@ -1307,7 +1630,10 @@ class WTHOrchestrator:
                 max_workers=3,
                 rate_limit_rps=self.scope_mgr.scope.rate_limit_rps,
             )
-            tasks = [ExecutorTask.from_dict(t) for t in self.state.task_queue[:6]]
+            from wth_ai.engagement.mode import is_no_limits
+
+            queue = self.state.task_queue if is_no_limits(self.config) else self.state.task_queue[:6]
+            tasks = [ExecutorTask.from_dict(t) for t in queue]
 
             def _run(task: ExecutorTask) -> ExecutorResult:
                 approved = task.id in self._approved_tasks or self.approval_gate.is_approved_for_task(task.id)
@@ -1315,6 +1641,7 @@ class WTHOrchestrator:
                 pairs = self.state.metadata.pop("request_pairs", [])
                 if pairs:
                     self.evidence_vault.store_from_executor(task.id, pairs, task.evidence_schema)
+                    self.record_engagement_pairs(pairs)
                 return r
 
             results = pool.run_all_sync(tasks, _run, approved_ids=self._approved_tasks)
@@ -1340,6 +1667,7 @@ class WTHOrchestrator:
         pairs = self.state.metadata.pop("request_pairs", [])
         if pairs:
             self.evidence_vault.store_from_executor(task.id, pairs, task.evidence_schema)
+            self.record_engagement_pairs(pairs)
         self.state.completed_tasks.append(result.to_dict())
         self.state.task_queue = [t for t in self.state.task_queue if t.get("id") != task.id]
         if result.status == "success" and result.output_summary:
@@ -1367,13 +1695,18 @@ class WTHOrchestrator:
 
         outputs = []
         for finding in findings[:5]:
-            import os
-            if self.client.available():
-                v = self.verifier.verify(finding, self.state)
-            elif os.environ.get("WTH_TEST_MODE") == "1":
-                v = self.verifier.verify_offline(finding)
-            else:
-                return "LLM tidak tersedia untuk verifikasi. Jalankan `wth-ai setup`."
+            pairs = []
+            key = str(getattr(finding, "task_id", "") or finding.id)
+            getter = getattr(self.evidence_vault, "pairs_for_finding", None)
+            if callable(getter):
+                pairs = getter(key)
+            v = self.verifier.verify_with_evidence(
+                finding,
+                self.state,
+                pairs=pairs,
+                vuln_class=str(getattr(finding, "vuln_class", "") or "") or None,
+                evidence_vault=self.evidence_vault,
+            )
             verdict = v.get("verdict", "needs_more_evidence")
             if verdict == "verified":
                 self.findings_db.update_finding_state(finding.id, FindingState.VERIFIED)
@@ -1416,6 +1749,7 @@ class WTHOrchestrator:
             "permission_required": task.permission_required.value,
             "allowed_tools": task.allowed_tools, "forbidden_actions": task.forbidden_actions,
             "command_plan": task.command_plan, "expected_evidence": task.expected_evidence,
+            "method": task.method, "headers": task.headers, "body": task.body,
             "stop_condition": task.stop_condition, "success_criteria": task.success_criteria,
             "approval_needed": task.approval_needed,
             "module": task.module,
@@ -1426,6 +1760,31 @@ class WTHOrchestrator:
     def _sync_state_from_db(self) -> None:
         self.state.findings = [f.to_dict() for f in self.findings_db.findings.values()]
         self.state.hypotheses = [h.to_dict() for h in self.findings_db.hypotheses.values()]
+
+    def engagement_state(self):
+        """EngagementState per sesi (dibuat malas; target mengikuti scope)."""
+        from wth_ai.state import EngagementState
+
+        target = str(getattr(self.state.scope, "target", "") or "")
+        engagement = getattr(self, "_engagement_state", None)
+        if engagement is None or engagement.engagement_id != self.state.session_id:
+            engagement = EngagementState(target=target, engagement_id=self.state.session_id)
+            self._engagement_state = engagement
+        if target:
+            engagement.target = target
+        return engagement
+
+    def record_engagement_pairs(self, pairs: list[dict[str, Any]], *, source: str = "executor") -> None:
+        """Ubah pasangan executor menjadi observasi state (delta, bukan dump body)."""
+        if not pairs:
+            return
+        try:
+            with self._engagement_lock:
+                engagement = self.engagement_state()
+                engagement.observe_pairs(pairs, source=source)
+                engagement.save()
+        except Exception:  # noqa: BLE001 - state tidak boleh mematikan eksekusi
+            pass
 
     def _persist(self) -> None:
         if self.config.session.auto_save:

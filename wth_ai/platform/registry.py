@@ -59,6 +59,7 @@ SUBAGENT_SPECS: tuple[dict[str, str], ...] = (
     {"id": "infra", "desc": "Misconfig / info disclosure"},
     {"id": "ctf", "desc": "CTF challenge solver"},
     {"id": "reporter", "desc": "Final report builder"},
+    {"id": "malware", "desc": "Malware/implant generation + analysis"},
 )
 
 
@@ -218,7 +219,10 @@ def _default_commands() -> list[PlatformCommand]:
         PlatformCommand("/next", "/next", "Langkah uji berikutnya yang disusun AI", "hunt"),
         PlatformCommand("/jobs", "/jobs [target]", "Job store: rekam jejak recon/executor", "meta"),
         PlatformCommand("/payloads", "/payloads [id|gen <kelas> <tujuan>]", "Katalog payload (berbatas)", "hunt"),
+        PlatformCommand("/malware", "/malware [forge <kind>|analyze <path>]", "Forge malware/implant/loader + analisis", "tools"),
         PlatformCommand("/autopilot", "/autopilot [langkah]", "Jalankan langkah uji berbatas otonom", "hunt"),
+        PlatformCommand("/adaptive", "/adaptive [url|host] [--rounds N] [--moves N]", "Bypass adaptif: sinyal → mutasi → ukur → belajar", "hunt"),
+        PlatformCommand("/autonomy", "/autonomy [start|stop|status|add|rm|run]", "Daemon proaktif: target, interval, siklus otonom", "hunt"),
         PlatformCommand("/eval act", "/eval act", "Jalankan aksi self-improvement", "meta"),
         PlatformCommand("/eval", "/eval [run|history|act]", "Pengukuran self-improvement", "meta"),
         PlatformCommand("/research", "/research [search|fetch|notes] <q>", "Riset publik (bukan bukti target)", "intel"),
@@ -229,7 +233,9 @@ def _default_commands() -> list[PlatformCommand]:
         PlatformCommand("/sessions", "/sessions", "List saved sessions", "session"),
         PlatformCommand("/new-session", "/new-session", "Start new session", "session"),
         PlatformCommand("/resume", "/resume [id]", "Resume session", "session"),
-        PlatformCommand("/target", "/target [url|domain|clear|show]", "Set assessment target", "setup"),
+        PlatformCommand("/target", "/target [url|domain|wildcard|clear|show]", "Set assessment target + infer scope", "setup"),
+        PlatformCommand("/authorize", "/authorize [off]", "Konfirmasi izin target aktif (satu kata)", "setup"),
+        PlatformCommand("/attach", "/attach [path...|list|clear]", "Lampirkan file/gambar ke pesan berikutnya", "setup"),
         PlatformCommand("/scope", "/scope [set key=val ...]", "Full scope (advanced)", "setup", ("/scope set",)),
         PlatformCommand("/permission", "/permission [read_only|standard|elevated|full_lab|unrestricted]", "Permission mode", "setup"),
         PlatformCommand("/effort", "/effort [low|medium|high|xhigh|ultra]", "Budget generasi LLM (max_tokens + timeout)", "setup"),

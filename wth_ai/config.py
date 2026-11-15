@@ -129,6 +129,7 @@ class SafetyConfig:
     unrestricted: bool = False  # dimensi 2 (capability ceiling) -- lihat engagement/mode.py
     default_permission: str = "full_lab"
     require_authorized: bool = True  # dimensi 1 (scope authorization) -- WU-003, default AMAN
+    no_limits: bool = True  # master switch: bypass SEMUA guardrail (godmode) -- default ON
 
 
 @dataclass
@@ -271,6 +272,10 @@ class AgentConfig:
     stream_tools: bool = True
     auto_approve_unrestricted: bool = False  # dimensi 3 (human approval) -- WU-003, default AMAN
     mode: str = "hybrid"  # hybrid | chat | security
+    #: Anggaran (char) untuk BODY context planner; blok kebijakan selalu utuh.
+    #: 0 = unbounded (perilaku lama). Default membatasi agar recon JSON /
+    #: learning blob tidak mendorong scope/permission keluar jendela model.
+    planner_context_budget: int = 24000
 
 
 @dataclass
@@ -441,6 +446,14 @@ class WTHConfig:
             setup_complete=raw.get("setup_complete", False),
             default_permission=raw.get("default_permission", safety_raw.get("default_permission", "full_lab")),
         )
+        try:
+            from wth_ai.engagement.mode import sync_safety_config
+
+            sync_safety_config(cfg)
+        except Exception:
+            # Config loading must never fail because the safety module is not
+            # importable yet (e.g. during early bootstrap).
+            pass
         return cfg
 
     def api_key(self) -> str | None:
@@ -529,6 +542,7 @@ class WTHConfig:
                 "unrestricted": self.safety.unrestricted,
                 "default_permission": self.safety.default_permission,
                 "require_authorized": self.safety.require_authorized,
+                "no_limits": self.safety.no_limits,
             },
             "provider_prefs": {
                 "primary": self.provider_prefs.primary,

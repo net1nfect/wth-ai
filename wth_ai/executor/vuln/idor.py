@@ -24,12 +24,12 @@ class IdorExecutor(BaseVulnExecutor):
         object_id = path_ids[-1] if path_ids else (params[id_param][0] if id_param else "")
 
         if len(roles) < 2:
-            # Tidak lagi `blocked`. IDOR tanpa akun uji adalah kasus yang paling umum
-            # di dunia nyata (endpoint terbuka yang membocorkan objek milik orang
-            # lain), dan menghentikan pengujian di sini membuat operator kehilangan
-            # temuan yang justru paling mudah dibuktikan. Yang dilakukan: ambil objek
-            # di URL, tukar id ke tetangganya, bandingkan respons.
-            return self._probe_object_swap(task, url, parsed, params, id_param, object_id)
+            # Tanpa dua akun, gunakan pipeline object-swap: baseline objek asli,
+            # probe objek tetangga, verdict deterministik. Multi-role tetap di
+            # bawah karena butuh dua SessionEngine yang berbeda.
+            from wth_ai.pipeline.executor import execute_pipeline
+
+            return execute_pipeline(self, task, "idor")
 
         user_a, user_b = roles[0], roles[1]
         baseline = self.sessions.request(user_a, "GET", url)

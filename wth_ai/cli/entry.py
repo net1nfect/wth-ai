@@ -1,4 +1,11 @@
-"""Global entry point — pip install wth-ai / PyInstaller binary."""
+"""Global entry point — pip install wth-ai / PyInstaller binary.
+
+GAP-012 (WU-208 / ARCH-02): implementasi CLI kini tinggal di
+`wth_ai/main_cli.py` sehingga ikut wheel. Entry point ini:
+- dari source checkout: menjalankan `wth-main.py` di root (perilaku lama);
+- dari wheel terinstall: menjalankan `wth_ai/main_cli.py` langsung;
+- tidak pernah `chdir` ke site-packages.
+"""
 
 from __future__ import annotations
 
@@ -7,10 +14,16 @@ import sys
 from pathlib import Path
 
 
-def _resolve_root() -> Path:
+def _resolve_root() -> Path | None:
+    """Root source checkout, atau None bila berjalan dari instalasi wheel."""
     if getattr(sys, "frozen", False):
         return Path(sys._MEIPASS)  # type: ignore[attr-defined]
-    return Path(__file__).resolve().parents[2]
+    candidate = Path(__file__).resolve().parents[2]
+    # Jangan salah kira site-packages sebagai source root: hanya checkout yang
+    # punya launcher root + package wth_ai di direktori yang sama.
+    if (candidate / "wth-main.py").is_file() and (candidate / "wth_ai").is_dir():
+        return candidate
+    return None
 
 
 def _resolve_home() -> Path:
@@ -26,38 +39,36 @@ def _resolve_home() -> Path:
     return home
 
 
-def _bootstrap() -> tuple[Path, Path]:
+def _bootstrap() -> tuple[Path | None, Path]:
     root = _resolve_root()
     home = _resolve_home()
     os.environ.setdefault("WTH_HOME", str(home))
-    os.chdir(home if getattr(sys, "frozen", False) else root)
-    if str(root) not in sys.path:
-        sys.path.insert(0, str(root))
+    if root is not None:
+        os.chdir(home if getattr(sys, "frozen", False) else root)
+        if str(root) not in sys.path:
+            sys.path.insert(0, str(root))
+    # Installed wheel: pertahankan cwd pemanggil; paket importable dari
+    # site-packages. Jangan chdir ke site-packages.
     return root, home
 
 
-def _find_main_script(root: Path) -> Path | None:
-    """WU-208 (ARCH-02): locate `wth-main.py` across the layouts the console
-    script can run in. It is a hyphenated root file (not an importable
-    module), so the only way to launch it is by path. Previously `main()`
-    hard-coded `root / "wth-main.py"`, which only exists in a source checkout
-    -- a `pip install`ed wheel (where it is not packaged) or a differently
-    laid-out container gave a cryptic runpy FileNotFoundError. Now we probe
-    the real candidate locations and return the first that exists.
+def _find_main_script(root: Path | None) -> Path | None:
+    """Locate the CLI implementation across layouts.
 
-    NOTE (honest scope): this fixes source/Docker/cwd launches and turns the
-    not-found case into a clear error, but it does NOT by itself make
-    `pip install wth-ai` work -- that needs `wth-main.py` packaged into the
-    wheel (or the CLI moved into the `wth_ai` package as an importable
-    module), a larger change requiring wheel-build verification. Tracked as
-    the remaining part of WU-208.
+    Urutan: source/PyInstaller root -> Docker `/app` -> paket terinstall
+    (`wth_ai/main_cli.py`) -> cwd -> legacy root. `pip install` sekarang
+    menemukan implementasi di dalam paket, bukan mengandalkan file root yang
+    tidak ikut wheel (WU-208/ARCH-02).
     """
-    candidates = [
-        root / "wth-main.py",              # source checkout / PyInstaller _MEIPASS
-        Path("/app/wth-main.py"),          # Docker image layout (COPY wth-main.py ./)
-        Path.cwd() / "wth-main.py",        # invoked from repo cwd
+    candidates: list[Path] = []
+    if root is not None:
+        candidates.append(root / "wth-main.py")            # source checkout / _MEIPASS
+    candidates.extend([
+        Path("/app/wth-main.py"),                          # Docker image layout
+        Path(__file__).resolve().parents[1] / "main_cli.py",  # wheel terinstall
+        Path.cwd() / "wth-main.py",                        # invoked from repo cwd
         Path(__file__).resolve().parents[2] / "wth-main.py",
-    ]
+    ])
     seen: set[Path] = set()
     for c in candidates:
         if c in seen:
@@ -73,15 +84,16 @@ def main() -> None:
     try:
         from dotenv import load_dotenv
         load_dotenv(home / ".env")
-        load_dotenv(root / ".env")
+        if root is not None:
+            load_dotenv(root / ".env")
     except ImportError:
         pass
     script = _find_main_script(root)
     if script is None:
         raise SystemExit(
-            "wth-ai: could not locate 'wth-main.py' launcher. Run from a source "
-            "checkout (python3 wth-main.py ...), or see install.sh. A packaged "
-            "pip-install entry point is not yet available (WU-208/ARCH-02)."
+            "wth-ai: could not locate the CLI entry point ('wth-main.py' or "
+            "packaged 'wth_ai/main_cli.py'). Reinstall the wheel, or run from "
+            "a source checkout (python3 wth-main.py ...). WU-208/ARCH-02."
         )
     import runpy
     runpy.run_path(str(script), run_name="__main__")

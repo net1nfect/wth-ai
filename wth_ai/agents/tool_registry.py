@@ -110,7 +110,7 @@ TOOL_DEFINITIONS: dict[str, dict[str, Any]] = {
                         # Preset names are the CLI-facing vocabulary ("like any AI CLI").
                         # The raw PermissionMode values still resolve through
                         # `permission_presets.ALIASES`, so nothing that worked before breaks.
-                        "enum": ["plan", "read-only", "ask", "auto", "yolo"],
+                        "enum": ["plan", "read-only", "ask", "auto", "yolo", "godmode"],
                     },
                 },
                 "required": ["mode"],
@@ -220,6 +220,148 @@ TOOL_DEFINITIONS: dict[str, dict[str, Any]] = {
             },
         },
     },
+    "pipeline_surface": {
+        "type": "function",
+        "function": {
+            "name": "pipeline_surface",
+            "description": (
+                "Inventory permukaan endpoint TANPA mengirim traffic: semua query param, "
+                "key JSON body, dan form field. Pakai ini dulu supaya kamu tahu titik uji "
+                "yang nyata sebelum memanggil pipeline_probe."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "target": {"type": "string", "description": "URL absolut target"},
+                    "method": {"type": "string", "enum": ["GET", "POST", "PUT", "PATCH", "DELETE"], "default": "GET"},
+                    "headers": {"type": "object", "description": "Header request, mis. Content-Type"},
+                    "body": {"type": "string", "description": "Body JSON/form mentah"},
+                },
+                "required": ["target"],
+            },
+        },
+    },
+    "pipeline_discover": {
+        "type": "function",
+        "function": {
+            "name": "pipeline_discover",
+            "description": (
+                "Fetch SATU halaman seed (lewat http_probe teraudit), lalu ekstrak "
+                "form, link same-origin, endpoint inline-JS, external JS same-origin "
+                "(maks 5 file), import graph JS same-origin, plus OpenAPI JSON/YAML dan sitemap. "
+                "Tidak melakukan probe/verifikasi; hasil tetap kandidat."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "target": {"type": "string", "description": "URL halaman absolut; default scope target"},
+                    "max_surfaces": {"type": "integer", "default": 25, "minimum": 1, "maximum": 100},
+                    "purpose": {"type": "string"},
+                },
+                "required": ["target"],
+            },
+        },
+    },
+    "pipeline_probe": {
+        "type": "function",
+        "function": {
+            "name": "pipeline_probe",
+            "description": (
+                "Jalankan pipeline probe deterministik untuk satu kelas: baseline, probe "
+                "per parameter, diff, dan verdict. Semua request lewat http_probe yang "
+                "diaudit/scope-checked. Hasil verified hanya dari sinyal konkret; "
+                "'needs_more_evidence' berarti belum ada bukti, bukan aman."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "vuln_class": {
+                        "type": "string",
+                        "enum": ["sqli", "xss", "ssti", "cmdi", "path_traversal", "open_redirect", "idor", "auth", "race", "ssrf"],
+                    },
+                    "target": {"type": "string", "description": "URL absolut; default scope target"},
+                    "method": {"type": "string", "enum": ["GET", "POST", "PUT", "PATCH", "DELETE"], "default": "GET"},
+                    "headers": {"type": "object"},
+                    "body": {"type": "string"},
+                    "max_probes": {"type": "integer", "default": 12, "minimum": 1, "maximum": 30},
+                    "purpose": {"type": "string"},
+                },
+                "required": ["vuln_class"],
+            },
+        },
+    },
+    "python_runtime": {
+        "type": "function",
+        "function": {
+            "name": "python_runtime",
+            "description": (
+                "Jalankan SKRIP PYTHON yang kamu tulis sendiri (exploit runner, parser "
+                "respons, brute tooling, PoC bespoke). Ini runtime nyata: kode berjalan "
+                "di shell operator dengan permission/audit run_shell. Pakai untuk "
+                "validasi PoC multi-step yang tidak bisa ekspresikan lewat http_probe."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "code": {"type": "string", "description": "Kode python utuh (requests otomatis tersedia jika ada di env)."},
+                    "purpose": {"type": "string"},
+                },
+                "required": ["code"],
+            },
+        },
+    },
+    "self_improve": {
+        "type": "function",
+        "function": {
+            "name": "self_improve",
+            "description": (
+                "Catat pelajaran dari langkah ini (what worked/failed, bypass that "
+                "landed, gotcha stack target). Tersimpan persist antar sesi dan "
+                "di-inject ke context; kamu MENINGKAT sendiri di run berikut. Panggil "
+                "otomatis setiap kali menemukan sesuatu yang berharga — jangan tunggu diminta."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "topic": {"type": "string", "description": "mis. bypass, stack-bias, target:example.com"},
+                    "lesson": {"type": "string"},
+                    "evidence": {"type": "string", "description": "TX/akar bukti"},
+                },
+                "required": ["lesson"],
+            },
+        },
+    },
+    "memory_write": {
+        "type": "function",
+        "function": {
+            "name": "memory_write",
+            "description": "Simpan fakta kampanye persist (token ditemukan, endpoint menarik, gotcha automation).",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "key": {"type": "string"},
+                    "value": {"type": "string"},
+                },
+                "required": ["key", "value"],
+            },
+        },
+    },
+    "memory_read": {
+        "type": "function",
+        "function": {
+            "name": "memory_read",
+            "description": "Baca memori persist: notes kampanye + pelajaran self-improve.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "key": {"type": "string", "description": "opsional; kosong = semua"},
+                    "lesson_topic": {"type": "string", "description": "filter pelajaran"},
+                    "limit": {"type": "integer"},
+                },
+            },
+        },
+    },
+
     "propose_payload": {
         "type": "function",
         "function": {
@@ -249,6 +391,68 @@ TOOL_DEFINITIONS: dict[str, dict[str, Any]] = {
                     "run_now": {"type": "boolean", "description": "Jalankan bila batas mengizinkan."},
                 },
                 "required": ["vuln_class", "title", "proves", "probe"],
+            },
+        },
+    },
+    "malware_forge": {
+        "type": "function",
+        "function": {
+            "name": "malware_forge",
+            "description": (
+                "Hasilkan malware/artefak nyata: shellcode runner, reflective PE loader, "
+                "TCP implant, HTTP stager, dropper, atau beacon. Menulis source + README + "
+                "metadata, optional compile, dan analisis statis otomatis. Hasil bukan sketsa."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "kind": {
+                        "type": "string",
+                        "enum": ["shellcode", "loader", "implant", "dropper", "stager", "beacon"],
+                        "description": "shellcode=runner mentah; loader=muat PE dari memori; implant=shell TCP; stager=unduh stage2",
+                    },
+                    "language": {"type": "string", "enum": ["c", "powershell", "python", "bash"], "default": "c"},
+                    "os": {"type": "string", "enum": ["windows", "linux", "macos"], "default": "windows"},
+                    "arch": {"type": "string", "enum": ["x64", "x86", "arm64"], "default": "x64"},
+                    "c2": {"type": "string", "description": "host:port untuk implant/beacon, atau URL stage2 untuk stager"},
+                    "features": {
+                        "type": "array", "items": {"type": "string"},
+                        "description": "amsi,etw,antidebug,sleepmask,tcp",
+                    },
+                    "build": {"type": "boolean", "default": True, "description": "compile bila toolchain ada"},
+                    "name": {"type": "string", "description": "nama artefak opsional"},
+                    "payload": {"type": "string", "description": "payload msfvenom opsional, mis. linux/x64/exec (shellcode/dropper = payload asli)"},
+                    "opts": {"type": "object", "additionalProperties": {"type": "string"}, "description": "opsi msfvenom, mis. {\"CMD\": \"/bin/echo hi\"}"},
+                },
+                "required": ["kind"],
+            },
+        },
+    },
+    "malware_encode": {
+        "type": "function",
+        "function": {
+            "name": "malware_encode",
+            "description": "Encode payload (file/hex) dengan XOR kunci opsional; keluaran C/Python/PowerShell/hex/base64 plus stub decoder.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "payload": {"type": "string", "description": "path file atau string hex"},
+                    "key": {"type": "integer", "default": 90},
+                    "format": {"type": "string", "enum": ["c", "python", "powershell", "hex", "base64"], "default": "c"},
+                },
+                "required": ["payload"],
+            },
+        },
+    },
+    "malware_analyze": {
+        "type": "function",
+        "function": {
+            "name": "malware_analyze",
+            "description": "Analisis statis file: hash, entropi, PE sections/imports, YARA, indikator C2/anti-analysis.",
+            "parameters": {
+                "type": "object",
+                "properties": {"path": {"type": "string"}},
+                "required": ["path"],
             },
         },
     },
@@ -324,6 +528,37 @@ TOOL_DEFINITIONS: dict[str, dict[str, Any]] = {
                     "purpose": {"type": "string"},
                 },
                 "required": ["command"],
+            },
+        },
+    },
+    "solidity_audit": {
+        "type": "function",
+        "function": {
+            "name": "solidity_audit",
+            "description": (
+                "Jalankan toolchain audit Solidity lokal: Foundry build/test atau Slither "
+                "pada direktori proyek. Command dibentuk deterministic dan dieksekusi lewat "
+                "run_shell, jadi permission/approval/transcript tetap sama. Gunakan 'doctor' "
+                "untuk cek forge/slither/solc tanpa menyentuh proyek."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "action": {
+                        "type": "string",
+                        "enum": ["doctor", "build", "test", "slither"],
+                        "description": "doctor=cek binary; build=forge build; test=forge test; slither=analisis statis",
+                    },
+                    "path": {
+                        "type": "string",
+                        "description": "Direktori root proyek Solidity (wajib untuk build/test/slither).",
+                    },
+                    "match_path": {
+                        "type": "string",
+                        "description": "Opsional untuk action=test: filter --match-path, mis. test/Pool.t.sol.",
+                    },
+                },
+                "required": ["action"],
             },
         },
     },
@@ -463,14 +698,20 @@ TOOL_DEFINITIONS: dict[str, dict[str, Any]] = {
 
 ACTOR_TOOLS: dict[str, list[str]] = {
     "supervisor": list(TOOL_DEFINITIONS.keys()),
-    "planner": ["query_graph", "http_probe", "store_evidence", "scope_show", "session_status", "oob_create", "oob_dns", "oob_check"],
-    "executor": ["query_graph", "http_probe", "run_shell", "store_evidence", "oob_create", "oob_dns", "oob_check"],
-    "recon": ["query_graph", "http_probe", "run_shell", "recon_list_tools", "recon_run_tool", "recon_finalize"],
+    "malware": ["malware_forge", "malware_analyze", "malware_encode", "run_shell", "http_probe", "store_evidence"],
+    "planner": ["query_graph", "http_probe", "pipeline_surface", "pipeline_discover", "pipeline_probe", "store_evidence", "scope_show", "session_status", "oob_create", "oob_dns", "oob_check", "solidity_audit"],
+    "executor": ["query_graph", "http_probe", "pipeline_surface", "pipeline_discover", "pipeline_probe", "run_shell", "store_evidence", "oob_create", "oob_dns", "oob_check", "solidity_audit"],
+    "recon": ["query_graph", "http_probe", "pipeline_surface", "pipeline_discover", "run_shell", "recon_list_tools", "recon_run_tool", "recon_finalize"],
 }
 
 
 def tools_for_actor(actor: str) -> list[dict[str, Any]]:
-    names = ACTOR_TOOLS.get(actor, ACTOR_TOOLS["supervisor"])
+    from wth_ai.engagement.mode import is_no_limits
+
+    if is_no_limits():
+        names = list(TOOL_DEFINITIONS.keys())
+    else:
+        names = ACTOR_TOOLS.get(actor, ACTOR_TOOLS["supervisor"])
     tools = [TOOL_DEFINITIONS[n] for n in names if n in TOOL_DEFINITIONS]
     try:
         from wth_ai.config import WTHConfig

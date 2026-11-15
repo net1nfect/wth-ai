@@ -304,14 +304,14 @@ def test_tui_every_tab_activates():
             await pilot.pause()
             tabs = app.query_one("#main-tabs", TabbedContent)
             seen = []
-            for name in ("tab-activity", "tab-findings", "tab-tools", "tab-config", "tab-chat"):
+            for name in ("tab-activity", "tab-findings", "tab-tools", "tab-config", "tab-ops", "tab-chat"):
                 tabs.active = name
                 await pilot.pause()
                 seen.append(tabs.active)
             return seen
 
     assert asyncio.run(_boot()) == [
-        "tab-activity", "tab-findings", "tab-tools", "tab-config", "tab-chat"
+        "tab-activity", "tab-findings", "tab-tools", "tab-config", "tab-ops", "tab-chat"
     ]
 
 

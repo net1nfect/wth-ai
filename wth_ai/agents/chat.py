@@ -105,7 +105,13 @@ class ChatAgent(BaseLLMAgent):
     # ------------------------------------------------------------------ #
     # run
     # ------------------------------------------------------------------ #
-    def respond(self, user_input: str, state: SessionState) -> dict[str, Any]:
+    def respond(
+        self,
+        user_input: str,
+        state: SessionState,
+        *,
+        attachments: list[dict[str, object]] | None = None,
+    ) -> dict[str, Any]:
         active_skills = self.skill_router.route(user_input, limit=2)
         skill_ctx = self.skill_router.build_context(active_skills, max_chars=8000)
 
@@ -118,6 +124,7 @@ class ChatAgent(BaseLLMAgent):
             state.conversation,
             prompt,
             role="planner",
+            attachments=attachments,
         )
 
         # The gate runs on OUR output, not on the model's good intentions:

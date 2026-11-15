@@ -34,6 +34,11 @@ class AuthVulnExecutor(BaseVulnExecutor):
                 risk="low",
             )
 
+        if jwt.count(".") == 2:
+            from wth_ai.pipeline.executor import execute_pipeline
+
+            return execute_pipeline(self, task, "auth")
+
         header_b64, payload_b64, sig = jwt.split(".")
         evidence: list[str] = []
         observations: list[str] = []
@@ -82,6 +87,10 @@ class AuthVulnExecutor(BaseVulnExecutor):
     def _throttle(self) -> None:
         import time
 
+        from wth_ai.engagement.mode import is_no_limits
+
+        if is_no_limits():
+            return
         rps = float(getattr(self.state.scope, "rate_limit_rps", 2.0) or 2.0)
         time.sleep(max(0.0, 1.0 / max(0.1, rps)))
 

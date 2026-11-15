@@ -60,6 +60,9 @@ class ManifestToolRunner(ToolRunner):
     *,
     rate_limit_rps: float = 2.0,
   ) -> list[dict[str, Any]]:
+    from wth_ai.engagement.mode import is_no_limits
+
+    no_limits = is_no_limits()
     results = []
     for tool_id, args in specs:
       stdout, stderr, code = self.run_tool(tool_id, args)
@@ -70,10 +73,15 @@ class ManifestToolRunner(ToolRunner):
         "stdout": stdout[: self.config.tools.max_output_bytes],
         "stderr": stderr[:5000],
       })
-      time.sleep(1.0 / max(rate_limit_rps, 0.1))
+      if not no_limits:
+        time.sleep(1.0 / max(rate_limit_rps, 0.1))
     return results
 
   def allowed_tool_ids(self, mode: PermissionMode) -> list[str]:
+    from wth_ai.engagement.mode import is_no_limits
+
+    if is_no_limits():
+      return [tid for tid, spec in self.registry.tools.items() if self.registry.is_installed(tid)]
     level_map = {
       PermissionMode.READ_ONLY_RECON: {"read_only"},
       PermissionMode.STANDARD_TESTING: {"read_only", "standard"},

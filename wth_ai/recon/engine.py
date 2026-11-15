@@ -17,7 +17,7 @@ import re
 import time
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, Mapping
 
 from wth_ai.recon import http as rhttp
 from wth_ai.recon import report as report_mod
@@ -82,6 +82,8 @@ class ReconEngine:
         bus: Any = None,
         baseline: dict[str, Any] | None = None,
         should_stop: Callable[[], bool] | None = None,
+        checkpoint: Callable[[Any], None] | None = None,
+        resume: Any = None,
     ) -> dict[str, Any]:
         progress = progress or NoOp
         log = log or NoOp
@@ -144,6 +146,111 @@ class ReconEngine:
             tool_runs.append(run)
             normalizer.add_run(run)
 
+        # --- checkpoint per-tool (rekomendasi 5) --------------------------
+        #
+        # Defek sebelumnya: recon hanya punya hasil akhir. Crash di tool ke-9
+        # membuang hasil 8 tool sebelumnya, dan retry mengulang SEMUA tool —
+        # termasuk yang sudah sukses — mengulang beban ke target.
+        #
+        # Kontrak di sini, sengaja lebih lemah dari autopilot karena setiap
+        # tool dianggap idempoten pada level hasil (membaca ulang website):
+        # * sebelum tool jalan: catat `INFLIGHT` (nama saja) dan simpan;
+        # * setelah tool selesai: simpan `run` lengkap dengan outcome;
+        # * resume melewati tool yang `COMPLETED` + punya `run` utuh, dengan
+        #   memutar ulang `normalizer.add_run` — data yang sudah dikumpulkan
+        #   TIDAK hilang, dan tool itu tidak dihubungi lagi;
+        # * `INFLIGHT`/`FAILED`/`UNKNOWN` dijalankan lagi (baca ulang aman),
+        #   dan itu dilaporkan sebagai "dijalankan ulang", bukan disamarkan.
+        from wth_ai.jobs.checkpoint import CheckpointEnvelope, StepOutcome
+
+        tool_state: dict[str, dict[str, Any]] = {}
+        resumed_tools: list[str] = []
+        resume_rejected = ""
+        if resume is not None:
+            try:
+                if resume.engine != "recon":
+                    raise ValueError(f"engine checkpoint {resume.engine!r} bukan recon")
+                if not resume.matches_target(target):
+                    raise ValueError(
+                        f"target checkpoint {resume.target!r} != {target!r}"
+                    )
+                for name, rec in (resume.engine_state.get("tools") or {}).items():
+                    tool_state[name] = dict(rec)
+                    if rec.get("outcome") == StepOutcome.COMPLETED.value and isinstance(
+                        rec.get("run"), Mapping
+                    ):
+                        # Putar ulang hasil lama ke normalizer: langkah yang
+                        # dilewati harus tetap MENYUMBANG data yang sama.
+                        replay = ToolRun(**{
+                            key: value for key, value in dict(rec["run"]).items()
+                            if key in {
+                                "tool", "status", "started_at", "finished_at",
+                                "duration_ms", "output_path", "error",
+                                "normalized_items",
+                            }
+                        })
+                        normalizer.add_run(replay)
+                        tool_runs.append(replay)
+                        # `tool_state[name]` SUDAH tersimpan di atas; tanpa itu
+                        # checkpoint berikutnya "lupa" tool yang dilewati dan
+                        # resume kedua mengulanginya — persis yang dicegah.
+                        resumed_tools.append(name)
+                if resumed_tools:
+                    log(
+                        f"recovery: {len(resumed_tools)} tool dilewati dari checkpoint "
+                        f"({', '.join(resumed_tools[:6])}{'…' if len(resumed_tools) > 6 else ''})"
+                    )
+            except Exception as exc:  # noqa: BLE001 - checkpoint rusak/asing => mulai bersih
+                resume_rejected = f"{type(exc).__name__}: {exc}"
+                tool_state = {}
+                resumed_tools = []
+                log(f"recovery: checkpoint recon ditolak ({resume_rejected}); mulai dari awal")
+
+        def _save_recon_checkpoint(cursor: int = 0) -> None:
+            if checkpoint is None:
+                return
+            env = CheckpointEnvelope(
+                engine="recon", target=target, cursor=cursor,
+                engine_state={
+                    "profile": profile,
+                    "tools": tool_state,
+                    "finished": sorted(
+                        name for name, rec in tool_state.items()
+                        if rec.get("outcome") == StepOutcome.COMPLETED.value
+                    ),
+                },
+            )
+            from datetime import datetime, timezone
+
+            env.saved_at = datetime.now(timezone.utc).isoformat()
+            try:
+                checkpoint(env)
+            except Exception as exc:  # noqa: BLE001 - checkpoint failure tidak boleh membunuh scan
+                log(f"recovery: checkpoint recon gagal ditulis ({type(exc).__name__}: {exc})")
+
+        def _should_skip_tool(name: str) -> bool:
+            rec = tool_state.get(name)
+            return bool(
+                rec
+                and rec.get("outcome") == StepOutcome.COMPLETED.value
+                and isinstance(rec.get("run"), Mapping)
+            )
+
+        def _mark_inflight(name: str) -> None:
+            tool_state[name] = {"outcome": StepOutcome.INFLIGHT.value}
+            _save_recon_checkpoint()
+
+        def _mark_done(run: ToolRun) -> None:
+            # Kegagalan tool tetap dicatat sebagai FAILED dengan hasilnya, supaya
+            # resume tahu tool itu dicoba dan tidak menganggapnya belum jalan.
+            outcome = (
+                StepOutcome.COMPLETED.value
+                if run.status == "success"
+                else StepOutcome.FAILED.value
+            )
+            tool_state[run.tool] = {"outcome": outcome, "run": run.to_dict()}
+            _save_recon_checkpoint()
+
         # 3) builtin pipeline (ordered) -----------------------------------
         ordered_builtins = sorted(
             builtin_specs,
@@ -168,17 +275,23 @@ class ReconEngine:
                 stopped_early = True
                 log("recon: stop requested -- halting builtin tools (partial results kept)")
                 break
+            if _should_skip_tool(spec.name):
+                continue
             key = BUILTIN_TOOLS.get(spec.name, "")
+            _mark_inflight(spec.name)
             run = runner.run(spec, target=target, ctx=ctx)
             _record(run)
+            _mark_done(run)
             if key in stage_marks:
                 progress(stage_marks[key], 100, f"builtin:{key}")
             log(f"builtin {spec.name}: {run.status} ({len(run.normalized_items)} items)")
 
         # builtin fingerprint (no catalog name; always runs, cheap)
-        if not stopped_early:
+        if not stopped_early and not _should_skip_tool("builtin-fingerprint"):
+            _mark_inflight("builtin-fingerprint")
             fp_run = self._run_fingerprint(ctx, raw_dir, runlog_path)
             _record(fp_run)
+            _mark_done(fp_run)
 
         # 4) external/api tools (availability-gated; builtins already covered
         #    the 20..85 milestones, so externals run within the 88..90 band) ---
@@ -193,6 +306,9 @@ class ReconEngine:
             log(f"adaptive refine: profile={post_match.profile} rules={post_match.matched_rules}")
         external_specs = filter_specs_by_adaptive(external_specs, post_match)
         external_specs = sort_specs_by_adaptive(external_specs, post_match)
+        # Tool yang sudah COMPLETED dilewati: hasilnya sudah diputar ulang ke
+        # normalizer di atas, jadi melewatinya TIDAK mengurangi data.
+        external_specs = [s for s in external_specs if not _should_skip_tool(s.name)]
         # External tools are independent processes and were previously executed
         # one at a time, so wall clock was the SUM of every round trip. They now
         # run with bounded concurrency and a per-host start pacer; results still
@@ -204,14 +320,26 @@ class ReconEngine:
         workers = resolve_workers(profile)
         limiter = HostRateLimiter(resolve_rps(getattr(ctx, "rate_limit_rps", None)))
         skipped_by_stop = {"n": 0}
+        # `_on_result` dipanggil dari thread worker; `tool_state`/checkpoint
+        # adalah state proses tunggal, jadi penandaan diserialkan di sini.
+        # Tanpa lock, dua tool selesai bersamaan bisa saling menimpa snapshot.
+        import threading
+
+        state_lock = threading.Lock()
 
         def _on_result(spec: Any, run: ToolRun) -> None:
-            _record(run)
+            with state_lock:
+                _record(run)
+                _mark_done(run)
             if run.status not in ("skipped",):
                 log(f"external {spec.name}: {run.status} ({len(run.normalized_items)} items)")
 
         def _on_skip(spec: Any) -> None:
             skipped_by_stop["n"] += 1
+
+        def _before_start(spec: Any) -> None:
+            with state_lock:
+                _mark_inflight(spec.name)
 
         stopped_early = run_specs_parallel(
             runner,
@@ -223,6 +351,7 @@ class ReconEngine:
             halt=_halt,
             on_result=_on_result,
             on_skip=_on_skip,
+            on_start=_before_start,
         ) or stopped_early
         if skipped_by_stop["n"]:
             log(
@@ -277,6 +406,17 @@ class ReconEngine:
             "priority_targets": len(priority),
             "changes": changes,
             "normalized": new_dict,
+            # Bukti recovery harus bisa dibaca operator: tool yang dilewati
+            # karena checkpoint adalah fakta yang berbeda dari "tool sukses
+            # sekarang".
+            "checkpoint": {
+                "resumed_tools": list(resumed_tools),
+                "resume_rejected": resume_rejected,
+                "finished_tools": sorted(
+                    name for name, rec in tool_state.items()
+                    if rec.get("outcome") == "completed"
+                ),
+            },
         }
 
     # ----------------------------------------------------------------- #

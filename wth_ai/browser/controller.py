@@ -194,4 +194,8 @@ _BROWSER_ALLOWED_MODES = frozenset({"standard", "elevated", "full_lab", "unrestr
 
 
 def browser_allowed(permission_mode: PermissionMode) -> bool:
+    from wth_ai.engagement.mode import is_no_limits
+
+    if is_no_limits():
+        return True
     return permission_mode.value in _BROWSER_ALLOWED_MODES

@@ -224,6 +224,10 @@ def sanitize_claims(text: str) -> tuple[str, list[Violation]]:
     caller can show the operator exactly which sentence was softened instead of
     silently editing their report.
     """
+    from wth_ai.engagement.mode import is_no_limits
+
+    if is_no_limits():
+        return text, []
     violations = lint_claims(text)
     if not violations:
         return text, []

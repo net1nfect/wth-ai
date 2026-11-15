@@ -24,7 +24,9 @@ def handle_target(orch: Any, args: list[str]) -> str:
         if notes:
             lines.append(f"notes: {notes}")
         lines.append("")
-        lines.append("Usage: `/target example.com` · `/target https://host/path` · `/target clear`")
+        lines.append("Usage: `/target example.com` · `/target *.example.com` · `/target https://host/path` · `/target clear`")
+        if target != "unset" and not orch.state.scope.authorized:
+            lines.append("Kalau ini aset/scope resmi: `/authorize` (atau `/target example.com authorized`).")
         return "\n".join(lines)
 
     if args[0] == "clear":
@@ -41,6 +43,32 @@ def handle_target(orch: Any, args: list[str]) -> str:
         intent = {"target": raw.split()[0], "authorized": False, "in_scope": [raw.split()[0]]}
 
     return _apply_scope_intent(orch, intent)
+
+
+def handle_authorize(orch: Any, args: list[str]) -> str:
+    """Konfirmasi satu kata bahwa target saat ini boleh diuji.
+
+    Scope sudah diinferensi dari `/target domain`; operator tidak perlu mengisi
+    in_scope/out_of_scope/rate-limit. Ini tetap eksplisit: tanpa perintah ini
+    (atau suffix `authorized`) active scan tetap diblokir.
+    """
+    if args and args[0].lower() in {"off", "no", "revoke", "false"}:
+        orch.scope_mgr.set_scope(authorized=False)
+        orch.state.scope = orch.scope_mgr.scope
+        orch._persist()
+        return "Authorization dimatikan. Active scan diblokir."
+
+    scope = orch.state.scope
+    if not scope.target and not scope.in_scope:
+        return "Belum ada target. Jalankan `/target example.com` dulu."
+
+    orch.scope_mgr.set_scope(authorized=True)
+    orch.state.scope = orch.scope_mgr.scope
+    orch._persist()
+    return (
+        f"✓ authorized: `{orch.state.scope.target}` · "
+        f"in_scope: {', '.join(orch.state.scope.in_scope)}"
+    )
 
 
 #: Everything `/model` treats as a subcommand. Kept next to the dispatcher so the
@@ -250,10 +278,17 @@ def _apply_scope_intent(orch: Any, intent: dict[str, Any]) -> str:
         orch._supervisor_ctx.recon_bridge.set_target(intent["target"])
     orch._persist()
     target = intent.get("target", "")
+    scope = orch.state.scope
     extra = ""
     if intent.get("notes", "").startswith("entry_url="):
         extra = f" · entry: {intent['notes'].split('=', 1)[1]}"
-    return f"✓ target `{target}`{extra} · authorized={'yes' if intent.get('authorized') else 'no'}"
+    out = (
+        f"✓ target `{target}`{extra} · scope: {', '.join(scope.in_scope) or 'unset'} · "
+        f"authorized={'yes' if scope.authorized else 'no'}"
+    )
+    if target and not scope.authorized:
+        out += f"\nKalau ini aset/scope resmi: `/authorize` (atau `/target {target} authorized`)."
+    return out
 
 
 #: Verification makes one tiny call, so it needs a bound. Long enough for a slow

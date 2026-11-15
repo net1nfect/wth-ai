@@ -113,7 +113,7 @@ def test_http_probe_sends_resolved_plaintext(tmp_path, monkeypatch):
     v = _vault(tmp_path, monkeypatch)
     v.set("target_token", "sk-real-secret-value")
     bridge = _bridge()
-    with patch("requests.request", return_value=_mock_response()) as mock_req:
+    with patch("requests.Session.request", return_value=_mock_response()) as mock_req:
         result = bridge.http_probe(
             "GET", "https://example.com/", actor="planner",
             headers={"Authorization": "vault:target_token"},
@@ -129,7 +129,7 @@ def test_http_probe_missing_vault_ref_blocks_before_request(tmp_path, monkeypatc
     diam-diam kirim string 'vault:...' atau 'None' literal ke target."""
     monkeypatch.setenv("WTH_HOME", str(tmp_path))
     bridge = _bridge()
-    with patch("requests.request") as mock_req:
+    with patch("requests.Session.request") as mock_req:
         result = bridge.http_probe(
             "GET", "https://example.com/", actor="planner",
             headers={"Authorization": "vault:does_not_exist"},
@@ -147,7 +147,7 @@ def test_resolved_plaintext_never_stored_in_transcript(tmp_path, monkeypatch):
     v = _vault(tmp_path, monkeypatch)
     v.set("target_token", "sk-real-secret-value")
     bridge = _bridge()
-    with patch("requests.request", return_value=_mock_response()):
+    with patch("requests.Session.request", return_value=_mock_response()):
         result = bridge.http_probe(
             "GET", "https://example.com/", actor="planner",
             headers={"Authorization": "vault:target_token"},
@@ -161,7 +161,7 @@ def test_http_probe_without_headers_unaffected():
     """Compatibility: caller yang tidak pernah mengoper headers sama sekali
     (jalur lama) tidak berubah perilakunya."""
     bridge = _bridge()
-    with patch("requests.request", return_value=_mock_response()):
+    with patch("requests.Session.request", return_value=_mock_response()):
         result = bridge.http_probe("GET", "https://example.com/", actor="planner")
     assert result.blocked is not True
 
@@ -174,7 +174,7 @@ def test_dispatch_tool_threads_vault_headers_through_broker(tmp_path, monkeypatc
     v = _vault(tmp_path, monkeypatch)
     v.set("target_token", "sk-real-secret-value")
     bridge = _bridge()
-    with patch("requests.request", return_value=_mock_response()) as mock_req:
+    with patch("requests.Session.request", return_value=_mock_response()) as mock_req:
         result = bridge.dispatch_tool(
             "http_probe",
             {"method": "GET", "url": "https://example.com/", "headers": {"Authorization": "vault:target_token"}},
