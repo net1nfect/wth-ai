@@ -29,7 +29,7 @@ from wth_ai.hunt.destructive_verify import (
     verify_cleanup,
     verify_effect,
 )
-from wth_ai.hunt.payloads import get_payload
+from wth_ai.hunt.payloads import Payload
 from wth_ai.jobs.checkpoint import StepOutcome, make_step_key
 
 TARGET = "https://example.com"
@@ -260,13 +260,33 @@ def test_cleanup_failure_is_not_hidden():
     assert "gagal" in step.note.lower()
 
 
-def test_payload_without_anchor_stays_unknown():
+def test_payload_without_anchor_stays_unknown(monkeypatch):
     """Payload katalog yang tidak punya anchor deklaratif tidak boleh
     menghasilkan COMPLETED walau responsnya 200."""
-    # Payload hasil generasi kontrak tidak punya anchor deklaratif.
+    # Payload dibangun eksplisit di sini, bukan diambil dari store hasil
+    # generate: store itu milik operator lokal dan KOSONG di runner CI, sehingga
+    # test lama bergantung pada state mesin (gagal dengan `payload is None` di
+    # CI, lolos di lokal). Yang diuji adalah kontrak autopilot terhadap payload
+    # tanpa anchor, bukan isi store.
     payload_id = "GEN-business-logic-refund-without-ret"
-    payload = get_payload(payload_id)
-    assert payload is not None and not payload.verify_probe
+    payload = Payload(
+        id=payload_id,
+        vuln_class="business_logic",
+        title="Refund tanpa anchor deklaratif",
+        proves="Efek state tidak dapat diverifikasi dari katalog",
+        probe={"method": "POST", "url": "{base}/api/refund", "body": "{}"},
+        blast_radius="single-object",
+        reversible=True,
+        cleanup="Pulihkan manual",
+        requires_destructive=True,
+    )
+    assert not payload.verify_probe
+    monkeypatch.setattr(
+        "wth_ai.hunt.autopilot.get_payload",
+        lambda wanted: payload
+        if str(wanted).strip().lower() == payload_id.lower()
+        else None,
+    )
 
     def probe(p: dict) -> _Resp:
         return _Resp(body="ok")
