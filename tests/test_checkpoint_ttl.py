@@ -159,3 +159,40 @@ def test_checkpoint_written_by_run_has_saved_at():
     assert report.checkpoint is not None
     assert report.checkpoint.saved_at, "checkpoint baru wajib punya saved_at"
     assert report.checkpoint.age_seconds() is not None
+
+
+# ---------------------------------------------------------------------------
+# peringatan kebijakan: destruktif tanpa TTL
+# ---------------------------------------------------------------------------
+
+
+def test_destructive_without_ttl_reports_policy_warning():
+    report = _run(run_probe=lambda p: _Resp(), destructive_allowed=True,
+                  payload_ids=["BL-001"], vuln_class="__none__")
+    assert "checkpoint_max_age_seconds" in report.checkpoint_policy_warning
+    assert report.to_dict()["checkpoint_policy_warning"] == (
+        report.checkpoint_policy_warning
+    )
+
+
+def test_destructive_with_ttl_has_no_policy_warning():
+    report = _run(run_probe=lambda p: _Resp(), destructive_allowed=True,
+                  payload_ids=["BL-001"], vuln_class="__none__",
+                  checkpoint_max_age_seconds=3600)
+    assert report.checkpoint_policy_warning == ""
+
+
+def test_non_destructive_without_ttl_has_no_policy_warning():
+    report = _run(run_probe=lambda p: _Resp(), destructive_allowed=False,
+                  payload_ids=["IN-001"], vuln_class="__none__")
+    assert report.checkpoint_policy_warning == ""
+    assert report.to_dict()["checkpoint_policy_warning"] == ""
+
+
+def test_negative_ttl_warns_because_it_disables_the_limit():
+    report = _run(run_probe=lambda p: _Resp(), destructive_allowed=True,
+                  payload_ids=["BL-001"], vuln_class="__none__",
+                  checkpoint_max_age_seconds=-5)
+    assert report.checkpoint_policy_warning, (
+        "TTL negatif berarti tanpa batas; engagement destruktif harus diperingatkan"
+    )

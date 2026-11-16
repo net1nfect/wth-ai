@@ -450,6 +450,8 @@ def handler_autopilot(job: Any, ctx: Any) -> dict[str, Any]:
         ctx.log(f"recovery: resume ditolak — {report.resume_rejected_reason}")
     if report.resource_budget_changed:
         ctx.log(f"recovery: {report.resource_budget_changed}")
+    if report.checkpoint_policy_warning:
+        ctx.log(f"recovery: {report.checkpoint_policy_warning}")
     if report.checkpoint_error:
         ctx.log(f"recovery: checkpoint gagal ditulis — {report.checkpoint_error}")
     unfinished = [
@@ -485,6 +487,7 @@ def handler_autopilot(job: Any, ctx: Any) -> dict[str, Any]:
         "resumed_from_cycle": getattr(resume_cp, "cursor", 0) if resume_cp else 0,
         "resume_rejected_reason": report.resume_rejected_reason,
         "resource_budget_changed": report.resource_budget_changed,
+        "checkpoint_policy_warning": report.checkpoint_policy_warning,
         "checkpoint_error": report.checkpoint_error,
         "stopped_reason": report.stopped_reason,
         "stop_incomplete": report.stop_incomplete,

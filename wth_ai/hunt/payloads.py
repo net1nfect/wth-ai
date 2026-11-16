@@ -30,6 +30,9 @@ berlaku), dan `wth_ai/skills/autowrite.py` mencatat yang terbukti.
 
 from __future__ import annotations
 
+import hashlib
+import json
+
 from dataclasses import dataclass, field
 from typing import Any, Iterable, Mapping, Sequence
 
@@ -568,6 +571,24 @@ def filter_payloads(
             continue
         out.append(payload)
     return out
+
+
+def payload_definition_digest(payload: Payload) -> str:
+    """Digest stabil definisi payload, termasuk anchor dan cleanup.
+
+    Dipakai checkpoint untuk mendeteksi katalog yang berubah antar-proses.
+    Resume yang memakai definisi berbeda tidak boleh mempercayai bukti
+    `COMPLETED` lama: `verify_probe`/`verify_fields` bisa menunjuk objek atau
+    field yang berbeda, sehingga "terverifikasi" tidak lagi berarti hal yang
+    sama. Digest dihitung dari representasi kanonik seluruh field payload.
+
+    Nilai harus deterministik lintas proses: `to_dict()` memakai urutan field
+    dataclass, dan `sort_keys=True` menghapus ketergantungan urutan mapping.
+    """
+    canonical = json.dumps(
+        payload.to_dict(), sort_keys=True, default=str, ensure_ascii=False
+    )
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:16]
 
 
 def render_probe(payload: Payload, **values: Any) -> dict[str, Any]:

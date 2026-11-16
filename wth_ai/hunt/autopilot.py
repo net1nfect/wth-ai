@@ -28,6 +28,7 @@ from wth_ai.hunt.payloads import (
     Payload,
     filter_payloads,
     get_payload,
+    payload_definition_digest,
     render_probe,
     render_probe_dict,
 )
@@ -92,6 +93,11 @@ class AutopilotStep:
     #: Identitas operasi (lihat `probe_operation_id`). Dipersistensikan di
     #: engine_state supaya resume tidak bergantung pada rekonstruksi katalog.
     operation_id: str = ""
+    #: Digest definisi payload yang membentuk langkah ini (termasuk anchor dan
+    #: cleanup). Kosong untuk langkah proaktif yang tidak berasal dari katalog.
+    #: Resume membandingkannya dengan katalog saat ini: definisi yang berubah
+    #: membuat bukti `COMPLETED` lama tidak boleh dipercaya.
+    definition_digest: str = ""
     #: Status eksplisit saat checkpoint dibuat. Kosong = pakai klasifikasi
     #: lama (kompatibel dengan checkpoint sebelum field ini ada).
     outcome: str = ""
@@ -113,6 +119,7 @@ class AutopilotStep:
             "blocked_reason": self.blocked_reason, "status": self.status, "changed": self.changed,
             "evidence_ref": self.evidence_ref, "note": self.note,
             "operation_id": self.operation_id, "outcome": self.outcome,
+            "definition_digest": self.definition_digest,
             "verify_fields": list(self.verify_fields),
             "verification_ref": self.verification_ref,
             "cleanup_ref": self.cleanup_ref,
@@ -140,6 +147,7 @@ class AutopilotStep:
             note=str(data.get("note", "")),
             operation_id=str(data.get("operation_id", "") or ""),
             outcome=outcome,
+            definition_digest=str(data.get("definition_digest", "") or ""),
             verify_fields=[str(x) for x in (data.get("verify_fields") or [])],
             verification_ref=str(data.get("verification_ref", "") or ""),
             cleanup_ref=str(data.get("cleanup_ref", "") or ""),
@@ -161,6 +169,10 @@ class AutopilotReport:
     #: Perbedaan resource budget antara checkpoint dan proses sekarang.
     #: Bukan alasan menolak completed evidence, tetapi harus terlihat.
     resource_budget_changed: str = ""
+    #: Peringatan kebijakan recovery: engagement dengan langkah destruktif
+    #: tetapi tanpa batas umur checkpoint. Bukan error; harus terlihat di
+    #: log dan hasil job supaya operator bisa memutuskan.
+    checkpoint_policy_warning: str = ""
     #: True bila run berhenti karena sinyal stop atau karena langkah
     #: destruktif tidak boleh dijalankan tanpa checkpoint. Handler memakainya
     #: untuk membedakan `completed` dari `stopped`.
@@ -185,6 +197,7 @@ class AutopilotReport:
             "destructive_used": self.destructive_used,
             "adaptive": self.adaptive,
             "resource_budget_changed": self.resource_budget_changed,
+            "checkpoint_policy_warning": self.checkpoint_policy_warning,
             "stop_incomplete": self.stop_incomplete,
             "steps": [step.to_dict() for step in self.steps],
         }
@@ -240,6 +253,32 @@ def _slim_step(step: AutopilotStep) -> dict[str, Any]:
         key: probe[key] for key in _RESUME_PROBE_FIELDS if key in probe
     }
     return data
+
+
+def _stale_definition_ids(steps: Sequence[AutopilotStep]) -> dict[str, str]:
+    """Payload ID yang digest definisinya tidak cocok dengan katalog sekarang.
+
+    Hanya record yang MEMILIKI digest yang diperiksa: checkpoint lama tanpa
+    digest tidak pernah dituduh berubah. Bila sudah ada record lain untuk
+    payload yang sama dengan digest saat ini, record lama dianggap historis —
+    resume setelah langkah dijalankan ulang tidak boleh menolak terus-menerus.
+
+    Nilai mapping: digest saat ini, atau penanda bila payload sudah tidak ada.
+    """
+    records: dict[str, list[AutopilotStep]] = {}
+    for step in steps:
+        payload_id = str(step.probe.get("payload_id") or "")
+        if payload_id and step.definition_digest:
+            records.setdefault(payload_id, []).append(step)
+
+    stale: dict[str, str] = {}
+    for payload_id, prior_steps in records.items():
+        payload = get_payload(payload_id)
+        current = payload_definition_digest(payload) if payload is not None else ""
+        if any(step.definition_digest == current for step in prior_steps):
+            continue
+        stale[payload_id] = current or "(tidak ada di katalog)"
+    return stale
 
 
 def _checkpoint_from_steps(
@@ -315,12 +354,15 @@ def _safe_probe(run_probe: ProbeRunner, probe: Mapping[str, Any]) -> Any:
 
 
 def _verify_destructive_effect(
-    *, step: AutopilotStep, run_probe: ProbeRunner, before_body: str
+    *, step: AutopilotStep, run_probe: ProbeRunner, before_body: str,
+    before_posture: Mapping[str, Any] | None = None,
 ) -> Any:
     """Apakah efek langkah destruktif sudah tidak ada di keadaan target?
 
     Anchor diambil sebelum operasi (`before_body`) supaya pembacaan sesudah
-    tidak bisa "membuktikan" keadaan yang sudah tercemar.
+    tidak bisa "membuktikan" keadaan yang sudah tercemar. `before_posture`
+    (status + header saat itu) diteruskan hanya untuk alasan penolakan yang
+    lebih konkret — lihat `posture_diff` di `destructive_verify`.
     """
     from wth_ai.hunt.destructive_verify import EffectAnchor, verify_effect
 
@@ -340,10 +382,13 @@ def _verify_destructive_effect(
         run_probe=run_probe,
         before_body=before_body,
         requires_cleanup=bool(step.cleanup_probe),
+        before_posture=before_posture,
     )
 
 
-def _run_cleanup(*, step: AutopilotStep, run_probe: ProbeRunner) -> str:
+def _run_cleanup(
+    *, step: AutopilotStep, run_probe: ProbeRunner, before_had_marker: bool | None = None
+) -> str:
     """Jalankan request pemulihan dan laporkan hasil SEBENARNYA.
 
     Catalog `cleanup` bisa berupa instruksi manual; hanya `cleanup_probe`
@@ -369,6 +414,7 @@ def _run_cleanup(*, step: AutopilotStep, run_probe: ProbeRunner) -> str:
             probe=dict(step.verify_probe), expected=tuple(step.verify_fields)
         ) if step.verify_probe else None,
         run_probe=run_probe,
+        before_had_marker=before_had_marker,
     )
     if check.verified:
         step.verification_ref = f"{step.verification_ref}; {check.reason}"
@@ -384,6 +430,7 @@ def _payload_to_step(payload: Payload, values: Mapping[str, Any]) -> AutopilotSt
         probe={**probe, "payload_id": payload.id, "purpose": payload.title,
                "destructive": payload.requires_destructive},
         note=payload.cleanup,
+        definition_digest=payload_definition_digest(payload),
     )
     # Anchor read-only, dirakit di sini (sebelum eksekusi) dari metadata
     # deklaratif payload. Ia TIDAK disimpan ke engine_state (lihat
@@ -399,11 +446,49 @@ def _payload_to_step(payload: Payload, values: Mapping[str, Any]) -> AutopilotSt
             **render_probe_dict(payload.verify_probe, values), "mutating": False,
         }
         step.verify_fields = list(payload.verify_fields)
+    elif payload.requires_destructive:
+        # Payload tanpa anchor deklaratif (biasanya hasil generate `GEN-*`)
+        # tidak boleh berakhir tanpa verifikasi sama sekali. Anchor generik
+        # menunjuk objek yang disentuh operasi dengan method read-only yang
+        # sama, dan verifier-nya berbasis marker yang disuntikkan payload:
+        # tanpa transisi marker yang terlihat, verdict tetap `UNKNOWN`.
+        step.verify_probe = {
+            **generic_verify_probe(probe), "mutating": False,
+        }
     if payload.cleanup_probe:
         step.cleanup_probe = {
             **render_probe_dict(payload.cleanup_probe, values), "mutating": False,
         }
     return step
+
+
+def generic_verify_probe(probe: Mapping[str, Any]) -> dict[str, Any]:
+    """Anchor read-only generik untuk payload tanpa `verify_probe`.
+
+    Aturannya sempit dan sengaja konservatif:
+
+    * HEAD bila operasi sendiri HEAD/OPTIONS; selain itu GET, karena HEAD
+      sering tidak mengembalikan body sehingga marker tidak bisa dibaca.
+    * Parameter/body operasi tidak dibawa: anchor harus membaca keadaan, bukan
+      mengulang operasi. Hanya `url` (dan path-nya) yang dipakai bersama.
+    * Header tidak dibawa (Host/kustom lain bisa mengubah respons).
+
+    Anchor ini hanya bermakna bila verifier menemukan perubahan marker; tanpa
+    itu verdict tetap `UNKNOWN` — lihat `destructive_verify.verify_effect`.
+    """
+    method = str(probe.get("method", "GET") or "GET").upper()
+    verify_method = "HEAD" if method in {"HEAD", "OPTIONS"} else "GET"
+    out: dict[str, Any] = {
+        "method": verify_method,
+        "url": str(probe.get("url", "") or ""),
+    }
+    params = probe.get("params")
+    if verify_method == "HEAD" and isinstance(params, Mapping) and params:
+        # HEAD biasanya hanya membuktikan keberadaan resource. Tanpa param,
+        # anchor menunjuk objek induk; itu akan dilaporkan sebagai
+        # `unavailable`, bukan diklaim sukses.
+        out["params"] = dict(params)
+    return out
 
 
 def _next_to_step(test: NextTest) -> AutopilotStep:
@@ -465,6 +550,17 @@ def run_autopilot(
     step_limit = max_steps_per_cycle if max_steps_per_cycle > 0 else 10**9
 
     report = AutopilotReport(target=target)
+    if destructive_allowed and not (checkpoint_max_age_seconds or 0) > 0:
+        # TTL opt-in tetap dipertahankan (tanpa default tersembunyi), tetapi
+        # engagement yang mengizinkan langkah destruktif tidak boleh diam
+        # tentang risikonya: checkpoint `COMPLETED` bisa di-resume tanpa batas
+        # umur, padahal keadaan target (objek, sesi, id) bisa sudah berubah.
+        report.checkpoint_policy_warning = (
+            "checkpoint_max_age_seconds tidak diset untuk engagement dengan "
+            "langkah destruktif: bukti completed dapat di-resume tanpa batas "
+            "umur. Set metadata.checkpoint_max_age_seconds agar checkpoint "
+            "lama tidak dipakai setelah keadaan target berubah."
+        )
     metadata = getattr(state, "metadata", None)
     if metadata is None and state is not None:
         metadata = getattr(state, "metadata", {})
@@ -542,6 +638,38 @@ def run_autopilot(
                         # hanya dari `ran`/status lama; perlakukan sebagai
                         # UNKNOWN supaya tidak pernah dilewati saat resume.
                         prior.outcome = StepOutcome.UNKNOWN.value
+
+            # Digest definisi mendeteksi katalog yang berubah antar-proses.
+            # Anchor/verify_probe TIDAK disimpan di checkpoint dan dibangun
+            # ulang dari katalog; bila definisinya berubah, bukti COMPLETED
+            # lama menyatakan hal yang berbeda dari operasi yang akan
+            # dijalankan sekarang. Jangan percayai bukti itu.
+            stale = _stale_definition_ids(report.steps)
+            if stale:
+                details = ", ".join(
+                    f"{payload_id} ({current_digest})"
+                    for payload_id, current_digest in sorted(stale.items())
+                )
+                report.resume_rejected_reason = (
+                    "definisi payload berubah antar-proses: "
+                    f"{details}; bukti completed lama tidak dipakai"
+                )
+                stale_ids = set(stale)
+                for prior in report.steps:
+                    payload_id = str(prior.probe.get("payload_id") or "")
+                    if payload_id not in stale_ids:
+                        continue
+                    prior.outcome = StepOutcome.UNKNOWN.value
+                    if prior.probe.get("destructive"):
+                        prior.blocked_reason = (
+                            "definisi payload berubah antar-proses; "
+                            "verifikasi keadaan sebelum mengulang"
+                        )
+                completed_operations -= {
+                    prior.operation_id or probe_operation_id(prior.probe)
+                    for prior in report.steps
+                    if str(prior.probe.get("payload_id") or "") in stale_ids
+                }
             if resume.resource_budget and resume.resource_budget != current_budget:
                 keys = sorted(set(resume.resource_budget) | set(current_budget))
                 changes = [
@@ -844,9 +972,22 @@ def run_autopilot(
             # pembacaan sesudah tidak boleh memakai keadaan yang sudah
             # tercemar oleh operasi itu sendiri sebagai pembanding "awal".
             anchor_before = ""
+            anchor_posture: dict[str, Any] = {}
+            anchor_had_marker = False
             if destructive and step.verify_probe:
-                anchor_result = _safe_probe(run_probe, step.verify_probe)
-                anchor_before = str(getattr(anchor_result, "stdout", "") or "")
+                from wth_ai.hunt.destructive_verify import DEFAULT_EFFECT_MARKER
+
+                anchor_like = _safe_probe(run_probe, step.verify_probe)
+                anchor_before = str(getattr(anchor_like, "stdout", "") or "")
+                headers = getattr(anchor_like, "response_headers", None) or {}
+                anchor_posture = {
+                    "status": str(getattr(anchor_like, "status_code", "") or ""),
+                    "headers": {
+                        str(key).lower(): str(value).strip()
+                        for key, value in headers.items()
+                    } if isinstance(headers, Mapping) else {},
+                }
+                anchor_had_marker = DEFAULT_EFFECT_MARKER in anchor_before.lower()
             try:
                 result = run_probe(step.probe)
             except Exception as exc:  # noqa: BLE001
@@ -887,6 +1028,7 @@ def run_autopilot(
                     # bukti itu, status yang jujur adalah UNKNOWN.
                     verification = _verify_destructive_effect(
                         step=step, run_probe=run_probe, before_body=anchor_before,
+                        before_posture=anchor_posture,
                     )
                     if verification.verified:
                         step.outcome = StepOutcome.COMPLETED.value
@@ -898,6 +1040,7 @@ def run_autopilot(
                         step.changed = False
                         cleanup_note = _run_cleanup(
                             step=step, run_probe=run_probe,
+                            before_had_marker=anchor_had_marker,
                         )
                         if cleanup_note:
                             step.note = f"{step.note} | {cleanup_note}".strip(" |")
@@ -909,7 +1052,8 @@ def run_autopilot(
                         )
                         needs_verification[identity] = reason
                         step.note = (
-                            f"{step.note} | status={status}; {verification.reason}"
+                            f"{step.note} | status={status}; {verification.reason}; "
+                            f"verifikasi sebelum mengulang — {cleanup}"
                         ).strip(" |")
                         # Efek yang MASIH terlihat adalah kasus yang paling
                         # perlu pemulihan, bukan alasan untuk melewatinya.
@@ -919,6 +1063,7 @@ def run_autopilot(
                         # pemulihan bukan bukti bahwa bug-nya tidak ada.
                         cleanup_note = _run_cleanup(
                             step=step, run_probe=run_probe,
+                            before_had_marker=anchor_had_marker,
                         )
                         if cleanup_note:
                             step.note = f"{step.note} | {cleanup_note}".strip(" |")

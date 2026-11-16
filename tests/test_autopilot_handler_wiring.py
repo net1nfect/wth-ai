@@ -202,6 +202,10 @@ def test_handler_logs_recovery_states_distinctly(monkeypatch):
     report = AutopilotReport(target="127.0.0.1:9999")
     report.resume_rejected_reason = "target checkpoint 'https://foreign.tld' != target"
     report.checkpoint_error = "OSError: disk full"
+    report.checkpoint_policy_warning = (
+        "checkpoint_max_age_seconds tidak diset untuk engagement dengan "
+        "langkah destruktif"
+    )
 
     monkeypatch.setattr(bridge_mod, "AgentTerminalBridge", _Bridge)
     monkeypatch.setattr(
@@ -218,6 +222,8 @@ def test_handler_logs_recovery_states_distinctly(monkeypatch):
     assert "recovery: checkpoint dimuat" in joined
     assert "recovery: resume ditolak" in joined
     assert "recovery: checkpoint gagal ditulis" in joined
+    assert "recovery: checkpoint_max_age_seconds tidak diset" in joined
     assert result["status"] == "completed"
     assert result["resume_rejected_reason"]
     assert result["checkpoint_error"]
+    assert result["checkpoint_policy_warning"]

@@ -56,6 +56,11 @@ def _validate_autopilot_state(state: Mapping[str, Any]) -> None:
             raise CheckpointValidationError(
                 f"engine_state['steps'][{index}]['operation_id'] harus string"
             )
+        definition_digest = item.get("definition_digest")
+        if definition_digest is not None and not isinstance(definition_digest, str):
+            raise CheckpointValidationError(
+                f"engine_state['steps'][{index}]['definition_digest'] harus string"
+            )
         ran = item.get("ran")
         if ran is not None and not isinstance(ran, bool):
             raise CheckpointValidationError(

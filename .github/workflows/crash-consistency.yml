@@ -29,13 +29,21 @@ jobs:
             tests/test_crash_simulation_e2e.py \
             tests/test_crash_consistency_fault_injection.py
       - name: Kontrak verifikasi destruktif
-        run: pytest -q --tb=short tests/test_destructive_verify.py
+        run: |
+          pytest -q --tb=short \
+            tests/test_destructive_verify.py \
+            tests/test_destructive_verify_generic.py
       - name: CAS checkpoint & kebijakan TTL
         run: |
           pytest -q --tb=short \
             tests/test_checkpoint_cas.py \
             tests/test_checkpoint_ttl.py
+      - name: Digest definisi payload vs resume
+        run: pytest -q --tb=short tests/test_autopilot_catalog_digest.py
       - name: Checkpoint per-tool recon
-        run: pytest -q --tb=short tests/test_recon_per_tool_checkpoint.py
+        run: |
+          pytest -q --tb=short \
+            tests/test_recon_per_tool_checkpoint.py \
+            tests/test_recon_parallel_crash_ordering.py
       - name: Metadata risiko saran proaktif
         run: pytest -q --tb=short tests/test_proactive_risk_metadata.py

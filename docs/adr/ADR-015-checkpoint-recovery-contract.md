@@ -140,8 +140,40 @@ Keputusan: **anchor read-only**, diambil SEBELUM operasi:
    masih terlihat); hasilnya dilaporkan apa adanya, dan keberhasilan cleanup
    tidak menaikkan verdict efek menjadi `COMPLETED`.
 
+Untuk payload tanpa indikator statis (kelas `GEN-*`):
+
+- Anchor generik `generic_verify_probe()` menunjuk URL operasi dengan method
+  read-only (GET, atau HEAD bila operasi HEAD/OPTIONS). Parameter/body operasi
+  tidak dibawa.
+- Satu-satunya bukti positif adalah **transisi marker**: marker terlihat pada
+  anchor SEBELUM operasi, lalu tidak terlihat sesudahnya. Marker yang tidak
+  pernah terlihat → `unavailable`, bukan `verified` dan bukan "target rusak".
+- `anchor.expected` diperiksa pada keadaan SESUDAH operasi. Field yang hilang
+  di sana berarti objek berubah/hilang, bukan kembali ke jangkar.
+- Status/header identik **tidak pernah** cukup untuk `verified`; ia hanya
+  pembanding informatif (`posture_diff`) untuk alasan penolakan. Header volatil
+  (`date`, `etag`, `set-cookie`, `content-length`, `cf-ray`, dll.) diabaikan.
+
 Probe bantu (anchor/cleanup) ditandai `mutating: False` saat dirakit, sehingga
 counter operasi, audit, dan test harness bisa membedakannya dari operasi uji.
+
+## Digest definisi payload (anti-drift katalog)
+
+Anchor tidak disimpan di checkpoint; ia dibangun ulang dari katalog. Karena itu
+perubahan definisi payload antar-proses bisa mengubah arti "terverifikasi".
+Setiap langkah payload membawa `definition_digest` (SHA-256 kanonik dari
+`Payload.to_dict()`, termasuk `probe`, `verify_probe`, `verify_fields`, dan
+`cleanup_probe`). Saat resume:
+
+- digest yang berbeda → `resume_rejected_reason` menyebut payload yang berubah;
+  bukti `COMPLETED` lama diturunkan ke `UNKNOWN` dan tidak dipakai untuk skip;
+- langkah non-destruktif dijalankan ulang dari definisi saat ini;
+- langkah destruktif TIDAK dijalankan ulang otomatis — ia diblokir dan
+  dilaporkan butuh verifikasi manual, karena efek lama mungkin masih ada;
+- checkpoint lama tanpa digest tetap kompatibel dan tidak pernah dituduh
+  berubah;
+- bila sudah ada record dengan digest saat ini, record lama dianggap historis
+  sehingga resume berikutnya tidak menolak terus-menerus.
 
 ## CAS/lease checkpoint
 
@@ -163,6 +195,11 @@ saat resume dan menolak checkpoint tua dengan `resume_rejected_reason`.
 pernah basi — umur tak diketahui bukan alasan membuang state. Di handler,
 batas diambil dari `metadata.checkpoint_max_age_seconds` job.
 
+TTL tetap opt-in, tetapi engagement yang mengizinkan langkah destruktif tanpa
+batas umur mendapat peringatan eksplisit: `report.checkpoint_policy_warning`
+diisi dan handler menuliskannya ke log job. Peringatan ini tidak mengubah
+perilaku (tidak ada default tersembunyi), hanya membuat risiko terlihat.
+
 ## Checkpoint per-tool recon
 
 `ReconEngine.run()` menerima `checkpoint` dan `resume`. Sebelum setiap tool
@@ -170,7 +207,12 @@ dicatat `INFLIGHT`; setelah selesai dicatat `COMPLETED`/`FAILED` + `run`
 lengkap (`ToolRun.to_dict`). Resume melewati tool `COMPLETED` dan memutar
 ulang `run`-nya ke normalizer, sehingga data lama tetap ada. Tool
 `INFLIGHT`/`FAILED` dijalankan lagi (baca ulang aman). Penandaan dari worker
-paralel diserialkan dengan lock. Payload divalidasi oleh adapter `recon`.
+paralel diserialkan dengan lock. `on_start` dipanggil di thread worker TEPAT
+sebelum `runner.run`, sehingga `INFLIGHT` sudah tersimpan sebelum tool
+menyentuh target. Guard `_save_recon_checkpoint` menangkap kegagalan
+konstruksi/validasi envelope maupun kegagalan tulis; tanpa guard itu, exception
+dari `on_start` bisa membuat tool sehat dilaporkan `failed` atau tidak pernah
+jalan. Payload divalidasi oleh adapter `recon`.
 
 ## Metadata risiko saran proaktif
 
@@ -199,7 +241,7 @@ sehingga saran POST masuk gerbang checkpoint destruktif yang sama.
 | `run_autopilot` | Eksekusi per-cycle, klasifikasi outcome langkah, snapshot checkpoint, gerbang langkah destruktif | Menyimpan file (callback `checkpoint` yang menyimpan) |
 | `JobContext` | Progress/log + sinyal stop (`should_stop`, `request_stop`) | Membunuh thread handler (Python tidak bisa) |
 | `JobStore` | Persistensi atomik + load fail-closed | Menafsirkan semantik langkah |
-| `ReconEngine` | Satu pass recon; baseline/diff untuk run berikutnya | Resume per-tool (belum ada state per langkah) |
+| `ReconEngine` | Satu pass recon; checkpoint per-tool (INFLIGHT sebelum tool, COMPLETED + hasil sesudahnya); baseline/diff | Menyimpan file checkpoint (callback yang menyimpan); menjamin hasil tool idempoten selain "baca ulang aman" |
 
 Status job tetap eksplisit: `queued → running → completed|failed|stopped|cancelled`
 (dengan `waiting_approval` sebagai persinggahan). `completed` hanya dipakai
@@ -244,7 +286,12 @@ yang tertinggal tetap dilaporkan lewat `unfinished_steps` dan
 - Resume dengan target berbeda / cursor melebihi `max_cycles` ditolak dan
   dilaporkan lewat `report.resume_rejected_reason`. Perubahan resource budget
   dilaporkan (`resource_budget_changed`), bukan dipakai untuk membuang bukti
-  completed.
+  completed. Perubahan definisi payload juga dilaporkan di sana dan membuat
+  bukti `COMPLETED` lama tidak dipakai.
+- Engagement dengan langkah destruktif tanpa TTL mengisi
+  `report.checkpoint_policy_warning`; handler menuliskannya ke log dan
+  mengembalikannya di hasil job. Ini peringatan, bukan error, dan tidak
+  mengubah status job.
 
 ## Batas yang diketahui
 
@@ -252,12 +299,16 @@ yang tertinggal tetap dilaporkan lewat `unfinished_steps` dan
 - **Verifier efek bersifat deklaratif, bukan universal.** `destructive_verify`
   membandingkan anchor read-only (diambil SEBELUM operasi) dengan keadaan
   sesudahnya, memakai indikator efek per payload + diff field anchor. Payload
-  yang tidak punya `verify_probe` (mis. `GEN-*` hasil generasi kontrak) tetap
-  `UNKNOWN`: tidak ada anchor, tidak ada klaim. Menambah anchor adalah
-  pekerjaan katalog, bukan sesuatu yang bisa ditebak verifier.
+  `GEN-*` memakai anchor generik dan hanya bisa `verified` lewat transisi
+  marker; marker yang tidak pernah terlihat tetap `UNKNOWN`/`unavailable`.
+  Menambah anchor/indikator adalah pekerjaan katalog, bukan sesuatu yang bisa
+  ditebak verifier.
 - **Anchor dibangun ulang dari katalog saat resume, bukan disimpan.** Bentuknya
-  deterministik dari placeholder + nilai tetap, jadi tidak perlu masuk
-  checkpoint; konsekuensinya, perubahan katalog antar-proses mengubah anchor.
+  deterministik dari placeholder + nilai tetap. Perubahan definisi antar-proses
+  dideteksi oleh `definition_digest` per langkah: bukti `COMPLETED` lama tidak
+  dipakai, langkah non-destruktif diulang, dan langkah destruktif diblokir
+  sampai operator memverifikasi keadaan. Checkpoint lama tanpa digest tetap
+  diterima (kompatibilitas).
 - **Cleanup hanya untuk `cleanup_probe` deklaratif.** Instruksi `cleanup` teks
   (mis. "hapus baris keranjang") tetap manual. Cleanup yang gagal dilaporkan
   sebagai gagal di `note` dan tidak pernah menaikkan verdict efek ke
@@ -269,7 +320,9 @@ yang tertinggal tetap dilaporkan lewat `unfinished_steps` dan
 - **TTL checkpoint opt-in, bukan default.** `checkpoint_max_age_seconds`
   (`metadata` job) menentukan batas; `0`/tidak diset = tanpa batas (perilaku
   lama). Checkpoint tanpa `saved_at` tidak pernah dianggap basi. Tidak ada
-  default umur yang "diciptakan" oleh mesin.
+  default umur yang "diciptakan" oleh mesin. Bila engagement mengizinkan
+  langkah destruktif, ketiadaan batas dilaporkan sebagai
+  `checkpoint_policy_warning` (log + hasil job), bukan ditegakkan diam-diam.
 - **CAS melindungi penulis checkpoint, bukan proses.** `save_checkpoint_cas`
   menolak snapshot dengan `revision` basi sehingga progres proses lain tidak
   hilang diam-diam. Thread handler yang sudah timeout tetap bisa menyelesaikan
@@ -306,9 +359,20 @@ Diuji oleh:
   resume berulang, checkpoint korup, skema tak kompatibel).
 - `tests/test_destructive_verify.py` — 14 kasus verifier-jangkar (urutan anchor,
   efek tersisa, cleanup jujur, `COMPLETED` wajib `verification_ref`).
+- `tests/test_destructive_verify_generic.py` — 16 kasus payload tanpa indikator
+  statis (transisi marker, marker tidak pernah terlihat, expected hilang,
+  posture informatif, cleanup dengan `before_had_marker`).
+- `tests/test_autopilot_catalog_digest.py` — 7 kasus digest definisi payload
+  (persistensi, perubahan anchor, penolakan bukti lama, blokir destruktif,
+  legacy tanpa digest, anti-penolakan berulang).
 - `tests/test_checkpoint_cas.py` — 12 kasus CAS (clobber, takeover, legacy).
-- `tests/test_checkpoint_ttl.py` — 11 kasus kebijakan umur.
+- `tests/test_checkpoint_ttl.py` — 15 kasus kebijakan umur + peringatan TTL
+  untuk engagement destruktif.
 - `tests/test_recon_per_tool_checkpoint.py` — 10 kasus checkpoint per-tool.
+- `tests/test_recon_parallel_crash_ordering.py` — 3 kasus guard di jalur
+  paralel: konstruksi envelope gagal tanpa mematikan tool, `INFLIGHT` sebelum
+  `runner.run`, dan resume setelah crash (COMPLETED dilewati + replay,
+  INFLIGHT dijalankan ulang).
 - `tests/test_proactive_risk_metadata.py` — 17 kasus metadata risiko.
 
 Gate CI terpisah: `.github/workflows/crash-consistency.yml`.
